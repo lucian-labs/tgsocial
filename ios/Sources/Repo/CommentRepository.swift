@@ -36,7 +36,8 @@ final class CommentRepository {
 
     init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
-        index = store.load([String: [Comment]].self, LocalStore.commentIndex) ?? [:]
+        // Versioned (PRODUCT §2.3): a comment cache written by an earlier build is discarded.
+        index = store.loadVersioned([String: [Comment]].self, LocalStore.commentIndex) ?? [:]
     }
 
     private var api: TDLibClient { td.api }
@@ -52,7 +53,7 @@ final class CommentRepository {
 
     func clear() { index = [:]; channels = []; positions = [:] }
 
-    private func persist() { store.save(index, LocalStore.commentIndex) }
+    private func persist() { store.saveVersioned(index, LocalStore.commentIndex) }
 
     /// The channels of the last refresh, for routing live updates.
     private(set) var channels: [ChannelRef] = []

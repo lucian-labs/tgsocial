@@ -763,6 +763,9 @@ h3 .mark-count {
   padding-right: var(--space-row-pad);
   white-space: nowrap;
 }
+/* A dock child hidden on its own — the tab bar off while the now-playing row
+   stays docked (Setup, screens pushed from a viewer, audio still live). */
+.dock > [hidden] { display: none; }
 
 /* ── HPNowPlaying ────────────────────────────────────────────────────────── */
 

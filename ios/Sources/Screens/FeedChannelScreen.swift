@@ -69,7 +69,8 @@ struct FeedChannelScreen: View {
     /// Mirrors FeedRepository.apply(newMessage:) for this screen's own list: album parts fold
     /// into the post already on screen; everything stays strictly newest first.
     private func apply(live m: Message) {
-        guard let feed, m.chatId == feed.chatId, let post = Mapping.post(m, source: feed) else { return }
+        guard let feed, m.chatId == feed.chatId, let mapped = Mapping.post(m, source: feed) else { return }
+        let post = model.feed.stamped(mapped)
         if post.albumId != 0, let i = posts.firstIndex(where: { $0.chatId == post.chatId && $0.albumId == post.albumId }) {
             guard !posts[i].albumMessageIds.contains(post.messageId) else { return }
             posts[i] = Mapping.merged(posts[i], post)

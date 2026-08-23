@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -50,6 +51,7 @@ import ca.lucianlabs.housepour.hpColumnWidth
 import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.ui.components.PullToRefresh
 import ca.lucianlabs.tgsocial.ui.components.StatusPill
+import ca.lucianlabs.tgsocial.ui.media.PlaybackHub
 import ca.lucianlabs.tgsocial.ui.media.PostViewer
 import ca.lucianlabs.tgsocial.ui.media.rememberTgApp
 import ca.lucianlabs.tgsocial.ui.screens.CommentComposerSheet
@@ -60,6 +62,7 @@ import ca.lucianlabs.tgsocial.ui.screens.ExploreItems
 import ca.lucianlabs.tgsocial.ui.screens.FeedChannelItems
 import ca.lucianlabs.tgsocial.ui.screens.FeedItems
 import ca.lucianlabs.tgsocial.ui.screens.GraphItems
+import ca.lucianlabs.tgsocial.ui.screens.PostSheet
 import ca.lucianlabs.tgsocial.ui.screens.ProfileItems
 import ca.lucianlabs.tgsocial.ui.screens.SetupItems
 import ca.lucianlabs.tgsocial.ui.screens.SignInScreen
@@ -104,15 +107,25 @@ private fun Shell(vm: AppViewModel) {
     val onSetup = (screen is Screen.Home && setupNeeded) || screen is Screen.Setup
     val tabsVisible = !onSetup && viewer == null
 
+    // PRODUCT §2.11 — the now-playing row docks at the bottom while audio plays, even where the tab bar is
+    // hidden (Setup, a thread reached from a viewer); only a full-screen viewer covers it.
+    val app = rememberTgApp()
+    val now by app.playback.now.collectAsStateWithLifecycle()
+    val dockVisible = now != null && viewer == null
+
     // The topbar overlays the scroll container so cards pass under the translucent bar; the lists pad their top
-    // by the measured bar height (LocalTopInset). The floating bar does the same at the bottom (LocalBottomInset).
+    // by the measured bar height (LocalTopInset). The bottom overlay does the same with LocalBottomInset: the
+    // measured tab-bar height when the bar is up, plus the measured now-playing dock height while audio plays —
+    // each tracked as its own State, so the inset grows when playback starts and falls back when it stops.
     val density = LocalDensity.current
     var topbarHeight by remember { mutableStateOf(0.dp) }
-    var bottomOverlayHeight by remember { mutableStateOf(0.dp) }
+    var tabsHeight by remember { mutableStateOf(0.dp) }
+    var dockHeight by remember { mutableStateOf(0.dp) }
+    val bottomInset = (if (tabsVisible) tabsHeight else 0.dp) + (if (dockVisible) dockHeight else 0.dp)
     Box(modifier = Modifier.fillMaxSize()) {
         CompositionLocalProvider(
             LocalTopInset provides topbarHeight,
-            LocalBottomInset provides if (tabsVisible) bottomOverlayHeight else 0.dp,
+            LocalBottomInset provides bottomInset,
         ) {
             Box(modifier = Modifier.fillMaxSize().imePadding()) {
                 when (screen) {
@@ -151,13 +164,15 @@ private fun Shell(vm: AppViewModel) {
                 trailing = { StatusPill(status) { vm.openSheet(Sheet.Status) } },
             )
         }
-        if (tabsVisible) {
+        if (tabsVisible || dockVisible) {
             BottomOverlay(
                 vm = vm,
                 tab = tab,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .onSizeChanged { bottomOverlayHeight = with(density) { it.height.toDp() } },
+                now = now.takeIf { dockVisible },
+                tabsVisible = tabsVisible,
+                onTabsHeight = { tabsHeight = it },
+                onDockHeight = { dockHeight = it },
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
         // PRODUCT §2.11 — the full-screen viewer covers the shell: topbar and floating tab bar are gone while it is up.
@@ -176,6 +191,7 @@ private fun Shell(vm: AppViewModel) {
             Sheet.Status -> StatusSheet(vm)
             is Sheet.CommentComposer -> CommentComposerSheet(vm)
             is Sheet.DeleteComment -> DeleteCommentSheet(vm, s.comment)
+            is Sheet.PostSheet -> PostSheet(vm, s.post)
             null -> Unit
         }
     }
@@ -183,17 +199,35 @@ private fun Shell(vm: AppViewModel) {
 
 /**
  * PRODUCT §1 / §2.11 — the floating bottom pill, with the now-playing row docked above it while audio plays.
- * Content scrolls under this overlay; lists pad their bottom by its measured height + `cardGap`.
+ * Either half can stand alone: the dock keeps floating where the tab bar is hidden (Setup, a thread reached
+ * from a viewer). Content scrolls under this overlay; lists pad their bottom by the measured heights + `cardGap`
+ * (LocalBottomInset), reported piecewise through [onTabsHeight] / [onDockHeight].
  */
 @OptIn(UnstableApi::class)
 @Composable
-private fun BottomOverlay(vm: AppViewModel, tab: Tab, modifier: Modifier = Modifier) {
+private fun BottomOverlay(
+    vm: AppViewModel,
+    tab: Tab,
+    now: PlaybackHub.NowPlaying?,
+    tabsVisible: Boolean,
+    onTabsHeight: (Dp) -> Unit,
+    onDockHeight: (Dp) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val app = rememberTgApp()
-    val now by app.playback.now.collectAsStateWithLifecycle()
+    val density = LocalDensity.current
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         now?.let { playing ->
             // `rowGap` keeps the docked row's cast shadow off the tab pill — two raised surfaces never touch.
-            Box(Modifier.hpColumnWidth().padding(horizontal = HPTokens.Space.columnSide).padding(bottom = HPTokens.Space.rowGap)) {
+            // Alone (tab bar hidden), the dock takes the bar's own safe-area clearance instead.
+            Box(
+                Modifier
+                    .onSizeChanged { onDockHeight(with(density) { it.height.toDp() }) }
+                    .hpColumnWidth()
+                    .padding(horizontal = HPTokens.Space.columnSide)
+                    .padding(bottom = if (tabsVisible) HPTokens.Space.rowGap else nav + HPTokens.Space.cardGap),
+            ) {
                 HPNowPlaying(
                     title = playing.title,
                     playing = playing.playing,
@@ -203,11 +237,14 @@ private fun BottomOverlay(vm: AppViewModel, tab: Tab, modifier: Modifier = Modif
                 )
             }
         }
-        HPFloatingTabs(
-            items = Tab.entries.map { it.label },
-            selected = tab.ordinal,
-            onSelect = { vm.selectTab(Tab.entries[it]) },
-        )
+        if (tabsVisible) {
+            HPFloatingTabs(
+                items = Tab.entries.map { it.label },
+                selected = tab.ordinal,
+                onSelect = { vm.selectTab(Tab.entries[it]) },
+                modifier = Modifier.onSizeChanged { onTabsHeight(with(density) { it.height.toDp() }) },
+            )
+        }
     }
 }
 

@@ -16,7 +16,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
-import java.util.Locale
 
 /** Runs every case in docs/card-vectors.json (copied into test resources by the `copyCardVectors` Gradle task). */
 class CardVectorsTest {
@@ -141,13 +140,15 @@ class CardVectorsTest {
         }
     }
 
+    /** PRODUCT §2.3 — relative card time (`out`) and the long-press sheet's exact form (`exact`). */
     @Test
     fun timeFormatVectors() {
         val now = LocalDateTime.parse("2026-08-23T14:30:00")
         for (case in vectors.getValue("timeFormat").jsonObject.getValue("cases").jsonArray) {
             val c = case.jsonObject
             val date = LocalDateTime.parse(c.getValue("date").jsonPrimitive.contentOrNull)
-            assertEquals(c.getValue("out").jsonPrimitive.contentOrNull, Format.time(date, now, Locale.ENGLISH))
+            assertEquals("[$date] relative", c.getValue("out").jsonPrimitive.contentOrNull, Format.relative(date, now))
+            assertEquals("[$date] exact", c.getValue("exact").jsonPrimitive.contentOrNull, Format.exact(date))
         }
     }
 

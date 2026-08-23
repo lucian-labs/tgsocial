@@ -41,6 +41,7 @@ import {
   parseComment,
   serialiseComment,
   targetKey,
+  attributionNode,
 } from './protocol.js';
 
 const LS = {
@@ -69,6 +70,14 @@ export function userMessage(e, prefix) {
 const FEED_CACHE_MAX = 40;
 const PAGE = 30;
 
+/**
+ * Persisted-cache schema (PRODUCT §2.3 stale cache guard). Bumped whenever a
+ * cached model changes shape or ordering rules; a payload written by another
+ * schema — including the pre-versioned raw arrays/objects — is discarded, so
+ * an older build's cache can never paint.
+ */
+const CACHE_SCHEMA = 2;
+
 function load(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -85,6 +94,17 @@ function save(key, value) {
   } catch (e) {
     console.warn('[repo] save', key, e.message);
   }
+}
+
+/** Read a versioned cache payload; anything not written by this schema is discarded. */
+function loadVersioned(key, fallback) {
+  const raw = load(key, null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.v !== CACHE_SCHEMA) return fallback;
+  return raw.data ?? fallback;
+}
+
+function saveVersioned(key, data) {
+  save(key, data === null || data === undefined ? null : { v: CACHE_SCHEMA, data });
 }
 
 async function pmap(items, limit, fn) {
@@ -155,10 +175,10 @@ export class Repo {
     this.config = config;
     this.indexGroup = normaliseUsername(config?.indexGroup || DEFAULT_INDEX_GROUP) || DEFAULT_INDEX_GROUP;
     this.myNode = load(LS.myNode, null);
-    this.cards = load(LS.cards, {});
+    this.cards = loadVersioned(LS.cards, {});
     this.prefs = load(LS.prefs, {});
     /** Comment index (PROTOCOL §6.3): comments-channel → parsed comments. Discardable. */
-    this.comments = load(LS.comments, {});
+    this.comments = loadVersioned(LS.comments, {});
     /** Memoised commentIndex(); dropped on every 'comments' notification. */
     this.commentIndexCache = null;
     this.chatsById = new Map();
@@ -168,6 +188,37 @@ export class Repo {
     this.me = null;
     /** Set when one of my created public channels carries a card newer than v1 (PROTOCOL §8). Not persisted. */
     this.newerNode = null;
+    /** Last live feed-candidates result (session cache: painted instantly, then replaced by a fresh scan). */
+    this.candidates = null;
+    this.candidatesStale = true;
+    this.candidatesInflight = null;
+    this.watchCandidates();
+  }
+
+  /**
+   * TDLib updates that can change feed candidacy invalidate the candidates
+   * cache and notify 'candidates-dirty' — the Setup / Manage feeds surface,
+   * while visible, answers with a debounced live re-query (never a timer):
+   *   - updateSupergroup: a username appeared/changed or admin rights changed
+   *     (a channel made public while the screen is open);
+   *   - updateNewChat for a channel: a channel just became known;
+   *   - updateChatPosition joining the main list: a chat entered chatListMain.
+   */
+  watchCandidates() {
+    const dirty = () => {
+      this.candidatesStale = true;
+      this.notify('candidates-dirty');
+    };
+    this.td.on('updateSupergroup', dirty);
+    this.td.on('updateNewChat', (u) => {
+      const chat = u?.chat;
+      if (chat?.type?.['@type'] !== 'chatTypeSupergroup' || !chat.type.is_channel) return;
+      this.chatsById.set(chat.id, chat);
+      dirty();
+    });
+    this.td.on('updateChatPosition', (u) => {
+      if (u?.position?.list?.['@type'] === 'chatListMain') dirty();
+    });
   }
 
   /** Report an operation into the app's activity registry (status pill / Status sheet). */
@@ -197,7 +248,7 @@ export class Repo {
 
   persist() {
     save(LS.myNode, this.myNode);
-    save(LS.cards, this.cards);
+    saveVersioned(LS.cards, this.cards);
     save(LS.prefs, this.prefs);
   }
 
@@ -205,6 +256,8 @@ export class Repo {
     for (const k of Object.values(LS)) localStorage.removeItem(k);
     this.myNode = null;
     this.newerNode = null;
+    this.candidates = null;
+    this.candidatesStale = true;
     this.cards = {};
     this.prefs = {};
     this.comments = {};
@@ -440,7 +493,7 @@ export class Repo {
     const key = usernameKey(username);
     const prev = this.cards[key] ?? {};
     this.cards[key] = { ...prev, ...entry, username, fetchedAt: Date.now() };
-    save(LS.cards, this.cards);
+    saveVersioned(LS.cards, this.cards);
     return this.cards[key];
   }
 
@@ -514,7 +567,7 @@ export class Repo {
       const guess = mutate(prevCard);
       this.serialise(guess); // refuse "Card is full." before touching anything
       this.cards[key] = { ...prevEntry, card: guess, fetchedAt: Date.now() };
-      save(LS.cards, this.cards);
+      saveVersioned(LS.cards, this.cards);
       this.notify('card');
     }
     try {
@@ -525,13 +578,13 @@ export class Repo {
         await this.td.trySend({ '@type': 'setChatDescription', chat_id: this.myNode.chatId, description: nodeDescription(next) });
       }
       this.cards[key] = { ...(this.cards[key] ?? {}), username: this.myNode.username, card: next, newer: false, missing: false, pinnedMessageId: messageId, fetchedAt: Date.now() };
-      save(LS.cards, this.cards);
+      saveVersioned(LS.cards, this.cards);
       this.notify('card');
       return next;
     } catch (e) {
       if (prevEntry) this.cards[key] = prevEntry;
       else delete this.cards[key];
-      save(LS.cards, this.cards);
+      saveVersioned(LS.cards, this.cards);
       this.notify('card');
       throw e;
     }
@@ -644,6 +697,32 @@ export class Repo {
     return out;
   }
 
+  /** Last live candidates result, or null before the first scan. */
+  cachedCandidates() {
+    return this.candidates;
+  }
+
+  /**
+   * Live re-query of the feed candidates (getCreatedPublicChats + the
+   * admin-channel scan) — always hits Telegram; the result replaces the
+   * session cache. Concurrent callers share one in-flight scan. Reported to
+   * the activity registry so the pill reads Syncing while it runs.
+   */
+  refreshCandidates() {
+    if (this.candidatesInflight) return this.candidatesInflight;
+    this.candidatesInflight = this.track('Syncing your channels', () => this.myFeedCandidates())
+      .then((list) => {
+        this.candidates = list;
+        this.candidatesStale = false;
+        this.notify('candidates');
+        return list;
+      })
+      .finally(() => {
+        this.candidatesInflight = null;
+      });
+    return this.candidatesInflight;
+  }
+
   setFeeds(usernames) {
     return this.writeCard((card) => ({ ...card, feeds: usernames }));
   }
@@ -710,12 +789,19 @@ export class Repo {
     return new FeedSession(this, usernames);
   }
 
+  /**
+   * Cold-start cache (PRODUCT §2.3): a schema mismatch discards the payload,
+   * and whatever survives is re-sorted newest-first defensively — a cached
+   * page must never paint in old order.
+   */
   cachedFeed() {
-    return load(LS.feed, []);
+    const posts = loadVersioned(LS.feed, []);
+    if (!Array.isArray(posts)) return [];
+    return [...posts].sort((a, b) => b.date - a.date || b.id - a.id);
   }
 
   cacheFeed(posts) {
-    save(LS.feed, posts.slice(0, FEED_CACHE_MAX));
+    saveVersioned(LS.feed, posts.slice(0, FEED_CACHE_MAX));
   }
 
   /** Fetch one page of channel history, repeating while TDLib returns short (§4.8). */
@@ -740,11 +826,31 @@ export class Repo {
   }
 
   /**
+   * PRODUCT §2.3 attribution — the node this feed's posts reach me through,
+   * as { username, name, photo }, or null when no node lists the feed. Name
+   * is the node card's `name` (fallback @username); photo is the node
+   * channel's, from the card cache.
+   */
+  attributionFor(feedUsername) {
+    if (!this.myNode) return null;
+    const node = attributionNode(feedUsername, this.myNode.username, this.myCard, (u) => this.cachedCard(u)?.card);
+    if (!node) return null;
+    const entry = this.cachedCard(node);
+    return {
+      username: entry?.username ?? node,
+      name: entry?.card?.name || `@${node}`,
+      photo: entry?.photo ?? null,
+    };
+  }
+
+  /**
    * Message → post model (serialisable; files are slimmed). `extra` carries the
    * other messages of the same album (PRODUCT §2.11: swipe between album items);
-   * their media joins post.album and the first non-empty caption wins.
+   * their media joins post.album and the first non-empty caption wins. Every
+   * post carries its attribution node (§2.3) — null when unattributed.
    */
   async toPost(message, source, extra = []) {
+    const attr = this.attributionFor(source.username);
     const post = {
       key: `${message.chat_id}:${message.id}`,
       id: message.id,
@@ -752,6 +858,9 @@ export class Repo {
       username: source.username,
       title: source.title,
       avatar: source.photo ?? null,
+      node: attr?.username ?? null,
+      nodeName: attr?.name ?? null,
+      nodeAvatar: attr?.photo ?? null,
       date: message.date,
       text: '',
       entities: [],
@@ -989,7 +1098,7 @@ export class Repo {
         console.warn('[repo] comments', channel, e.message);
       }
     });
-    save(LS.comments, this.comments);
+    saveVersioned(LS.comments, this.comments);
     this.notify('comments');
   }
 
@@ -1086,7 +1195,7 @@ export class Repo {
       const entry = this.comments[k] ?? { channel, node: this.myNode.username, comments: [], fetchedAt: 0 };
       if (comment) entry.comments.unshift(comment);
       this.comments[k] = entry;
-      save(LS.comments, this.comments);
+      saveVersioned(LS.comments, this.comments);
       this.notify('comments');
       return comment;
     });
@@ -1101,7 +1210,7 @@ export class Repo {
       const entry = this.comments[k];
       if (entry) {
         entry.comments = entry.comments.filter((c) => c.key !== comment.key);
-        save(LS.comments, this.comments);
+        saveVersioned(LS.comments, this.comments);
       }
       this.notify('comments');
     });

@@ -30,7 +30,7 @@ final class CardVectorTests: XCTestCase {
         struct Cases<T: Decodable>: Decodable { let cases: [T] }
         struct DeepLinkCase: Decodable { let username: String; let messageId: Int64; let out: String }
         struct BacklinkCase: Decodable { let description: String; let node: String; let out: Bool }
-        struct TimeCase: Decodable { let date: String; let out: String }
+        struct TimeCase: Decodable { let date: String; let out: String; let exact: String }
         struct CountCase: Decodable { let `in`: Int; let out: String }
         struct CommentParseCase: Decodable {
             struct Out: Decodable { let target: String; let body: String }
@@ -116,6 +116,8 @@ final class CardVectorTests: XCTestCase {
         }
     }
 
+    /// PRODUCT §2.3: relative on the card (largest unit, floor; 30-day months, 365-day years),
+    /// exact (`yyyy-MM-dd HH:mm`) in the long-press sheet.
     func testTimeFormatVectors() throws {
         let v = try loadVectors()
         let f = DateFormatter()
@@ -125,7 +127,8 @@ final class CardVectorTests: XCTestCase {
         let now = try XCTUnwrap(f.date(from: "2026-08-23T14:30:00"))
         for c in v.timeFormat.cases {
             let date = try XCTUnwrap(f.date(from: c.date))
-            XCTAssertEqual(PostTime.format(date, now: now), c.out, c.date)
+            XCTAssertEqual(PostTime.relative(date, now: now), c.out, c.date)
+            XCTAssertEqual(PostTime.exact(date), c.exact, c.date)
         }
     }
 
@@ -183,6 +186,49 @@ final class CardVectorTests: XCTestCase {
         XCTAssertEqual(CommentCodec.targetKey("https://t.me/Waveloop_Devlog/144"),
                        CommentCodec.targetKey("https://t.me/waveloop_devlog/144"))
         XCTAssertNil(CommentCodec.targetKey("https://t.me/waveloop_devlog"))
+    }
+}
+
+/// PRODUCT §2.3 — attribution: the node a post reaches me through.
+final class AttributionTests: XCTestCase {
+    func testMyFeedAttributesToMe() {
+        XCTAssertEqual(Attribution.node(feed: "waveloop_devlog", me: "tgs_elijah",
+                                        myFeeds: ["waveloop_devlog"],
+                                        follows: [("tgs_ana", ["waveloop_devlog"])]),
+                       "tgs_elijah")
+    }
+
+    func testFollowedNodesFeedAttributesToThatNode() {
+        XCTAssertEqual(Attribution.node(feed: "ana_notes", me: "tgs_elijah",
+                                        myFeeds: ["waveloop_devlog"],
+                                        follows: [("tgs_bob", ["bobs_feed"]), ("tgs_ana", ["ana_notes"])]),
+                       "tgs_ana")
+    }
+
+    func testTwoNodesListingOneFeedEarliestInFollowsWins() {
+        XCTAssertEqual(Attribution.node(feed: "shared_feed", me: "tgs_elijah",
+                                        myFeeds: [],
+                                        follows: [("tgs_ana", ["shared_feed"]), ("tgs_bob", ["shared_feed"])]),
+                       "tgs_ana")
+        // Order in `follows:` decides, not the alphabet.
+        XCTAssertEqual(Attribution.node(feed: "shared_feed", me: "tgs_elijah",
+                                        myFeeds: [],
+                                        follows: [("tgs_zed", ["shared_feed"]), ("tgs_ana", ["shared_feed"])]),
+                       "tgs_zed")
+    }
+
+    func testUnlistedFeedHasNoAttribution() {
+        XCTAssertNil(Attribution.node(feed: "random_channel", me: "tgs_elijah",
+                                      myFeeds: ["waveloop_devlog"],
+                                      follows: [("tgs_ana", ["ana_notes"])]))
+        XCTAssertNil(Attribution.node(feed: "waveloop_devlog", me: nil, myFeeds: ["waveloop_devlog"], follows: []))
+    }
+
+    func testAttributionIsCaseInsensitiveOnUsernames() {
+        XCTAssertEqual(Attribution.node(feed: "Ana_Notes", me: "tgs_elijah",
+                                        myFeeds: [],
+                                        follows: [("tgs_ana", ["ana_notes"])]),
+                       "tgs_ana")
     }
 }
 

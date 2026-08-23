@@ -2,6 +2,7 @@ package ca.lucianlabs.tgsocial.repo
 
 import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.protocol.Attribution
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.FeedMerger
 import ca.lucianlabs.tgsocial.protocol.FeedOrder
@@ -29,10 +30,16 @@ class FeedRepo(
     private val sources = LinkedHashMap<String, FeedSource>()
     private val lock = Mutex()
 
+    // PRODUCT §2.3 — attribution inputs, held from the last resolveSources() so every fetched page can be stamped.
+    private var attributionUsername: String? = null
+    private var attributionCard: Card? = null
+
     val sourceList: List<FeedSource> get() = sources.values.toList()
 
     /** Resolve sources from my card and the cards of my follows. Cards that cannot be read are skipped. */
     suspend fun resolveSources(myUsername: String?, myCard: Card?, fresh: Boolean = false): List<FeedSource> {
+        attributionUsername = myUsername
+        attributionCard = myCard
         val wanted = LinkedHashMap<String, MutableList<String>>() // feed → listed by
         fun add(feed: String, node: String?) {
             wanted.getOrPut(Username.key(feed)) { mutableListOf() }.let { if (node != null && node !in it) it += node }
@@ -105,7 +112,24 @@ class FeedRepo(
         // Strictly newest first (PRODUCT §2.3): album members collapse into one card and the page is re-asserted
         // descending even though TDLib already answers that way.
         val posts = FeedOrder.mergeAlbums(raw.mapNotNull { m -> m.toPost(src.username, src.title, src.photo, displayWidthPx) { nodes.originName(it) } })
-        return Page(posts = posts, cursor = raw.lastOrNull()?.id, exhausted = raw.isEmpty())
+        return Page(posts = posts.map { attributed(it) }, cursor = raw.lastOrNull()?.id, exhausted = raw.isEmpty())
+    }
+
+    /**
+     * PRODUCT §2.3 — stamp the node the post reaches me through (me for my feeds, else the earliest follow
+     * whose card lists the source feed). Cached cards only; no node → the card falls back to the channel.
+     */
+    private fun attributed(post: Post): Post {
+        val node = Attribution.resolve(post.sourceUsername, attributionUsername, attributionCard) { nodes.cached(it)?.card }
+            ?: return post
+        val snap = nodes.cached(node)
+        val username = snap?.username ?: node
+        return post.copy(
+            nodeUsername = username,
+            // Name = the node card's `name`, falling back to `@username` (PRODUCT §2.3).
+            nodeName = snap?.card?.name?.takeIf { it.isNotBlank() } ?: "@$username",
+            nodePhoto = snap?.photo,
+        )
     }
 
     /** One channel's own posts (Feed channel screen), newest first, from [from]. */
@@ -120,7 +144,7 @@ class FeedRepo(
     /** A new channel post from one of my sources arrives live. */
     suspend fun liveToPost(m: Message): Post? {
         val src = sources.values.firstOrNull { it.chatId == m.chatId } ?: return null
-        return m.toPost(src.username, src.title, src.photo, displayWidthPx) { nodes.originName(it) }
+        return m.toPost(src.username, src.title, src.photo, displayWidthPx) { nodes.originName(it) }?.let { attributed(it) }
     }
 
     fun sourceFor(chatId: Long): FeedSource? = sources.values.firstOrNull { it.chatId == chatId }

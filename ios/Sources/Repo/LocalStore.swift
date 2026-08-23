@@ -35,6 +35,30 @@ final class LocalStore {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
+    // MARK: Versioned caches (PRODUCT §2.3)
+
+    /// A page cached by an earlier build must not paint: the persisted payload carries a schema
+    /// version and a mismatch discards it. Bump on any change to the cached models or their
+    /// ordering rules. 2: attribution fields on Post, relative-time card redesign.
+    static let schemaVersion = 2
+
+    private struct Versioned<T: Codable>: Codable {
+        var schemaVersion: Int
+        var value: T
+    }
+
+    /// Nil on a missing file, an unversioned (pre-versioning) payload, or a version mismatch —
+    /// the stale cache is discarded rather than painted.
+    func loadVersioned<T: Codable>(_ type: T.Type, _ name: String) -> T? {
+        guard let wrapped = load(Versioned<T>.self, name), wrapped.schemaVersion == Self.schemaVersion else { return nil }
+        return wrapped.value
+    }
+
+    func saveVersioned<T: Codable>(_ value: T?, _ name: String) {
+        guard let value else { save(Optional<Versioned<T>>.none, name); return }
+        save(Versioned(schemaVersion: Self.schemaVersion, value: value), name)
+    }
+
     // Keys
     static let myNode = "myNode"
     static let myCard = "myCard"

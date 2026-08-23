@@ -156,6 +156,12 @@ struct Post: Codable, Equatable, Hashable, Identifiable, FeedEntry {
     var forwardedUserId: Int64?
     /// Optimistic sends that have not been confirmed by Telegram yet.
     var isPending: Bool = false
+    /// Attribution (PRODUCT §2.3): the node the post reaches me through. Nil when no node
+    /// attributes it — the card header falls back to the channel photo + title, no subheading.
+    var authorUsername: String?
+    /// The node card's `name`, falling back to `@username`.
+    var authorName: String?
+    var authorPhoto: PhotoRef?
 
     var id: String { "\(chatId):\(messageId)" }
     var deepLink: String { DeepLink.post(username: sourceUsername, messageId: messageId) }

@@ -217,6 +217,14 @@ function dockNowPlaying(app, el) {
   detachedAudio.np = el;
   if (el) app.els.dock.prepend(el);
   document.body.toggleAttribute('data-now-playing', !!el);
+  // the dock stays visible for the row even where the tab bar is hidden, and
+  // the column's --dock-extra inset follows the row's mount/unmount
+  app.updateDock();
+}
+
+/** The detached audio element while one is live, or null (state introspection / tests). */
+export function currentAudio() {
+  return detachedAudio.el;
 }
 
 /**

@@ -28,6 +28,7 @@ struct RootView: View {
             case .status: StatusSheetModal()
             case .comment(let target): CommentComposerModal(target: target)
             case .deleteComment(let comment): DeleteCommentModal(comment: comment)
+            case .postSheet(let post): PostSheetModal(post: post)
             case nil: EmptyView()
             }
         }

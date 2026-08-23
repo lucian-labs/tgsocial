@@ -8,7 +8,7 @@ import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
 import { normaliseUsername } from './protocol.js';
-import { closeViewer } from './media.js';
+import { closeViewer, currentAudio } from './media.js';
 import { openStatusSheet } from './views/status.js';
 import * as signin from './views/signin.js';
 import * as setup from './views/setup.js';
@@ -52,6 +52,7 @@ class App {
     this.activity = new Activity({ onChange: () => this.paintStatus() });
     this.td.activity = this.activity;
     this.els = {
+      app: document.getElementById('app'),
       lead: document.getElementById('topbar-lead'),
       status: document.getElementById('status'),
       dock: document.getElementById('dock'),
@@ -124,6 +125,26 @@ class App {
     return read;
   }
 
+  /**
+   * The dock hosts the floating tab bar and, while audio plays, the
+   * now-playing row (PRODUCT §1). It shows while either is live — audio keeps
+   * its dock even where the tab bar is hidden (Setup, screens pushed from a
+   * viewer). The column's bottom inset tracks the row dynamically: --dock-extra
+   * is set to the row's measured height + the dock gap while it is mounted and
+   * removed when playback stops, so every scroll surface's last element clears
+   * the tab bar AND the dock exactly while both are there.
+   */
+  updateDock() {
+    const np = this.els.dock.querySelector('.now-playing');
+    this.els.dock.hidden = this.tabs.hidden && !np;
+    if (np) {
+      const gap = parseFloat(getComputedStyle(this.els.dock).rowGap) || 0;
+      this.els.app.style.setProperty('--dock-extra', `${Math.ceil(np.getBoundingClientRect().height + gap)}px`);
+    } else {
+      this.els.app.style.removeProperty('--dock-extra');
+    }
+  }
+
   // ── navigation ───────────────────────────────────────────────────────────
 
   navigate(hash, { replace: rep = false } = {}) {
@@ -188,10 +209,12 @@ class App {
         : h('a.brand', { href: '#/feed', 'aria-label': 'tgsocial home' }, 'tgsocial'));
     };
     // The floating tab bar: hidden on Sign in, Setup, and inside full-screen
-    // viewers; present on pushed screens (PRODUCT §1).
+    // viewers; present on pushed screens (PRODUCT §1). Hiding the tab bar
+    // never hides the dock while the now-playing row lives there.
     const setTabs = (on, selected = null) => {
-      this.els.dock.hidden = !on;
+      this.tabs.hidden = !on;
       if (on && selected) this.tabs.select(selected);
+      this.updateDock();
     };
 
     if (this.fatal) {
@@ -372,5 +395,5 @@ class App {
 }
 
 const app = new App();
-window.__tgsocial = { app, td: app.td, get repo() { return app.repo; } };
+window.__tgsocial = { app, td: app.td, get repo() { return app.repo; }, currentAudio };
 app.boot();

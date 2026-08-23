@@ -8,7 +8,7 @@
 import { h, button, modal, replace, sectionMark } from '../../vendor/house-pour.js';
 import { connectionCopy } from '../td.js';
 import { collapseLabels } from '../activity.js';
-import { formatTime } from '../protocol.js';
+import { formatClock } from '../protocol.js';
 
 /** `+16045550199` → `+1 604 ••• 0199` (country, area, masked middle, last four). */
 export function maskPhone(phone) {
@@ -79,13 +79,13 @@ export function openStatusSheet(app) {
     if (stats) {
       const src = `${stats.sources} ${stats.sources === 1 ? 'source' : 'sources'}`;
       const posts = `${stats.posts} ${stats.posts === 1 ? 'post' : 'posts'}`;
-      set('Feed', `${src} · ${posts} · refreshed ${formatTime(new Date(stats.at))}`);
+      set('Feed', `${src} · ${posts} · refreshed ${formatClock(new Date(stats.at))}`);
     } else set('Feed', 'None');
 
     const pending = collapseLabels(app.activity.list());
     set('Pending', pending.length ? pending.map((l) => h('span.pending-item', `${l}…`)) : 'Nothing');
 
-    set('Last error', app.lastError ? `${app.lastError.text} at ${formatTime(new Date(app.lastError.at))}` : 'None');
+    set('Last error', app.lastError ? `${app.lastError.text} at ${formatClock(new Date(app.lastError.at))}` : 'None');
     set('TDLib', app.td.tdlibVersion ?? 'Unknown');
   }
 

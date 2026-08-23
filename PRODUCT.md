@@ -424,6 +424,58 @@ Behaviour:
 - A commenter row's avatar/name opens their node profile. Comments from
   nodes you don't follow (found via +1) show a small `+1` neutral pill.
 
+### 2.13 Public links — browse without signing in (web only)
+
+`https://tgsocial.lucianlabs.ca/f/<channel>` shows that channel's posts to
+anyone, signed in or not. `/n/<node>` does the same for a node profile.
+Telegram exposes public channels to anonymous clients, so no account is
+needed to read one — the app just has to not demand one first.
+
+**Anonymous mode.** When the route is `/f/…` or `/n/…` and TDLib is not
+signed in, the client authenticates as an anonymous TDLib session and reads
+only that public chat (`searchPublicChat` → `getChatHistory`). Nothing is
+written, no node is created, and the local database is namespaced so an
+anonymous visit never touches a signed-in user's data. If the channel is
+private or missing: one card, h2 `Nothing here.` muted `That channel is
+private, or it doesn't exist.`
+
+**What renders.** The feed channel screen (§2.6) exactly as a signed-in user
+sees it — post cards with media playable inline, the full-screen viewer,
+relative times, the long-press post sheet — with these differences:
+
+- Post attribution falls back to the channel (§2.3), since an anonymous
+  visitor has no follows to attribute through.
+- `Comment` is absent; comment counts are absent (comments are network-
+  scoped, and an anonymous visitor has no network).
+- The floating tab bar is hidden; the topbar shows the wordmark and a
+  neutral `Public` pill instead of the status pill.
+
+**The nag.** A dismissible bar docked at the bottom (the floating-bar slot,
+same panel/pill/shadow treatment), on every public route:
+
+```
+  ╭────────────────────────────────────────────╮
+  │ Follow this feed in tgsocial.   ( Get It ) │   body muted + btn primary sm
+  ╰────────────────────────────────────────────╯
+```
+
+`Get It` goes to `/` (sign in). Dismiss (×, 40pt target) hides it for the
+session; it returns on the next visit. Content padding accounts for it the
+same way it accounts for the tab bar (§1).
+
+A signed-in visitor opening the same link gets the normal feed channel
+screen with the tab bar and no nag — the public route is a lens, not a
+separate app.
+
+**Sharing.** The Share button (§2.3) keeps sharing the Telegram `t.me` link;
+the channel header on a public route gains a `Copy Link` ghost sm that
+copies the `tgsocial.lucianlabs.ca/f/<channel>` URL, toast `Link copied.`
+
+**Native.** iOS and Android register `tgsocial.lucianlabs.ca/f/*` and `/n/*`
+as universal/app links so a tapped link opens the installed app on that
+screen. Neither platform has an anonymous mode in v1 — an unsigned-in app
+opening a public link shows Sign in, then lands on the linked screen.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in

@@ -2,8 +2,8 @@
  * Built only from House Pour classes; all Telegram text goes through
  * createTextNode (the `h` helper never sets innerHTML).
  */
-import { h, button, pill, avatar, sectionMark } from '../../vendor/house-pour.js';
-import { entityRuns, formatTime, compactCount, channelLink, serverMessageId } from '../protocol.js';
+import { h, button, pill, avatar, sectionMark, modal } from '../../vendor/house-pour.js';
+import { entityRuns, formatTime, formatExactTime, compactCount, channelLink, serverMessageId } from '../protocol.js';
 import { userMessage } from '../repo.js';
 import { mediaBlocks } from '../media.js';
 
@@ -74,21 +74,136 @@ export function openThread(app, post, { compose = false } = {}) {
   app.navigate(`#/thread/${post.username}/${serverMessageId(post.id)}${compose ? '?compose=1' : ''}`);
 }
 
+/** PRODUCT §2.3 — Share: navigator.share when available, else copy the link + toast. */
+async function sharePost(app, post) {
+  if (typeof navigator !== 'undefined' && navigator.share) {
+    try {
+      await navigator.share({ url: post.link });
+    } catch {
+      // the user closed the share sheet — not an error
+    }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(post.link);
+    app.toast('Link copied.', 'good');
+  } catch {
+    app.toast("Couldn't copy the link.", 'bad');
+  }
+}
+
+/** PRODUCT §2.3 — the post sheet: Posted / Views / Feed rows, Open in Telegram, Close. */
+export function openPostSheet(app, post) {
+  const row = (label, value) => h('div.list-item.sheet-row', h('span.sheet-label', label), h('span.sheet-value', value));
+  let m = null;
+  const open = button('Open in Telegram', { onClick: () => openExternal(post.link) });
+  const close = button('Close', { style: 'ghost', onClick: () => m.close() });
+  m = modal([
+    sectionMark('Post'),
+    h('div.sheet-rows',
+      row('Posted', formatExactTime(new Date(post.date * 1000))),
+      row('Views', compactCount(post.views)),
+      row('Feed', `${post.title || `@${post.username}`} · @${post.username}`),
+    ),
+    open,
+    close,
+  ], { label: 'Post' });
+  return m;
+}
+
+/**
+ * Long-press (pointerdown, 500 ms, cancelled by pointerup/cancel, or by
+ * moving beyond a small slop radius) or right-click opens the post sheet.
+ * The slop matters on touch hardware: WebKit dispatches pointermove for
+ * finger micro-jitter (Chrome suppresses sub-slop movement, Safari does
+ * not), and iOS never fires contextmenu for touch — with zero tolerance
+ * the sheet would be unreachable there. A deliberate drag (text selection,
+ * scroll) still travels past the slop and cancels; when the browser takes
+ * the pan it fires pointercancel, which cancels unconditionally.
+ * Suppressed on buttons, links, media and players so they keep their own
+ * gestures; never preventDefaults the press itself, so text selection
+ * still works for short presses.
+ */
+const SHEET_SUPPRESS = 'button, a, input, textarea, .media, .post-media, .player, .waveform, .scrubber, video, audio';
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
+
+function attachPostSheet(app, el, post) {
+  let timer = null;
+  let fired = false;
+  let startX = 0;
+  let startY = 0;
+  const cancel = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  el.addEventListener('pointerdown', (e) => {
+    // reset on every press: a release outside the card (e.g. over the sheet)
+    // never fires the card's click, so the flag must not linger
+    fired = false;
+    if (e.button !== 0 || e.target.closest(SHEET_SUPPRESS)) return;
+    cancel();
+    startX = e.clientX;
+    startY = e.clientY;
+    timer = setTimeout(() => {
+      timer = null;
+      fired = true;
+      openPostSheet(app, post);
+    }, LONG_PRESS_MS);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!timer) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > LONG_PRESS_SLOP_PX) cancel();
+  });
+  el.addEventListener('pointerup', cancel);
+  el.addEventListener('pointercancel', cancel);
+  // the click that follows a fired long-press must not open the thread
+  el.addEventListener('click', (e) => {
+    if (!fired) return;
+    fired = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+  el.addEventListener('contextmenu', (e) => {
+    if (e.target.closest(SHEET_SUPPRESS)) return;
+    e.preventDefault();
+    cancel();
+    openPostSheet(app, post);
+  });
+}
+
 /** PRODUCT §2.3 post card. `thread: false` renders it at the top of its own Thread screen. */
 export function postCard(app, post, { thread = true } = {}) {
+  // attribution (§2.3): the node the post reaches me through leads; the
+  // channel is the subheading. Unattributed → the channel itself, no subheading.
+  const attributed = !!post.node;
+  const name = attributed ? post.nodeName || `@${post.node}` : post.title || `@${post.username}`;
   const title = h('button.post-title', {
     type: 'button',
-    'aria-label': `Open ${post.title} feed`,
+    'aria-label': attributed ? `Open ${name}` : `Open ${post.title} feed`,
     onclick: (e) => {
       e.stopPropagation();
-      app.navigate(`#/feed/${post.username}`);
+      app.navigate(attributed ? `#/node/${post.node}` : `#/feed/${post.username}`);
     },
-  }, post.title || `@${post.username}`);
+  }, name);
+  const sub = attributed
+    ? h('button.post-sub', {
+      type: 'button',
+      'aria-label': `Open ${post.title || post.username} feed`,
+      onclick: (e) => {
+        e.stopPropagation();
+        app.navigate(`#/feed/${post.username}`);
+      },
+    }, post.title || `@${post.username}`)
+    : null;
 
   const head = h('div.post-head',
-    avatarFor(app, post.title, post.avatar, 'row'),
-    h('div.post-head-text', title, h('div.post-user', `@${post.username}`)),
-    h('div.post-time', formatTime(new Date(post.date * 1000))),
+    avatarFor(app, name, attributed ? post.nodeAvatar : post.avatar, 'row'),
+    h('div.post-head-text', title, sub),
+    h('div.post-head-trail',
+      h('div.post-time', formatTime(new Date(post.date * 1000))),
+      button('Share', { style: 'ghost', size: 'sm', ariaLabel: 'Share this post', onClick: () => sharePost(app, post) }),
+    ),
   );
 
   const parts = [head];
@@ -105,15 +220,19 @@ export function postCard(app, post, { thread = true } = {}) {
   // media renders and plays in the app (PRODUCT §2.11); taps there never leave it
   parts.push(...mediaBlocks(app, normalisePostMedia(post), { openExternal }));
 
-  const counts = [];
-  if (post.views > 0) counts.push(`${compactCount(post.views)} views`);
-  for (const r of post.reactions) counts.push(`${r.emoji} ${compactCount(r.count)}`);
-  const countsEl = h('div.post-counts', counts.join(' · '));
+  // footer (§2.3): N reactions · N comments, Comment ghost sm — no views, no
+  // Open in Telegram on the card face (both live in the post sheet now)
+  const reactions = post.reactions ?? [];
+  const reactionTotal = reactions.reduce((sum, r) => sum + r.count, 0);
+  const reactionText = reactions.length >= 1 && reactions.length <= 3
+    ? reactions.map((r) => `${r.emoji} ${compactCount(r.count)}`).join(' ')
+    : `${compactCount(reactionTotal)} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`;
+  const countsEl = h('div.post-counts', reactionText);
   if (thread) {
     // "N comments" — from your network (PROTOCOL §6.3); tappable → Thread
     const n = app.repo?.commentCount(post.link) ?? 0;
     const commentsBtn = h('button.post-comments-count', { type: 'button', 'aria-label': 'Open thread' },
-      `${counts.length ? ' · ' : ''}${compactCount(n)} ${n === 1 ? 'comment' : 'comments'}`);
+      ` · ${compactCount(n)} ${n === 1 ? 'comment' : 'comments'}`);
     commentsBtn.addEventListener('click', () => openThread(app, post));
     countsEl.append(commentsBtn);
     if (app.repo) {
@@ -124,20 +243,19 @@ export function postCard(app, post, { thread = true } = {}) {
         if (what !== 'comments') return;
         if (!commentsBtn.isConnected) return unsub();
         const c = app.repo.commentCount(post.link);
-        commentsBtn.textContent = `${counts.length ? ' · ' : ''}${compactCount(c)} ${c === 1 ? 'comment' : 'comments'}`;
+        commentsBtn.textContent = ` · ${compactCount(c)} ${c === 1 ? 'comment' : 'comments'}`;
       });
       app.onLeave(unsub);
     }
   }
-  parts.push(h('div.post-foot', countsEl));
+  const foot = h('div.post-foot', countsEl);
+  if (thread) foot.append(button('Comment', { style: 'ghost', size: 'sm', onClick: () => openThread(app, post, { compose: true }) }));
+  parts.push(foot);
 
-  const open = button('Open in Telegram', { style: 'ghost', size: 'sm', onClick: () => openExternal(post.link) });
-  const actions = h('div.btn-row.post-actions');
-  if (thread) actions.append(button('Comment', { style: 'ghost', size: 'sm', onClick: () => openThread(app, post, { compose: true }) }));
-  actions.append(open);
-  parts.push(actions);
-
-  return h('article.card.post', { 'aria-label': `Post by ${post.title}` }, parts);
+  const card = h('article.card.post', { 'aria-label': `Post by ${name}` }, parts);
+  // long-press / right-click → the post sheet (§2.3)
+  attachPostSheet(app, card, post);
+  return card;
 }
 
 /** Older cached feed models predate post.album/post.preview; normalise in place. */

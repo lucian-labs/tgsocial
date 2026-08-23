@@ -281,8 +281,15 @@
           return users[1];
         case 'getUser':
           return users[q.user_id] || (() => { throw err(404, 'User not found'); })();
-        case 'getCreatedPublicChats':
-          return { '@type': 'chats', chat_ids: [-1001, -1002] };
+        case 'getCreatedPublicChats': {
+          // computed from world state so channels created (or made public) mid-test surface
+          const ids = Object.values(chats)
+            .filter((c) => c.type?.['@type'] === 'chatTypeSupergroup'
+              && supergroups[c.type.supergroup_id]?.usernames?.editable_username
+              && supergroups[c.type.supergroup_id]?.status?.['@type'] === 'chatMemberStatusCreator')
+            .map((c) => c.id);
+          return { '@type': 'chats', chat_ids: ids };
+        }
         case 'getChat':
           if (!chats[q.chat_id]) throw err(404, 'Chat not found');
           return chats[q.chat_id];

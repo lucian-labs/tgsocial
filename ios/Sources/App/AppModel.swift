@@ -48,6 +48,8 @@ enum Modal: Equatable {
     case comment(target: CommentTarget)
     /// PRODUCT §2.12: `Delete this comment?` confirm.
     case deleteComment(Comment)
+    /// PRODUCT §2.3: the long-press post sheet — Posted, Views, Feed, Open in Telegram.
+    case postSheet(Post)
 }
 
 @MainActor @Observable
@@ -127,6 +129,28 @@ final class AppModel {
     // Feed candidates (Setup / Manage)
     var candidates: [FeedCandidate] = []
     var candidatesLoading = false
+    /// A candidacy-relevant TDLib update arrived while a query was in flight; one more
+    /// pass runs when it finishes (debounced), so nothing is missed and nothing loops.
+    @ObservationIgnored private var candidatesDirty = false
+    /// How many Setup/Manage feeds surfaces are on screen. Candidacy updates re-query
+    /// live only while this is > 0 — never on a timer, never in the background.
+    @ObservationIgnored private var feedsSurfaces = 0
+    @ObservationIgnored private var candidatesRefreshTask: Task<Void, Never>?
+    /// Candidacy fingerprint per supergroup id — the fields that decide whether a channel
+    /// can appear in "Your feeds". Updates that do not change it (echoes of our own
+    /// getChat/getSupergroup traffic, unrelated flags) never trigger a re-query.
+    @ObservationIgnored private var supergroupCandidacy: [Int64: SupergroupCandidacy] = [:]
+    /// Chat ids already seen via updateNewChat (channels) / updateChatPosition (main list),
+    /// so only genuinely new arrivals trigger a re-query.
+    @ObservationIgnored private var knownChannelChats = Set<Int64>()
+    @ObservationIgnored private var mainListChats = Set<Int64>()
+
+    // Floating bottom chrome (PRODUCT §1, §2.11)
+    /// Measured height of the floating bottom chrome: the tab bar pill plus, while audio
+    /// plays, the docked now-playing row and its gap. RootView reports it from the real
+    /// layout; every Screen pads its scroll content by it, so the inset grows when the
+    /// dock appears and shrinks back the moment playback stops.
+    var bottomChromeHeight: CGFloat = 0
 
     @ObservationIgnored private var floodUntil: Foundation.Date?
 
@@ -460,7 +484,7 @@ final class AppModel {
         defer { feedLoading = false; feedReady = true }
         do {
             try await perform {
-                try await self.feed.resolveSources(myFeeds: self.myCard?.feeds ?? [], follows: self.myCard?.follows ?? [])
+                try await self.feed.resolveSources(me: self.myNode?.username, myFeeds: self.myCard?.feeds ?? [], follows: self.myCard?.follows ?? [])
                 try await self.feed.refresh()
             }
             feedStale = false

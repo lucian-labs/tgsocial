@@ -161,6 +161,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var feedJob: Job? = null
     private var availabilityJob: Job? = null
     private var replyChannelJob: Job? = null
+    private var candidatesJob: Job? = null
+    private var candidateRefreshJob: Job? = null
 
     init {
         viewModelScope.launch { tg.authState.collect { onAuth(it) } }
@@ -177,6 +179,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // Live inserts land at the top — the list stays strictly newest first (PRODUCT §2.3).
                 _feed.update { f -> f.copy(posts = FeedOrder.insertLive(f.posts, post)) }
             }
+        }
+        viewModelScope.launch {
+            // PRODUCT §2.2 — a channel made public (or created, or admin-granted) while Setup / Manage feeds is
+            // on screen appears without any user action: candidacy-changing TDLib updates schedule a debounced
+            // live re-query. Never on a timer; only on these updates, and only while the surface is visible.
+            tg.candidateChanges.collect { scheduleCandidateRefresh() }
         }
         tg.onClosed += { viewModelScope.launch { wipeLocal() } }
     }
@@ -372,7 +380,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             is Sheet.Compose -> prepareCompose(s.feedUsername)
             Sheet.EditCard -> _editCard.value = EditCardUi(name = myCard?.name.orEmpty(), bio = myCard?.bio.orEmpty(), link = myCard?.link.orEmpty())
             is Sheet.CommentComposer -> prepareCommentComposer(s.target)
-            Sheet.SignOut, Sheet.Status, is Sheet.DeleteComment -> Unit
+            Sheet.SignOut, Sheet.Status, is Sheet.DeleteComment, is Sheet.PostSheet -> Unit
         }
         _sheet.value = s
     }
@@ -812,14 +820,54 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_stack.value.lastOrNull() is Screen.Setup) back()
     }
 
-    private fun loadCandidates() {
-        viewModelScope.launch {
+    /**
+     * PRODUCT §2.2 — the candidate list is never trusted stale: every open of the Setup feeds card or Manage
+     * feeds re-queries live (getCreatedPublicChats + the admin-channel scan). The cached list stays on screen
+     * while the query runs — the pill reads `Syncing` via the activity registry — and the fresh result replaces
+     * it. [seedSelection] re-seeds the toggles from my card on open; a background refresh keeps them, so an
+     * unsaved selection survives a channel appearing mid-edit.
+     */
+    private fun loadCandidates(seedSelection: Boolean = true) {
+        candidatesJob?.cancel()
+        candidatesJob = viewModelScope.launch {
+            if (seedSelection) _setup.update { it.copy(selected = myCard?.feeds?.map { f -> Username.key(f) }?.toSet() ?: emptySet()) }
             _setup.update { it.copy(candidatesLoading = true) }
-            val list = runCatching { myNodeRepo.feedCandidates(_myNode.value?.chatId ?: 0L) }.getOrDefault(emptyList())
-            val mine = myCard?.feeds?.map { Username.key(it) }?.toSet() ?: emptySet()
+            val list = try {
+                app.activity.track("Checking your channels") { myNodeRepo.feedCandidates(_myNode.value?.chatId ?: 0L) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The query failed (offline, timeout): keep the cached list rather than blanking the card.
+                _setup.update { it.copy(candidatesLoading = false) }
+                return@launch
+            }
             val node = _myNode.value?.username
             val verified = list.filter { c -> c.username != null && node != null && ca.lucianlabs.tgsocial.protocol.Backlink.isVerified(c.description, node) }.map { Username.key(it.username!!) }.toSet()
-            _setup.update { it.copy(candidates = list, candidatesLoading = false, selected = mine, verified = verified) }
+            _setup.update { it.copy(candidates = list, candidatesLoading = false, verified = verified) }
+        }
+    }
+
+    /** Is a surface that shows the feed-candidate list on screen (Setup pushed, Manage feeds, or first-run Setup on Home)? */
+    private fun setupSurfaceVisible(): Boolean {
+        val top = _stack.value.lastOrNull()
+        return top is Screen.Setup || top is Screen.ManageFeeds || (top is Screen.Home && _setupNeeded.value)
+    }
+
+    /**
+     * A candidacy-changing TDLib update arrived. While the Setup/Manage surface is visible, re-query live after a
+     * ~1 s debounce (bursts collapse into one query), waiting out any query already in flight — its own loadChats
+     * echoes back as updates, and re-querying per echo would loop; TDLib only announces each chat once per
+     * session, so the one coalesced follow-up query echoes nothing and the chain stops. When the surface is not
+     * visible nothing runs: opening it always re-queries anyway, so the cache is never served stale.
+     */
+    private fun scheduleCandidateRefresh() {
+        if (!bootstrapped || _auth.value.step != AuthStep.READY) return
+        if (!setupSurfaceVisible()) return
+        candidateRefreshJob?.cancel()
+        candidateRefreshJob = viewModelScope.launch {
+            delay(1_000)
+            candidatesJob?.join()
+            if (setupSurfaceVisible()) loadCandidates(seedSelection = false)
         }
     }
 
@@ -922,6 +970,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun wipeLocal() {
         bootstrapped = false
         feedJob?.cancel()
+        candidatesJob?.cancel()
+        candidateRefreshJob?.cancel()
         store.wipe()
         nodes.clear()
         commentRepo.clear()

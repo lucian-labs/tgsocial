@@ -90,7 +90,7 @@ try {
   const pw = findPlaywright();
   if (!pw) throw new Error('playwright not found (run test/smoke.mjs once to install it)');
   const browser = await pw.chromium.launch({ headless: true, executablePath: findExecutable() || undefined });
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ['clipboard-read', 'clipboard-write'] });
   await ctx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
   const page = await ctx.newPage();
   globalThis.__page = page;
@@ -388,6 +388,32 @@ try {
   await waitText(/Newbie Lucian/);
   ok(!(await page.evaluate(() => !!document.querySelector('#view .profile-head .btn'))), 'own profile: no Follow button');
 
+  // ── candidates are re-queried live (Setup card 2 / You → Manage) ─────────
+  // a channel created in plain Telegram after Setup ran: no update is emitted,
+  // so only a live re-query on opening Manage can surface it
+  await page.evaluate(() => {
+    const m = window.__mock;
+    m.chats[-1080] = { '@type': 'chat', id: -1080, type: { '@type': 'chatTypeSupergroup', supergroup_id: 1080, is_channel: true }, title: 'Brand New', photo: null };
+    m.supergroups[1080] = { '@type': 'supergroup', id: 1080, usernames: { editable_username: 'brand_new', active_usernames: ['brand_new'] }, status: { '@type': 'chatMemberStatusCreator' }, is_channel: true, member_count: 1 };
+    m.fulls[1080] = { '@type': 'supergroupFullInfo', description: '' };
+    m.history[-1080] = [];
+  });
+  await page.click('.tabs button:has-text("You")');
+  await waitText(/YOUR FEEDS/);
+  await page.click('#view button.btn.sm:has-text("Manage")');
+  await waitText(/Pick the channels that post as you\./);
+  await page.waitForFunction(() => /@brand_new/.test(document.getElementById('view').innerText), null, { timeout: 8000 });
+  ok(true, 'manage: opening re-queries live — a channel made public after Setup appears');
+  // a candidacy-changing TDLib update while the card is open triggers the same
+  // re-query (debounced ~1 s): a channel made public appears with no user action
+  await page.evaluate(() => {
+    const m = window.__mock;
+    m.supergroups[1004].usernames = { editable_username: 'notes_to_self', active_usernames: ['notes_to_self'] };
+    m.client.emit({ '@type': 'updateSupergroup', supergroup: m.supergroups[1004] });
+  });
+  await page.waitForFunction(() => /@notes_to_self/.test(document.getElementById('view').innerText), null, { timeout: 8000 });
+  ok(true, 'manage: updateSupergroup while open re-queries — channel made public appears live');
+
   // ── sign out ─────────────────────────────────────────────────────────────
   await page.goto(`${base}/?mock=fresh#/you`, { waitUntil: 'load' });
   await waitText(/SIGN OUT/, 15000);
@@ -416,8 +442,50 @@ try {
   ok(order.every((d, i) => i === 0 || order[i - 1] >= d), 'feed: strictly chronological (date desc)');
   const feedText = await text();
   ok(/Forwarded from Ana's notes/.test(feedText), 'feed: forwarded line resolves the origin chat title');
-  ok(/views/.test(feedText) && /❤ 14/.test(feedText), 'feed: views + reaction counts');
-  ok(/Open in Telegram/i.test(feedText), 'feed: Open in Telegram');
+  // §2.3 attribution: the node the post reaches me through leads, the channel is the subheading
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].some((a) => a.querySelector('.post-title')?.textContent === 'Elijah Lucian' && a.querySelector('.post-sub')?.textContent === 'WaveLoop devlog')), 'feed: my feed attributes to me with the channel subheading');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].some((a) => a.querySelector('.post-title')?.textContent === 'Ana Iliovic' && a.querySelector('.post-sub')?.textContent === "Ana's notes")), 'feed: followed node leads their feed\'s posts');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post .post-time')].every((t) => /^(now|\d+(m|h|d|w|mo|y) ago)$/.test(t.textContent))), 'feed: relative time, largest unit only');
+  ok(/❤ 14/.test(feedText) && /\d+ comments/.test(feedText), 'feed: footer counts — reactions · comments');
+  ok(!/views/.test(feedText), 'feed: no views on the card face');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].every((a) => !/Open in Telegram/i.test(a.innerText))), 'feed: no Open in Telegram on the card face');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post .post-foot .btn')].every((b) => /Comment/i.test(b.textContent))), 'feed: footer keeps only the Comment ghost');
+
+  // §2.3 Share: no navigator.share in this Chromium → copy the link + toast
+  await page.evaluate(() => Object.defineProperty(navigator, 'share', { value: undefined, configurable: true }));
+  await page.locator('#view article.post >> nth=0').locator('button:has-text("Share")').click();
+  await waitToast(/^Link copied\.$/);
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  ok(/^https:\/\/t\.me\/waveloop_devlog\/\d+$/.test(copied), `share: post link copied (${copied})`);
+
+  // §2.3 long-press (500 ms hold on the text, clear of buttons/media) → post
+  // sheet. The hold jitters a few px mid-press: real fingers micro-move and
+  // WebKit dispatches pointermove for sub-slop touch movement, so the gesture
+  // must tolerate movement inside the slop radius rather than cancelling on
+  // the first pointermove.
+  {
+    const body = page.locator('#view article.post .post-body').first();
+    const bb = await body.boundingBox();
+    const x = bb.x + 8; const y = bb.y + 8;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    await page.mouse.move(x + 3, y + 2);
+    await page.waitForTimeout(150);
+    await page.mouse.move(x - 2, y + 4);
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+  }
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  const sheetText2 = await page.evaluate(() => document.getElementById('modal').innerText);
+  ok(/POST/.test(sheetText2) && /Posted\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(sheetText2), 'post sheet: POST mark + exact Posted row');
+  ok(/Views\s+[\d.]+[kmb]?/.test(sheetText2), 'post sheet: Views row moved off the footer');
+  ok(/Feed\s+.+ · @[a-z_]+/.test(sheetText2), 'post sheet: Feed row title · @username');
+  ok(/Open in Telegram/i.test(sheetText2), 'post sheet: Open in Telegram lives here now');
+  await snap('post-sheet');
+  await page.click('#modal button.btn.ghost:has-text("Close")');
+  await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+  ok(await page.evaluate(() => !location.hash.startsWith('#/thread')), 'post sheet: long-press did not open the thread');
   ok(await page.evaluate(() => !!document.querySelector('#view .post-body b') && !!document.querySelector('#view .post-body code') && !!document.querySelector('#view .post-body a')), 'feed: entities rendered as b/code/a');
   await page.waitForFunction(() => [...document.querySelectorAll('#view .post-media img')].some((i) => i.src.startsWith('blob:')), null, { timeout: 10000 });
   ok(true, 'feed: media loaded via readFile blob');
@@ -442,6 +510,50 @@ try {
   await page.locator('#view .player .player-btn').first().click();
   await page.waitForSelector('#dock .now-playing', { timeout: 8000 });
   ok(true, 'audio: now-playing row docks above the tab bar');
+
+  // ── bottom inset while the now-playing dock is live (PRODUCT §1) ─────────
+  await page.click('.tabs button:has-text("You")');
+  await waitText(/YOUR FEEDS/);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(250);
+  const inset = await page.evaluate(() => {
+    const dock = document.getElementById('dock');
+    const last = document.getElementById('view').lastElementChild;
+    return {
+      np: !!dock.querySelector('.now-playing'),
+      extra: document.getElementById('app').style.getPropertyValue('--dock-extra'),
+      lastBottom: last.getBoundingClientRect().bottom,
+      dockTop: dock.getBoundingClientRect().top,
+    };
+  });
+  ok(inset.np && inset.extra !== '' && inset.lastBottom <= inset.dockTop + 0.5,
+    `you: last element clears the now-playing dock (bottom ${Math.round(inset.lastBottom)} <= dock top ${Math.round(inset.dockTop)}, --dock-extra ${inset.extra})`);
+  // tab bar hidden (Setup via Manage) but audio still playing: the dock stays
+  // for the now-playing row and the inset stays with it
+  await page.click('#view button.btn.sm:has-text("Manage")');
+  await waitText(/Pick the channels that post as you\./);
+  const managed = await page.evaluate(() => ({
+    dockHidden: document.getElementById('dock').hidden,
+    tabsHidden: document.querySelector('#dock .tabs').hidden,
+    np: !!document.querySelector('#dock .now-playing'),
+    extra: document.getElementById('app').style.getPropertyValue('--dock-extra'),
+  }));
+  ok(!managed.dockHidden && managed.tabsHidden && managed.np && managed.extra !== '', 'manage: tab bar hidden, now-playing dock stays, inset kept');
+  // playback ends: the row unmounts, the extra inset goes away, the dock
+  // hides with the tab bar
+  await page.evaluate(() => {
+    const el = window.__tgsocial.currentAudio();
+    Object.defineProperty(el, 'ended', { value: true, configurable: true });
+    el.dispatchEvent(new Event('ended'));
+  });
+  await page.waitForFunction(() => !document.querySelector('#dock .now-playing'), null, { timeout: 5000 });
+  ok(await page.evaluate(() => document.getElementById('app').style.getPropertyValue('--dock-extra') === '' && document.getElementById('dock').hidden),
+    'audio end: --dock-extra removed and dock hidden with the tab bar');
+  await page.click('#topbar-lead .btn');
+  await waitText(/YOUR FEEDS/);
+  await page.click('.tabs button:has-text("Feed")');
+  await page.waitForSelector('#view .post-media[role="button"]', { timeout: 15000 });
+
   await page.locator('#view .post-media[role="button"]').first().click();
   await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
   ok(await page.evaluate(() => document.body.hasAttribute('data-viewer') && getComputedStyle(document.getElementById('dock')).display === 'none' && getComputedStyle(document.getElementById('head')).display === 'none'), 'viewer: hides the topbar and the tab bar');
@@ -579,6 +691,42 @@ try {
   ok(true, "offline write toasts You're offline.");
   await ctx.setOffline(false);
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 5000 });
+
+  // ── §2.3 stale cache guard ───────────────────────────────────────────────
+  // an old build's cache (pre-versioning: a raw array, oldest-first) must be
+  // discarded on boot — never painted
+  await page.evaluate(() => {
+    const posts = window.__tgsocial.repo.cachedFeed();
+    const oldestFirst = [...posts].sort((a, b) => a.date - b.date || a.id - b.id).map((p) => ({ ...p, text: `Stale cache ${p.key}` }));
+    localStorage.setItem('tgs.feed', JSON.stringify(oldestFirst));
+  });
+  await page.goto(`${base}/?mock=node&mockslow=1`, { waitUntil: 'load' });
+  await page.waitForFunction(() => !!window.__tgsocial?.repo, null, { timeout: 10000 });
+  const stale = await page.evaluate(() => ({
+    cached: window.__tgsocial.repo.cachedFeed().length,
+    painted: [...document.querySelectorAll('#view article.post')].filter((a) => /Stale cache /.test(a.innerText)).length,
+  }));
+  ok(stale.cached === 0 && stale.painted === 0, 'stale cache: old-schema feed discarded on boot, never painted');
+  await page.waitForFunction(() => window.__tgsocial.td.isReady && window.__tgsocial.repo.cachedFeed().length > 0, null, { timeout: 20000 });
+  // a current-schema payload persisted oldest-first (defensive case) is
+  // re-sorted newest-first on load and painted that way on cold start
+  await page.evaluate(() => {
+    const raw = JSON.parse(localStorage.getItem('tgs.feed'));
+    raw.data.sort((a, b) => a.date - b.date || a.id - b.id);
+    localStorage.setItem('tgs.feed', JSON.stringify(raw));
+  });
+  await page.goto(`${base}/?mock=node&mockslow=1`, { waitUntil: 'load' });
+  await page.waitForFunction(() => document.querySelectorAll('#view article.post').length > 0 && document.getElementById('status').textContent === 'Syncing', null, { timeout: 3000 });
+  const resort = await page.evaluate(() => {
+    const dates = window.__tgsocial.repo.cachedFeed().map((p) => p.date);
+    return {
+      sorted: dates.every((d, i) => i === 0 || dates[i - 1] >= d),
+      n: dates.length,
+      painted: document.querySelectorAll('#view article.post').length,
+    };
+  });
+  ok(resort.sorted && resort.n > 1 && resort.painted > 0, `stale cache: ${resort.n} cached posts re-sorted newest-first on cold start`);
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 20000 });
 
   ok(errors.length === 0, `zero console errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
   await browser.close();

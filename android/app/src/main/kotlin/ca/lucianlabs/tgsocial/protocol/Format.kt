@@ -1,5 +1,6 @@
 package ca.lucianlabs.tgsocial.protocol
 
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -11,8 +12,40 @@ import java.util.Locale
 object Format {
     private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
     private val ISO_DAY = DateTimeFormatter.ISO_LOCAL_DATE
+    private val EXACT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    /** `HH:mm` today, `Mon d` this year, `yyyy-MM-dd` otherwise. */
+    /**
+     * PRODUCT §2.3 — the post card's relative age (vectored in docs/card-vectors.json `timeFormat`): largest
+     * unit only, floor rounding. `now` (<60 s), `Nm ago`, `Nh ago`, `Nd ago` (<7 d), `Nw ago` (<8 w),
+     * `Nmo ago` (30-day months), `Ny ago` (365-day years).
+     */
+    fun relative(date: LocalDateTime, now: LocalDateTime): String =
+        relativeSeconds(Duration.between(date, now).seconds)
+
+    fun relative(epochSeconds: Long, nowEpochSeconds: Long = System.currentTimeMillis() / 1000): String =
+        relativeSeconds(nowEpochSeconds - epochSeconds)
+
+    private fun relativeSeconds(diff: Long): String {
+        val s = diff.coerceAtLeast(0)
+        val d = s / 86_400
+        return when {
+            s < 60 -> "now"
+            s < 3_600 -> "${s / 60}m ago"
+            s < 86_400 -> "${s / 3_600}h ago"
+            d < 7 -> "${d}d ago"
+            d < 7 * 8 -> "${d / 7}w ago"
+            d < 365 -> "${d / 30}mo ago"
+            else -> "${d / 365}y ago"
+        }
+    }
+
+    /** PRODUCT §2.3 — the long-press sheet's exact timestamp, `yyyy-MM-dd HH:mm` (also vectored). */
+    fun exact(date: LocalDateTime): String = EXACT.format(date)
+
+    fun exact(epochSeconds: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        exact(LocalDateTime.ofInstant(Instant.ofEpochSecond(epochSeconds), zone))
+
+    /** `HH:mm` today, `Mon d` this year, `yyyy-MM-dd` otherwise — comment rows (§2.12) and the Status sheet. */
     fun time(date: LocalDateTime, now: LocalDateTime, locale: Locale = Locale.getDefault()): String {
         val d: LocalDate = date.toLocalDate()
         val n: LocalDate = now.toLocalDate()

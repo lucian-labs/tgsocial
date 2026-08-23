@@ -9,7 +9,6 @@ export const CARD_MAX = 4096;
 export const USERNAME_RE = /^[A-Za-z_][A-Za-z0-9_]{4,31}$/;
 export const DEFAULT_INDEX_GROUP = 'tgsocial_index';
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const KEYS = new Set(['name', 'bio', 'link', 'public', 'feeds', 'follows', 'replies']);
 
 // ── usernames ──────────────────────────────────────────────────────────────
@@ -226,6 +225,24 @@ export function targetKey(link) {
   return m ? `${m[1].toLowerCase()}/${m[2]}` : null;
 }
 
+// ── attribution (PRODUCT §2.3) ─────────────────────────────────────────────
+
+/**
+ * The node a feed's posts reach me through: me when the feed is on my card,
+ * else the earliest node in my `follows:` order whose card lists it, else
+ * null (unattributed — the card falls back to the channel itself).
+ * `cardFor(username)` returns a parsed card or null; pure, cache-agnostic.
+ */
+export function attributionNode(feedUsername, myUsername, myCard, cardFor) {
+  if (!myCard) return null;
+  const lists = (card) => card?.feeds?.some((f) => sameUsername(f, feedUsername)) ?? false;
+  if (lists(myCard)) return myUsername;
+  for (const u of myCard.follows ?? []) {
+    if (lists(cardFor(u))) return u;
+  }
+  return null;
+}
+
 // ── links, counts, time ────────────────────────────────────────────────────
 
 /** TDLib message ids are server ids shifted left 20 bits. */
@@ -256,14 +273,39 @@ export function compactCount(n) {
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
-/** HH:mm today · "Mon d" this year · yyyy-MM-dd otherwise. Local time. */
+/**
+ * Relative time (PRODUCT §2.3): now (<60 s), Nm ago, Nh ago, Nd ago (<7 d),
+ * Nw ago (<8 w), Nmo ago (<12 mo, 30-day months), Ny ago (365-day years).
+ * Largest unit only, floor rounding. Derived, never hand-formatted.
+ */
 export function formatTime(date, now = new Date()) {
   const d = date instanceof Date ? date : new Date(date);
   const n = now instanceof Date ? now : new Date(now);
-  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-  if (sameDay) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-  if (d.getFullYear() === n.getFullYear()) return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const s = Math.max(0, Math.floor((n.getTime() - d.getTime()) / 1000));
+  if (s < 60) return 'now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(s / 3600);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(s / 86400);
+  if (days < 7) return `${days}d ago`;
+  const w = Math.floor(days / 7);
+  if (w < 8) return `${w}w ago`;
+  const mo = Math.floor(days / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.max(1, Math.floor(days / 365))}y ago`;
+}
+
+/** The exact timestamp for the post sheet (PRODUCT §2.3): yyyy-MM-dd HH:mm, local. */
+export function formatExactTime(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Wall-clock HH:mm, local — status sheet rows (PRODUCT §2.10). */
+export function formatClock(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 /** Seconds → m:ss or h:mm:ss for media durations. */

@@ -140,27 +140,52 @@ export function feedsCard(app) {
   const casing = new Map((app.repo.myCard?.feeds ?? []).map((u) => [usernameKey(u), u]));
   const descriptions = new Map();
 
-  (async () => {
-    let candidates = [];
-    try {
-      candidates = await app.busy(app.repo.myFeedCandidates());
-    } catch (e) {
-      replace(list, h('p.muted', `Couldn't list your channels. ${e.message}`));
-      return;
-    }
+  let painted = false;
+  const paint = (candidates) => {
+    if (painted && !list.isConnected) return;
+    painted = true;
+    const rows = [...candidates];
     // feeds listed on the card that are not among the candidates still show (co-admin edge cases)
     for (const u of app.repo.myCard?.feeds ?? []) {
-      if (!candidates.some((c) => c.username && usernameKey(c.username) === usernameKey(u))) {
-        candidates.push({ chatId: null, title: `@${u}`, username: u, canPost: true, listedOnly: true });
+      if (!rows.some((c) => c.username && usernameKey(c.username) === usernameKey(u))) {
+        rows.push({ chatId: null, title: `@${u}`, username: u, canPost: true, listedOnly: true });
       }
     }
-    if (!candidates.length) {
+    if (!rows.length) {
       replace(list, h('p.muted', 'No channels you can post to yet. Make one in Telegram, then come back.'));
+      save.disabled = true;
       return;
     }
-    replace(list, candidates.map((c) => row(c)));
+    replace(list, rows.map((c) => row(c)));
     save.disabled = false;
-  })();
+  };
+
+  const refresh = () => app.repo.refreshCandidates().then(paint).catch((e) => {
+    if (!painted) replace(list, h('p.muted', `Couldn't list your channels. ${e.message}`));
+  });
+
+  // opening this card ALWAYS re-queries live: the cached list paints
+  // instantly, the fresh scan replaces it ("Syncing" via the activity
+  // registry while in flight)
+  const cached = app.repo.cachedCandidates();
+  if (cached) paint(cached);
+  refresh();
+
+  // a TDLib update that can change candidacy (repo 'candidates-dirty')
+  // re-queries while this card is visible, debounced ~1 s — never on a timer
+  let dirtyTimer = null;
+  const offDirty = app.repo.subscribe((what) => {
+    if (what !== 'candidates-dirty' || !list.isConnected) return;
+    if (dirtyTimer) clearTimeout(dirtyTimer);
+    dirtyTimer = setTimeout(() => {
+      dirtyTimer = null;
+      if (list.isConnected) refresh();
+    }, 1000);
+  });
+  app.onLeave(() => {
+    offDirty();
+    if (dirtyTimer) clearTimeout(dirtyTimer);
+  });
 
   function row(c) {
     const hasUsername = !!c.username;

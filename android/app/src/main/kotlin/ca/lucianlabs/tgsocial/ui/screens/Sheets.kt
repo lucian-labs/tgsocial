@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.housepour.HPBody
@@ -37,9 +38,12 @@ import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTextField
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.tgsocial.model.Comment
+import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Availability
+import ca.lucianlabs.tgsocial.ui.components.openLink
 
 /**
  * Sheet bodies. The modal itself (scrim, card, fade) is one `HPModal` host in the shell; these are its contents.
@@ -148,6 +152,25 @@ fun ColumnScope.StatusSheet(vm: AppViewModel) {
     StatusRow("TDLib", vm.tdlibVersion, isLast = true)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPButton("Refresh Now", { vm.refreshFeed(resetCursors = true) }, style = HPButtonStyle.ACCENT)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPButton("Close", vm::closeSheet, style = HPButtonStyle.GHOST)
+}
+
+/**
+ * PRODUCT §2.3 — the long-press post sheet: `POST` mark, then Posted (exact date), Views (compact), and
+ * Feed (title · @username) rows, `( Open in Telegram )` neutral, `( Close )` ghost. `Open in Telegram`
+ * lives here now — nowhere else on the card; Views moved here from the footer.
+ */
+@Composable
+fun ColumnScope.PostSheet(vm: AppViewModel, post: Post) {
+    val context = LocalContext.current
+    HPSectionMark("Post")
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    StatusRow("Posted", Format.exact(post.date.toLong()))
+    StatusRow("Views", Format.compact(post.views))
+    StatusRow("Feed", "${post.sourceTitle} · @${post.sourceUsername}", isLast = true)
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    HPButton("Open in Telegram", { openLink(context, DeepLink.post(post.sourceUsername, post.messageId)) }, style = HPButtonStyle.NEUTRAL)
     Spacer(Modifier.height(HPTokens.Space.rowGap))
     HPButton("Close", vm::closeSheet, style = HPButtonStyle.GHOST)
 }

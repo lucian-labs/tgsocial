@@ -8,6 +8,9 @@ import dev.g000sha256.tdl.TdlResult
 import dev.g000sha256.tdl.dto.AuthorizationState
 import dev.g000sha256.tdl.dto.AuthorizationStateClosed
 import dev.g000sha256.tdl.dto.AuthorizationStateWaitTdlibParameters
+import dev.g000sha256.tdl.dto.ChatListMain
+import dev.g000sha256.tdl.dto.ChatMemberStatusAdministrator
+import dev.g000sha256.tdl.dto.ChatTypeSupergroup
 import dev.g000sha256.tdl.dto.ConnectionState
 import dev.g000sha256.tdl.dto.ConnectionStateReady
 import dev.g000sha256.tdl.dto.ConnectionStateWaitingForNetwork
@@ -89,6 +92,22 @@ class TelegramClient(private val context: Context) {
     private val _floodWaits = MutableSharedFlow<FloodWait>(extraBufferCapacity = 16)
     val floodWaits: SharedFlow<FloodWait> = _floodWaits.asSharedFlow()
 
+    /**
+     * Fires on TDLib updates that can change feed candidacy (PRODUCT §2.2 — "Your feeds"): `updateSupergroup`
+     * when a known supergroup's usernames or admin rights actually change (a channel made public, posting rights
+     * granted), `updateNewChat` for a channel, and `updateChatPosition` when a channel joins or leaves the main
+     * chat list. First sightings during TDLib's own sync are not changes and do not fire (except `updateNewChat`,
+     * where a first sighting IS the signal); ordinary reorders from message traffic never fire.
+     */
+    val candidateChanges: SharedFlow<Unit> get() = _candidateChanges.asSharedFlow()
+    private val _candidateChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 64)
+
+    // Collector-local memory for candidateChanges (reset per attach): channel chat ids seen via updateNewChat,
+    // main-list membership per channel, and a usernames+rights fingerprint per supergroup.
+    private val channelChatIds: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val mainListChannelIds: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val supergroupFingerprints = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+
     /** Hooks run after logOut completes (local state wipe), before the new client starts. */
     val onClosed = mutableListOf<() -> Unit>()
 
@@ -112,6 +131,9 @@ class TelegramClient(private val context: Context) {
 
     private fun attach() {
         collectors?.cancel()
+        channelChatIds.clear()
+        mainListChannelIds.clear()
+        supergroupFingerprints.clear()
         val c = client
         collectors = scope.launch {
             launch { c.authorizationStateUpdates.collect { onAuthState(it.authorizationState) } }
@@ -120,6 +142,34 @@ class TelegramClient(private val context: Context) {
             launch { c.newMessageUpdates.collect { u: UpdateNewMessage -> _newMessages.emit(u.message) } }
             launch { c.messageSendSucceededUpdates.collect { _sendSucceeded.emit(it) } }
             launch { c.messageSendFailedUpdates.collect { _sendFailed.emit(it) } }
+            launch {
+                c.newChatUpdates.collect { u ->
+                    if ((u.chat.type as? ChatTypeSupergroup)?.isChannel != true) return@collect
+                    channelChatIds.add(u.chat.id)
+                    _candidateChanges.emit(Unit)
+                }
+            }
+            launch {
+                c.chatPositionUpdates.collect { u ->
+                    if (u.position.list !is ChatListMain || u.chatId !in channelChatIds) return@collect
+                    val joined = u.position.order != 0L && mainListChannelIds.add(u.chatId)
+                    val left = u.position.order == 0L && mainListChannelIds.remove(u.chatId)
+                    if (joined || left) _candidateChanges.emit(Unit)
+                }
+            }
+            launch {
+                c.supergroupUpdates.collect { u ->
+                    val sg = u.supergroup
+                    val canPost = (sg.status as? ChatMemberStatusAdministrator)?.rights?.canPostMessages
+                    val fingerprint = listOf(
+                        sg.usernames?.activeUsernames?.joinToString(",").orEmpty(),
+                        sg.status::class.java.simpleName,
+                        canPost?.toString().orEmpty(),
+                    ).joinToString("|").hashCode()
+                    val previous = supergroupFingerprints.put(sg.id, fingerprint)
+                    if (previous != null && previous != fingerprint) _candidateChanges.emit(Unit)
+                }
+            }
         }
     }
 

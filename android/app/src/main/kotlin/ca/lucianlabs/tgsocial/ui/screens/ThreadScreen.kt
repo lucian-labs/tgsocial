@@ -66,9 +66,12 @@ fun LazyListScope.ThreadItems(vm: AppViewModel, post: Post) {
                 post = post,
                 commentCount = vm.commentCount(post, index),
                 onOpenChannel = { vm.push(Screen.FeedChannel(it)) },
+                onOpenProfile = { vm.push(Screen.Profile(it)) },
                 onOpenThread = {},
                 onComment = { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) },
                 onOpenViewer = { vm.openViewer(post, it) },
+                // The sheet is for posts — the post atop a thread included (PRODUCT §2.3).
+                onLongPress = { vm.openSheet(Sheet.PostSheet(post)) },
             )
         }
     }

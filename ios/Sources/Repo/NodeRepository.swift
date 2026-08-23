@@ -17,15 +17,16 @@ final class NodeRepository {
 
     init(td: TDClient, store: LocalStore, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.sends = sends; self.activity = activity
-        nodes = store.load([String: NodeInfo].self, LocalStore.nodeCache) ?? [:]
-        feeds = store.load([String: FeedInfo].self, LocalStore.feedCache) ?? [:]
+        // Versioned (PRODUCT §2.3): caches written by an earlier build are discarded, not painted.
+        nodes = store.loadVersioned([String: NodeInfo].self, LocalStore.nodeCache) ?? [:]
+        feeds = store.loadVersioned([String: FeedInfo].self, LocalStore.feedCache) ?? [:]
     }
 
     private var api: TDLibClient { td.api }
 
     func persist() {
-        store.save(nodes, LocalStore.nodeCache)
-        store.save(feeds, LocalStore.feedCache)
+        store.saveVersioned(nodes, LocalStore.nodeCache)
+        store.saveVersioned(feeds, LocalStore.feedCache)
     }
 
     func clear() { nodes = [:]; feeds = [:] }

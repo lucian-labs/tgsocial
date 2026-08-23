@@ -42,6 +42,8 @@ sealed class Sheet {
     /** PRODUCT §2.12 — the comment composer. */
     data class CommentComposer(val target: CommentTarget) : Sheet()
     data class DeleteComment(val comment: Comment) : Sheet()
+    /** PRODUCT §2.3 — the long-press post sheet: exact date, views, feed, and the one `Open in Telegram`. */
+    data class PostSheet(val post: Post) : Sheet()
 }
 
 /** PRODUCT §2.11 — the full-screen viewer over one post's media, opened at [page]. */

@@ -174,6 +174,10 @@ data class Reaction(val emoji: String, val count: Int)
 /**
  * One post card. Serialisable so the last page of the feed can be shown cold (PRODUCT §4).
  * An album (shared `mediaAlbumId`) collapses into one post whose [media] lists every item, newest last.
+ *
+ * PRODUCT §2.3 — attribution: [nodeUsername]/[nodeName]/[nodePhoto] are the node the post reaches me through
+ * (me for my feeds, else the followed node whose card lists the source feed). Null means no node attributes
+ * it and the card header falls back to the channel itself, with no subheading.
  */
 @Serializable
 data class Post(
@@ -183,6 +187,9 @@ data class Post(
     val sourceUsername: String,
     val sourceTitle: String,
     val sourcePhoto: FileRef? = null,
+    val nodeUsername: String? = null,
+    val nodeName: String? = null,
+    val nodePhoto: FileRef? = null,
     val text: PostText? = null,
     val media: List<PostMedia> = emptyList(),
     val linkPreview: LinkPreviewInfo? = null,

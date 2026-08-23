@@ -20,24 +20,34 @@ final class FeedRepository {
     private(set) var posts: [Post] = []
     private(set) var isExhausted = false
     private var forwardNames: [String: String] = [:]
+    /// The inputs attribution derives from (PRODUCT §2.3), kept from the last resolveSources.
+    private var myUsername: String?
+    private var myFeeds: [String] = []
+    private var follows: [String] = []
 
     init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
-        posts = store.load([Post].self, LocalStore.postCache) ?? []
+        // Versioned (PRODUCT §2.3): a cache written by an earlier build is discarded, and whatever
+        // loads is defensively re-sorted so a cached page can never paint in old order.
+        posts = store.loadVersioned([Post].self, LocalStore.postCache) ?? []
+        FeedOrder.sortNewestFirst(&posts)
     }
 
     private var api: TDLibClient { td.api }
 
     func clear() { posts = []; sources = [:]; merger = FeedMerger(sourceKeys: []); isExhausted = false }
 
-    private func persist() { store.save(Array(posts.prefix(60)), LocalStore.postCache) }
+    private func persist() { store.saveVersioned(Array(posts.prefix(60)), LocalStore.postCache) }
 
     // MARK: Sources
 
     /// Sources = my feeds ∪ feeds of every node I follow. Resolves channel info (cached). Throws only on FLOOD_WAIT.
     /// A node or channel that cannot be read live (offline, transient Telegram error) falls back to its cached
     /// record however stale it is, so the merge keeps every source it knew about (PRODUCT §4: reads serve cache).
-    func resolveSources(myFeeds: [String], follows: [String]) async throws {
+    func resolveSources(me: String?, myFeeds: [String], follows: [String]) async throws {
+        myUsername = me
+        self.myFeeds = myFeeds
+        self.follows = follows
         var usernames = myFeeds
         var followed: [String: NodeInfo] = [:]
         for n in try await nodes.readNodes(follows) { followed[n.key] = n }
@@ -55,6 +65,34 @@ final class FeedRepository {
         sources = next
         merger.setSources(Array(next.keys))
     }
+
+    // MARK: Attribution (PRODUCT §2.3)
+
+    /// The node a post from this feed reaches me through: me for my feeds, else the followed node
+    /// whose card lists the feed (earliest in follows order), else nil — the card falls back to
+    /// the channel itself. Reads cached cards; resolveSources has already fetched the follows.
+    func attributionNode(forFeed feedUsername: String) -> String? {
+        Attribution.node(feed: feedUsername, me: myUsername, myFeeds: myFeeds,
+                         follows: follows.map { ($0, nodes.cachedNode($0)?.card?.feeds ?? []) })
+    }
+
+    /// Stamps the attribution node onto a post (PRODUCT §2.3: every post carries it).
+    /// Name = the node card's `name`, falling back to `@username`; avatar = the node's photo.
+    func stamped(_ post: Post) -> Post {
+        var p = post
+        guard let username = attributionNode(forFeed: post.sourceUsername) else {
+            p.authorUsername = nil; p.authorName = nil; p.authorPhoto = nil
+            return p
+        }
+        let node = nodes.cachedNode(username)
+        let cardName = node?.card?.name
+        p.authorUsername = username
+        p.authorName = (cardName?.isEmpty == false ? cardName : nil) ?? "@" + username
+        p.authorPhoto = node?.photo
+        return p
+    }
+
+    private func stamped(_ posts: [Post]) -> [Post] { posts.map { stamped($0) } }
 
     // MARK: Fetching
 
@@ -75,7 +113,7 @@ final class FeedRepository {
         }
         let oldest = collected.map(\.id).min() ?? fromMessageId
         // Albums fold into single posts; the result is strictly newest first (FeedOrder).
-        var out = Mapping.posts(collected, source: source)
+        var out = stamped(Mapping.posts(collected, source: source))
         for i in out.indices {
             out[i].forwardedFrom = await forwardName(for: out[i])
         }
@@ -192,7 +230,9 @@ final class FeedRepository {
 
     /// Live posts insert at the top (PRODUCT §2.3); album parts fold into the post already on screen.
     func apply(newMessage m: Message) {
-        guard let source = sources.values.first(where: { $0.chatId == m.chatId }), let post = Mapping.post(m, source: source) else { return }
+        guard let source = sources.values.first(where: { $0.chatId == m.chatId }),
+              let mapped = Mapping.post(m, source: source) else { return }
+        let post = stamped(mapped)
         if post.albumId != 0, let i = posts.firstIndex(where: { $0.chatId == post.chatId && $0.albumId == post.albumId }) {
             guard !posts[i].albumMessageIds.contains(post.messageId) else { return }
             posts[i] = Mapping.merged(posts[i], post)
@@ -207,8 +247,8 @@ final class FeedRepository {
     func apply(sent message: Message, oldMessageId: Int64) {
         guard let source = sources.values.first(where: { $0.chatId == message.chatId }) else { return }
         posts.removeAll { $0.chatId == message.chatId && $0.messageId == oldMessageId }
-        if let post = Mapping.post(message, source: source), !posts.contains(where: { $0.id == post.id }) {
-            posts.insert(post, at: 0)
+        if let mapped = Mapping.post(message, source: source), !posts.contains(where: { $0.id == mapped.id }) {
+            posts.insert(stamped(mapped), at: 0)
             FeedOrder.sortNewestFirst(&posts)
         }
         persist()
@@ -258,7 +298,7 @@ final class FeedRepository {
             content = .inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: nil, text: formatted))
         }
         let pending = try await api.sendMessage(chatId: feed.chatId, inputMessageContent: content, options: nil, replyMarkup: nil, replyTo: nil, topicId: nil)
-        if var optimistic = Mapping.post(pending, source: feed) {
+        if var optimistic = Mapping.post(pending, source: feed).map({ stamped($0) }) {
             optimistic.isPending = true
             if !posts.contains(where: { $0.id == optimistic.id }) { posts.insert(optimistic, at: 0) }
         }

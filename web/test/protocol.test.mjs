@@ -14,7 +14,9 @@ import {
   deepLink,
   hasBacklink,
   formatTime,
+  formatExactTime,
   compactCount,
+  attributionNode,
   entityRuns,
   createMerge,
   pushMessages,
@@ -78,9 +80,28 @@ for (const c of vectors.backlink.cases) {
   for (const c of vectors.timeFormat.cases) {
     test(`timeFormat: ${c.date}`, () => {
       assert.equal(formatTime(new Date(c.date), now), c.out);
+      assert.equal(formatExactTime(new Date(c.date)), c.exact);
     });
   }
 }
+
+// PRODUCT §2.3 attribution: me for my feeds; else the followed node whose
+// card lists the source feed (earliest in my follows order when several);
+// else null (the card falls back to the channel itself).
+test('attribution: my feed → me; followed node\'s feed → that node; earliest follow wins', () => {
+  const cards = {
+    tgs_ana: { feeds: ['ana_notes', 'shared_feed'], follows: [] },
+    tgs_bob: { feeds: ['bob_feed', 'Shared_Feed'], follows: [] },
+  };
+  const my = { feeds: ['waveloop_devlog'], follows: ['tgs_ana', 'tgs_bob'] };
+  const cardFor = (u) => cards[u.toLowerCase()] ?? null;
+  assert.equal(attributionNode('waveloop_devlog', 'tgs_me', my, cardFor), 'tgs_me');
+  assert.equal(attributionNode('bob_feed', 'tgs_me', my, cardFor), 'tgs_bob');
+  // two nodes list shared_feed — the earliest in my follows order wins (case-insensitive match)
+  assert.equal(attributionNode('SHARED_FEED', 'tgs_me', my, cardFor), 'tgs_ana');
+  assert.equal(attributionNode('unlisted_feed', 'tgs_me', my, cardFor), null);
+  assert.equal(attributionNode('waveloop_devlog', 'tgs_me', null, cardFor), null);
+});
 
 for (const c of vectors.compactCount.cases) {
   test(`compactCount: ${c.in}`, () => {

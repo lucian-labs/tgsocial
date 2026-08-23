@@ -21,8 +21,6 @@
   --app-compose-rows: 6;
   /* chevron glyph size in list rows — uses the h2 step of the ramp */
   --app-chevron-size: var(--hp-type-h2-size);
-  /* room the docked now-playing row adds under the column */
-  --app-dock-extra: calc(var(--hp-space-touch-min) + var(--hp-space-card-gap));
 }
 
 /* ── focus (visible on web, per PRODUCT §4) ──────────────────────────────── */
@@ -84,12 +82,12 @@ button.status::after {
 }
 
 /* Content scrolls under the floating tab bar: the column pads its bottom by
-   the bar height + cardGap so the last card clears it (PRODUCT §1). */
+   the bar height + cardGap so the last card clears it (PRODUCT §1).
+   --dock-extra is set on #app by App.updateDock() while the now-playing row
+   is docked — the row's measured height + the dock gap — and removed when
+   playback stops, so the inset tracks the dock dynamically. */
 .app {
-  padding-bottom: calc(var(--hp-space-bottom-safe) + env(safe-area-inset-bottom, 0px));
-}
-body[data-now-playing] .app {
-  padding-bottom: calc(var(--hp-space-bottom-safe) + env(safe-area-inset-bottom, 0px) + var(--app-dock-extra));
+  padding-bottom: calc(var(--hp-space-bottom-safe) + env(safe-area-inset-bottom, 0px) + var(--dock-extra, 0px));
 }
 
 /* Full-screen viewers hide the topbar and the floating tab bar (PRODUCT §2.11) */
@@ -164,6 +162,34 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* the channel subheading (§2.3): mono small muted, tap → feed channel screen;
+   padding + negative margin keeps the 40pt hit target without inflating the header */
+.post-sub {
+  appearance: none;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--muted);
+  line-height: var(--hp-type-mono-small-line);
+  cursor: pointer;
+  text-align: left;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: var(--hp-space-row-pad) 0;
+  margin: calc(-1 * var(--hp-space-row-pad)) 0;
+  transition: color var(--motion-color) ease;
+}
+.post-sub:hover { color: var(--accent); }
+.post-head-trail {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-tabs-gap);
 }
 .post-time {
   flex: none;
@@ -338,11 +364,20 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   transition: color var(--motion-color) ease;
 }
 .post-comments-count:hover { color: var(--accent); }
-/* Comment · Open in Telegram: small ghosts, hugging right */
-.post-actions {
-  justify-content: flex-end;
-  margin-top: var(--hp-space-tabs-pad);
+/* the post sheet (§2.3): POST mark, list rows with mono values, two buttons */
+.sheet-rows { margin-bottom: var(--hp-space-row-gap); }
+.sheet-row { align-items: baseline; }
+.sheet-label { flex: none; font: var(--type-body); color: var(--ink); }
+.sheet-value {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-size);
+  line-height: var(--hp-type-mono-line);
+  color: var(--muted);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
+.modal-card > .btn + .btn { margin-top: var(--hp-space-btn-row-gap); }
 .post-actions .btn { flex: none; width: auto; }
 
 /* ── thread (PRODUCT §2.12) ──────────────────────────────────────────────── */

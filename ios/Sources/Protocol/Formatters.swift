@@ -3,7 +3,41 @@
 import Foundation
 
 public enum PostTime {
-    /// `HH:mm` today, `Mon d` this year, `yyyy-MM-dd` otherwise. Derived from the calendar, never hand-formatted.
+    /// The post card's relative time (PRODUCT §2.3): `now` (<60 s), `Nm ago`, `Nh ago`, `Nd ago`
+    /// (<7 d), `Nw ago` (<8 w), `Nmo ago` (<12 mo, 30-day months), `Ny ago` (365-day years).
+    /// Largest unit only, floor rounding. Derived, never hand-formatted.
+    public static func relative(_ date: Date, now: Date = Date()) -> String {
+        let s = max(0, Int(now.timeIntervalSince(date)))
+        if s < 60 { return "now" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        if s < 86400 { return "\(s / 3600)h ago" }
+        let d = s / 86400
+        if d < 7 { return "\(d)d ago" }
+        if d < 7 * 8 { return "\(d / 7)w ago" }
+        if d < 365 { return "\(d / 30)mo ago" }
+        return "\(d / 365)y ago"
+    }
+
+    public static func relative(unix: Int, now: Date = Date()) -> String {
+        relative(Date(timeIntervalSince1970: TimeInterval(unix)), now: now)
+    }
+
+    /// The exact timestamp for the long-press post sheet (PRODUCT §2.3): `yyyy-MM-dd HH:mm`.
+    public static func exact(_ date: Date, calendar: Calendar = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    public static func exact(unix: Int, calendar: Calendar = .current) -> String {
+        exact(Date(timeIntervalSince1970: TimeInterval(unix)), calendar: calendar)
+    }
+
+    /// `HH:mm` today, `Mon d` this year, `yyyy-MM-dd` otherwise — comment rows (§2.12) and status
+    /// labels. Derived from the calendar, never hand-formatted.
     public static func format(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
