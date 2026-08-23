@@ -334,19 +334,42 @@
     ]
   },
   "timeFormat": {
-    "$comment": "relative to now = 2026-08-23T14:30:00 local. HH:mm today, 'Mon d' this year, 'yyyy-MM-dd' otherwise",
+    "$comment": "Relative, PRODUCT §2.3. now = 2026-08-23T14:30:00 local. Largest unit only, floor rounding: now (<60s), Nm ago, Nh ago, Nd ago (<7d), Nw ago (<8w), Nmo ago (<12mo, 30-day months), Ny ago (365-day years). exact = the long-press sheet format yyyy-MM-dd HH:mm.",
     "cases": [
       {
-        "date": "2026-08-23T14:02:00",
-        "out": "14:02"
+        "date": "2026-08-23T14:29:30",
+        "out": "now",
+        "exact": "2026-08-23 14:29"
+      },
+      {
+        "date": "2026-08-23T14:25:00",
+        "out": "5m ago",
+        "exact": "2026-08-23 14:25"
+      },
+      {
+        "date": "2026-08-23T12:02:00",
+        "out": "2h ago",
+        "exact": "2026-08-23 12:02"
       },
       {
         "date": "2026-08-20T09:15:00",
-        "out": "Aug 20"
+        "out": "3d ago",
+        "exact": "2026-08-20 09:15"
       },
       {
-        "date": "2025-12-31T23:59:00",
-        "out": "2025-12-31"
+        "date": "2026-08-09T14:30:00",
+        "out": "2w ago",
+        "exact": "2026-08-09 14:30"
+      },
+      {
+        "date": "2026-04-20T10:00:00",
+        "out": "4mo ago",
+        "exact": "2026-04-20 10:00"
+      },
+      {
+        "date": "2024-08-01T23:59:00",
+        "out": "2y ago",
+        "exact": "2024-08-01 23:59"
       }
     ]
   },

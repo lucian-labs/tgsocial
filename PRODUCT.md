@@ -127,39 +127,75 @@ The main feed (`PROTOCOL §4.8`). A vertical list of **post cards**:
 
 ```
 ┌ card ──────────────────────────────────────┐
-│ (avatar) WaveLoop devlog          14:02    │  title: body 600; time: mono faint; avatar 36pt circle
-│          @waveloop_devlog                  │  mono muted
+│ (avatar) Ana Iliovic        2h ago · Share │  avatar + name = the PERSON (see Attribution);
+│          WaveLoop devlog                   │  subheading = the channel/room, mono muted
 │                                            │
 │ Post text with *bold* and links…           │  body 1rem/1.5
 │ [ media, 12pt radius, full width ]         │  photo / video (inline player) / GIF (autoplay, muted, looped)
 │ [ ▶ 0:00 ───────── 3:42  Track title ]     │  audio + voice: inline House Pour player row (§2.11)
 │ [ ▤ file name · 2.4 MB          Open ]     │  document row; Open → in-app viewer when viewable
 │                                            │
-│ 1.2k views · 14 reactions · 3 comments     │  footer counts: mono faint (comments = from your network, §2.12)
-│ ( Comment )              ( Open in Telegram ) │  ghost sm buttons
+│ 14 reactions · 3 comments      ( Comment ) │  footer: mono faint counts left, ghost sm right
 └────────────────────────────────────────────┘
 ```
 
-- Time: `HH:mm` today, `Mon d` this year, `yyyy-MM-dd` otherwise. Derive,
-  never hand-format.
-- Forwarded posts show a muted line `Forwarded from <origin>` above the text.
-- Reactions render as the reaction emoji followed by the count (that emoji is
-  Telegram's data, not our chrome). Views use the figure-compact rule: `1.2k`.
+**Attribution — the person leads, the channel follows.** The header avatar
+and name are the **node** (the person) the post reaches you through, not the
+channel:
+
+- If the source feed is one of my feeds → me.
+- Else the node I follow whose card lists the source feed (when several
+  list it, the earliest in my `follows:` order).
+- Else (feed channel screen for an unattributed channel, +1 previews) fall
+  back to the channel itself: channel photo + title, no subheading.
+
+Name is the node card's `name` (falls back to `@username`), body 600, tap →
+node profile. The subheading is the channel: its title in mono small muted,
+tap → feed channel screen (2.6). Avatar 36pt = the node's photo.
+
+**Time is relative.** `now` (<60 s), `5m ago`, `2h ago`, `3d ago`, `2w ago`
+(<8 w), `4mo ago` (<12 mo), `2y ago` — mono faint, top right. Derive, never
+hand-format; largest unit only, floor rounding. The exact timestamp lives in
+the long-press sheet.
+
+**Share** — ghost small button right of the time. Native: the system share
+sheet with the post's `t.me` link. Web: `navigator.share` when available,
+else copy the link + toast `Link copied.`
+
 - **Order is strictly newest first** (reverse chronological): the most recent
   post is at the top, "Load more" appends older posts at the bottom. New posts
   arriving live are inserted at the top. Never oldest-first, on any screen
-  that lists posts (Feed, Feed channel).
-- Tapping the title opens the feed's channel screen (2.6). Tapping the text
-  or the comments count opens the **Thread screen** (§2.12). Tapping media
-  opens it **in the app** (§2.11) — never the browser, never Telegram.
-  `Open in Telegram` remains the one hand-off.
+  that lists posts (Feed, Feed channel). A feed cached by an older build MUST
+  NOT paint in old order: the feed cache carries a schema version, a version
+  mismatch discards it, and cached pages are re-sorted defensively on load.
+- Tapping the name opens the node profile; tapping the channel subheading
+  opens the feed channel screen (2.6). Tapping the text or the comments
+  count opens the **Thread screen** (§2.12). Tapping media opens it **in the
+  app** (§2.11).
+- **Long-press a post** (web: long-press or right-click) opens the **post
+  sheet** — a House Pour modal:
+
+```
+POST                                         (section mark)
+Posted        2026-08-23 14:02               (list rows; values mono)
+Views         1.2k
+Feed          WaveLoop devlog · @waveloop_devlog
+( Open in Telegram )                         (btn neutral)
+( Close )                                    (btn ghost)
+```
+
+  `Open in Telegram` lives here now — nowhere else on the card. Views moved
+  here from the footer.
+- Footer counts: `N reactions · N comments` (reactions render as the
+  reaction emoji + count when few, summed count otherwise; comments count
+  per §2.12, tappable). Views are not in the footer.
 - Pull-to-refresh (native) / `Refresh` ghost button under the tabs (web).
 - Infinite scroll: load more when the last card is within two screens of the
   bottom. A muted `Loading…` row at the end; `That's everything.` when all
   sources are exhausted.
 - Empty: one card — h2 `Nothing here yet.` muted `Follow a node and their
   feeds show up here, newest first.` `( Explore )` btn accent.
-- Own posts appear in the feed like any other.
+- Own posts appear in the feed like any other, attributed to me.
 
 ### 2.4 Explore
 
