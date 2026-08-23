@@ -23,7 +23,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** PROTOCOL §4.5 — read any node; cache parsed cards by username with `fetchedAt`. */
-class NodeRepo(private val tg: TelegramClient, private val store: LocalStore) {
+class NodeRepo(private val tg: TelegramClient, private val store: LocalStore, private val activity: ActivityRegistry) {
     private val _cards = MutableStateFlow<Map<String, NodeSnapshot>>(emptyMap())
     val cards: StateFlow<Map<String, NodeSnapshot>> = _cards.asStateFlow()
 
@@ -62,20 +62,20 @@ class NodeRepo(private val tg: TelegramClient, private val store: LocalStore) {
     }
 
     /** Always hits Telegram. */
-    suspend fun fetch(username: String): NodeSnapshot {
+    suspend fun fetch(username: String): NodeSnapshot = activity.track("Reading card @$username") {
         val chat = tg.call { searchPublicChat(username = username) }
         val snapshot = read(chat, username)
         put(snapshot)
-        return snapshot
+        snapshot
     }
 
     /** Read a chat as a node: pinned card (authoritative) + description + photo. */
     suspend fun read(chat: Chat, usernameHint: String? = null): NodeSnapshot {
         val sgId = chat.supergroupId
-        val sg = if (sgId != 0L) tg.client.getSupergroup(supergroupId = sgId).orNull() else null
+        val sg = if (sgId != 0L) tg.callOrNull { getSupergroup(supergroupId = sgId) } else null
         val username = sg?.username ?: usernameHint ?: ""
-        val full = if (sgId != 0L) tg.client.getSupergroupFullInfo(supergroupId = sgId).orNull() else null
-        val pinned = if (chat.isChannel) tg.client.getChatPinnedMessage(chatId = chat.id).orNull() else null
+        val full = if (sgId != 0L) tg.callOrNull { getSupergroupFullInfo(supergroupId = sgId) } else null
+        val pinned = if (chat.isChannel) tg.callOrNull { getChatPinnedMessage(chatId = chat.id) } else null
         val text = (pinned?.content as? MessageText)?.text?.text
         val parse = text?.let { CardFormat.parse(it) } ?: CardParse.NotACard
         return NodeSnapshot(
@@ -115,8 +115,8 @@ class NodeRepo(private val tg: TelegramClient, private val store: LocalStore) {
         }
         if (!chat.isChannel) return null
         val sgId = chat.supergroupId
-        val sg = tg.client.getSupergroup(supergroupId = sgId).orNull()
-        val full = tg.client.getSupergroupFullInfo(supergroupId = sgId).orNull()
+        val sg = tg.callOrNull { getSupergroup(supergroupId = sgId) }
+        val full = tg.callOrNull { getSupergroupFullInfo(supergroupId = sgId) }
         val description = full?.description.orEmpty()
         val source = FeedSource(
             username = sg?.username ?: username,
@@ -150,9 +150,9 @@ class NodeRepo(private val tg: TelegramClient, private val store: LocalStore) {
         }
         originNames[key]?.let { return it }
         val name = when (origin) {
-            is MessageOriginChannel -> tg.client.getChat(chatId = origin.chatId).orNull()?.title
-            is MessageOriginChat -> tg.client.getChat(chatId = origin.senderChatId).orNull()?.title
-            is MessageOriginUser -> tg.client.getUser(userId = origin.senderUserId).orNull()?.let { "${it.firstName} ${it.lastName}".trim() }
+            is MessageOriginChannel -> tg.callOrNull { getChat(chatId = origin.chatId) }?.title
+            is MessageOriginChat -> tg.callOrNull { getChat(chatId = origin.senderChatId) }?.title
+            is MessageOriginUser -> tg.callOrNull { getUser(userId = origin.senderUserId) }?.let { "${it.firstName} ${it.lastName}".trim() }
             else -> null
         } ?: return null
         originNames[key] = name

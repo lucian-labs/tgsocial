@@ -121,6 +121,7 @@ try {
   await page.waitForSelector('input[type="tel"]', { timeout: 15000 });
   ok(/PHONE NUMBER/i.test(await text()), 'sign-in: phone step');
   ok((await status()) === 'Signed out', 'status pill: Signed out');
+  ok(await page.evaluate(() => document.getElementById('dock').hidden), 'shell: tab bar hidden on Sign in');
   await snap('signin-phone');
   await page.fill('input[type="tel"]', '123');
   await page.click('button.btn.primary');
@@ -149,6 +150,7 @@ try {
 
   await waitText(/Make your node\./);
   ok(true, 'setup: shown when no node');
+  ok(await page.evaluate(() => document.getElementById('dock').hidden), 'shell: tab bar hidden on Setup');
   await page.waitForFunction(() => /Available|Taken/i.test(document.getElementById('view').innerText), null, { timeout: 8000 });
   ok(/tgs_elijah/.test(await page.inputValue('#view input[type="text"]')), 'setup: suggested username tgs_<username>');
   ok(/Available|Taken/i.test(await text()), 'setup: availability pill');
@@ -190,6 +192,7 @@ try {
 
   // ── feed (fresh node: two own feeds, no follows) ─────────────────────────
   await page.waitForSelector('#view article.post', { timeout: 15000 });
+  ok(await page.evaluate(() => !document.getElementById('dock').hidden && !!document.querySelector('#dock .tabs.floating')), 'shell: floating tab bar docked over the feed');
   const posts = await page.locator('#view article.post').count();
   ok(posts >= 5, `feed: ${posts} posts rendered from own feeds`);
   await page.waitForFunction(() => /That's everything\./.test(document.getElementById('view').innerText), null, { timeout: 15000 });
@@ -419,12 +422,87 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('#view .post-media img')].some((i) => i.src.startsWith('blob:')), null, { timeout: 10000 });
   ok(true, 'feed: media loaded via readFile blob');
   ok(/release-notes-\d+\.pdf/.test(feedText), 'feed: document file name');
-  ok(/Bench loop · 3:32/.test(feedText), 'feed: audio title + duration');
+  ok(/Bench loop/.test(feedText) && /3:32/.test(feedText), 'feed: audio title + duration');
+  ok(await page.evaluate(() => !!document.querySelector('#view .player .player-btn')), 'feed: audio renders as a House Pour player row');
+  ok(await page.evaluate(() => !!document.querySelector('#view .waveform i')), 'feed: voice waveform bars');
+  ok(/Poll · 3 options/.test(feedText), 'feed: poll summary');
+  ok(/Lucian Labs/.test(feedText), 'feed: link preview row');
   ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].every((a) => !/Pinned a message/.test(a.textContent))), 'feed: service messages skipped');
   await snap('feed');
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await page.waitForFunction((n) => document.querySelectorAll('#view article.post').length > n, posts2, { timeout: 15000 });
-  ok(true, 'feed: load more on scroll');
+
+  // ── §2.11 media: viewer, album swipe, now-playing dock ───────────────────
+  // scroll until the animation post enters the visibility observer's range
+  const gifMounted = () => page.evaluate(() => [...document.querySelectorAll('#view video')].some((v) => v.loop && v.muted));
+  for (let i = 0; i < 15 && !(await gifMounted()); i += 1) {
+    await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+    await page.waitForTimeout(300);
+  }
+  ok(await gifMounted(), 'feed: GIF autoplays muted and looped');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('#view .player .player-btn').first().click();
+  await page.waitForSelector('#dock .now-playing', { timeout: 8000 });
+  ok(true, 'audio: now-playing row docks above the tab bar');
+  await page.locator('#view .post-media[role="button"]').first().click();
+  await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
+  ok(await page.evaluate(() => document.body.hasAttribute('data-viewer') && getComputedStyle(document.getElementById('dock')).display === 'none' && getComputedStyle(document.getElementById('head')).display === 'none'), 'viewer: hides the topbar and the tab bar');
+  ok(await page.evaluate(() => document.querySelector('.viewer-counter')?.textContent === '1 / 2'), 'viewer: album counter 1 / 2');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => document.querySelector('.viewer-counter')?.textContent === '2 / 2', null, { timeout: 5000 });
+  ok(true, 'viewer: arrow key swipes to the next album item');
+  await snap('viewer');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer'), null, { timeout: 5000 });
+  ok(await page.evaluate(() => !document.body.hasAttribute('data-viewer')), 'viewer: Escape dismisses and restores the chrome');
+
+  // ── §2.12 comments and threads ───────────────────────────────────────────
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => /2 comments/.test(document.querySelector('#view article.post')?.innerText ?? ''), null, { timeout: 15000 });
+  ok(true, 'feed: comment count from my network on the newest post');
+  await page.locator('#view article.post').first().locator('.post-comments-count').click();
+  await page.waitForFunction(() => location.hash.startsWith('#/thread/waveloop_devlog/'), null, { timeout: 8000 });
+  await waitText(/COMMENTS · 2/);
+  const threadText = await text();
+  ok(/Nice one\. The bass is huge\./.test(threadText), 'thread: comment from Ana');
+  ok(/1 reply/.test(threadText) && /Agreed\./.test(threadText), 'thread: reply chain via re: link');
+  ok(await page.evaluate(() => !!document.querySelector('#view .comment-children .comment')), 'thread: replies indent one level');
+  ok(await page.evaluate(() => !document.getElementById('dock').hidden), 'thread: floating tab bar stays on pushed screens');
+  await snap('thread');
+  await page.click('#view button.btn.primary:has-text("Comment")');
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  ok(/YOUR COMMENTS CHANNEL/.test(await page.evaluate(() => document.getElementById('modal').innerText)), 'composer: first run shows the channel card');
+  ok(await page.evaluate(() => document.querySelector('#modal input').value === 'tgs_elijah_r'), 'composer: prefilled <node>_r');
+  await page.waitForFunction(() => /AVAILABLE/i.test(document.getElementById('modal').innerText), null, { timeout: 8000 });
+  await snap('comments-channel');
+  await page.click('#modal button.btn.primary:has-text("Make Channel")');
+  await page.waitForSelector('#modal textarea', { timeout: 10000 });
+  ok(/re: WaveLoop devlog/.test(await page.evaluate(() => document.getElementById('modal').innerText)), 'composer: quote line of the target');
+  await page.fill('#modal textarea', 'From the web thread.');
+  await snap('composer');
+  await page.click('#modal button.btn.primary:has-text("Post")');
+  await page.waitForFunction(() => /From the web thread\./.test(document.getElementById('view').innerText) && !/Posting…/.test(document.getElementById('view').innerText), null, { timeout: 10000 });
+  await waitText(/COMMENTS · 3/);
+  ok(true, 'composer: optimistic comment settles in the thread');
+  ok(await page.evaluate(() => /^replies: @tgs_elijah_r$/m.test(window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text)), 'composer: replies: added to the card');
+  ok(await page.evaluate(() => {
+    const sg = Object.values(window.__mock.supergroups).find((s) => s.usernames?.editable_username === 'tgs_elijah_r');
+    const chat = Object.values(window.__mock.chats).find((c) => c.type.supergroup_id === sg?.id);
+    return chat && /^re: https:\/\/t\.me\/waveloop_devlog\/\d+\nFrom the web thread\.$/.test(window.__mock.history[chat.id]?.[0]?.content?.text?.text ?? '');
+  }), 'composer: comment lands in my channel with the re: pointer');
+  await page.locator('#view .comment', { hasText: 'From the web thread.' }).first().locator('button:has-text("Delete")').click();
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  ok(/Delete this comment\?/.test(await page.evaluate(() => document.getElementById('modal').innerText)), 'delete: confirm copy');
+  await page.click('#modal button.btn.danger');
+  await waitText(/COMMENTS · 2/);
+  ok(true, 'delete: my comment removed from my channel');
+  await page.click('#topbar-lead .btn');
+  await page.waitForFunction(() => location.hash === '#/feed' || location.hash === '', null, { timeout: 8000 });
+  await page.waitForSelector('#view article.post', { timeout: 15000 });
+  const beforeMore = await page.locator('#view article.post').count();
+  for (let i = 0; i < 10 && (await page.locator('#view article.post').count()) <= beforeMore; i += 1) {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(400);
+  }
+  ok((await page.locator('#view article.post').count()) > beforeMore, 'feed: load more on scroll');
   for (let i = 0; i < 10 && !/That's everything\./.test(await text()); i += 1) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
@@ -440,6 +518,46 @@ try {
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 15000 });
   await page.waitForSelector('#view article.post', { timeout: 15000 });
   await page.waitForFunction(() => window.__tgsocial.td.isReady, null, { timeout: 15000 });
+
+  // ── §2.10 status sheet ───────────────────────────────────────────────────
+  await page.waitForFunction(() => !!window.__tgsocial.app.feedStats, null, { timeout: 15000 });
+  await page.click('#status');
+  await page.waitForSelector('#modal .status-sheet', { timeout: 5000 });
+  await page.waitForFunction(() => /Signed in · \+1 604 ••• 0199/.test(document.getElementById('modal').innerText), null, { timeout: 8000 });
+  ok(true, 'status sheet: masked phone');
+  const sheet = await page.evaluate(() => document.getElementById('modal').innerText);
+  ok(/Connection\s+Connected/.test(sheet), 'status sheet: Connection mirrors updateConnectionState');
+  ok(/@tgs_elijah · card /.test(sheet), 'status sheet: node row with card age');
+  ok(/\d+ sources · \d+ posts · refreshed \d\d:\d\d/.test(sheet), 'status sheet: feed stats row');
+  ok(/Pending/.test(sheet) && /TDLib\s+mock-1\.8\.49/.test(sheet), 'status sheet: Pending + TDLib rows');
+  ok(/Last error/.test(sheet), 'status sheet: Last error row');
+  await snap('status-sheet');
+  await page.click('#modal .status-sheet button.btn.accent');
+  await page.waitForFunction(() => /Nothing|…/.test(document.querySelector('#modal .status-sheet')?.innerText ?? ''), null, { timeout: 8000 });
+  await page.click('#modal .status-sheet button.btn.ghost');
+  await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+  ok(true, 'status sheet: Refresh Now runs and Close dismisses');
+  // the pill settles back to Synced — the registry cannot wedge it (PRODUCT §2.10)
+  await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 15000 });
+  ok(true, 'status pill: returns to Synced after Refresh Now');
+
+  // ── live insert: a new post lands on top (PRODUCT §2.3) ──────────────────
+  await page.evaluate(() => {
+    const msg = {
+      '@type': 'message',
+      id: 900 << 20,
+      chat_id: -1002,
+      date: Math.floor(Date.now() / 1000) + 5,
+      content: { '@type': 'messageText', text: { '@type': 'formattedText', text: 'Live insert lands on top.', entities: [] } },
+      interaction_info: null,
+      forward_info: null,
+    };
+    window.__mock.history[-1002].unshift(msg);
+    window.__mock.client.emit({ '@type': 'updateNewMessage', message: msg });
+  });
+  await page.waitForFunction(() => /Live insert lands on top\./.test(document.querySelector('#view article.post')?.innerText ?? ''), null, { timeout: 8000 });
+  ok(true, 'feed: live post inserts at the top, newest first');
+
   await page.click('.tabs button:has-text("Explore")');
   await page.waitForFunction(() => /Followed by 2 of yours/.test(document.getElementById('view').innerText), null, { timeout: 10000 });
   ok(true, 'explore: Nearby ranks Carol (followed by 2 of yours)');

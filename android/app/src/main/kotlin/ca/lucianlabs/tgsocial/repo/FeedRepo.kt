@@ -4,6 +4,7 @@ import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.FeedMerger
+import ca.lucianlabs.tgsocial.protocol.FeedOrder
 import ca.lucianlabs.tgsocial.protocol.Username
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import ca.lucianlabs.tgsocial.td.orNull
@@ -12,7 +13,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** PROTOCOL §4.8 — the main feed: sources = my feeds ∪ feeds of every node I follow; k-way merge by date. */
-class FeedRepo(private val tg: TelegramClient, private val nodes: NodeRepo, private val store: LocalStore) {
+class FeedRepo(
+    private val tg: TelegramClient,
+    private val nodes: NodeRepo,
+    private val store: LocalStore,
+    private val activity: ActivityRegistry,
+) {
     companion object {
         const val PAGE = 30
     }
@@ -78,7 +84,11 @@ class FeedRepo(private val tg: TelegramClient, private val nodes: NodeRepo, priv
     private class Page(val posts: List<Post>, val cursor: Long?, val exhausted: Boolean)
 
     /** One source page: TDLib may return fewer than asked (cache only) — repeat from the last id until 30 or empty. */
-    private suspend fun fetchPage(src: FeedSource, from: Long): Page {
+    private suspend fun fetchPage(src: FeedSource, from: Long): Page = activity.track("Loading @${src.username}") {
+        fetchPageInner(src, from)
+    }
+
+    private suspend fun fetchPageInner(src: FeedSource, from: Long): Page {
         val raw = ArrayList<Message>()
         var cursor = from
         var rounds = 0
@@ -92,7 +102,9 @@ class FeedRepo(private val tg: TelegramClient, private val nodes: NodeRepo, priv
             raw += batch
             cursor = batch.last().id
         }
-        val posts = raw.mapNotNull { m -> m.toPost(src.username, src.title, src.photo, displayWidthPx) { nodes.originName(it) } }
+        // Strictly newest first (PRODUCT §2.3): album members collapse into one card and the page is re-asserted
+        // descending even though TDLib already answers that way.
+        val posts = FeedOrder.mergeAlbums(raw.mapNotNull { m -> m.toPost(src.username, src.title, src.photo, displayWidthPx) { nodes.originName(it) } })
         return Page(posts = posts, cursor = raw.lastOrNull()?.id, exhausted = raw.isEmpty())
     }
 

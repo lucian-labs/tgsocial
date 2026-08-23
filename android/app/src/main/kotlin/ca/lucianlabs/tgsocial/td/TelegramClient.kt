@@ -28,8 +28,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -187,17 +185,18 @@ class TelegramClient(private val context: Context) {
         const val MAX_AUTO_WAIT_S = 300
     }
 
-    /** Wait for a file to finish downloading (PROTOCOL §4.10). Returns the local path or null on timeout. */
-    suspend fun awaitDownload(fileId: Int, timeoutMs: Long = 30_000): String? {
-        val f = client.getFile(fileId).orNull() ?: return null
-        if (f.local.isDownloadingCompleted) return f.local.path
-        val started = client.downloadFile(fileId = fileId, priority = 1, offset = 0L, limit = 0L, synchronous = false).orNull()
-        if (started != null && started.local.isDownloadingCompleted) return started.local.path
-        val done = withTimeoutOrNull(timeoutMs) {
-            files.filter { it.id == fileId && it.local.isDownloadingCompleted }.first()
-        } ?: client.getFile(fileId).orNull()?.takeIf { it.local.isDownloadingCompleted }
-        return done?.local?.path
-    }
+    /**
+     * [call] for best-effort reads: null on failure or timeout instead of a throw. Always bounded — a TDLib request
+     * with no timeout can sit for as long as the network is bad, and an unbounded request inside a tracked
+     * operation is exactly how the status pill used to stick on `Syncing`.
+     */
+    suspend fun <T> callOrNull(timeoutMs: Long = 40_000L, block: suspend TdlClient.() -> TdlResult<T>): T? =
+        try {
+            withTimeoutOrNull(timeoutMs) { client.block() }?.orNull()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            null
+        }
 
     /** Wipes the TDLib directories after logOut; TDLib itself deletes the database, this removes leftovers. */
     fun wipeLocalFiles() {

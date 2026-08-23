@@ -10,6 +10,7 @@ final class FeedRepository {
     private let store: LocalStore
     private let nodes: NodeRepository
     private let sends: SendTracker
+    private let activity: ActivityRegistry
 
     static let pageSize = 30
     static let drainSize = 30
@@ -20,8 +21,8 @@ final class FeedRepository {
     private(set) var isExhausted = false
     private var forwardNames: [String: String] = [:]
 
-    init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker) {
-        self.td = td; self.store = store; self.nodes = nodes; self.sends = sends
+    init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
+        self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
         posts = store.load([Post].self, LocalStore.postCache) ?? []
     }
 
@@ -73,11 +74,10 @@ final class FeedRepository {
             from = next
         }
         let oldest = collected.map(\.id).min() ?? fromMessageId
-        var out: [Post] = []
-        for m in collected {
-            guard var p = Mapping.post(m, source: source) else { continue }
-            p.forwardedFrom = await forwardName(for: p)
-            out.append(p)
+        // Albums fold into single posts; the result is strictly newest first (FeedOrder).
+        var out = Mapping.posts(collected, source: source)
+        for i in out.indices {
+            out[i].forwardedFrom = await forwardName(for: out[i])
         }
         return (out, oldest, exhausted)
     }
@@ -104,7 +104,9 @@ final class FeedRepository {
     private func refill(_ key: String) async throws {
         guard let source = sources[key] else { merger.add([], to: key, exhausted: true); return }
         let cursor = merger.cursor(for: key)
-        let page = try await fetchPage(source: source, fromMessageId: cursor)
+        let page = try await activity.run("Loading @\(source.username)") {
+            try await self.fetchPage(source: source, fromMessageId: cursor)
+        }
         let stuck = cursor != 0 && page.oldestId >= cursor
         merger.add(page.posts, to: key, oldestFetchedId: page.oldestId, exhausted: page.exhausted || stuck)
     }
@@ -157,25 +159,48 @@ final class FeedRepository {
         }
         let known = Set(posts.map(\.id))
         posts += batch.filter { !known.contains($0.id) }
-        // Keeps the list strictly chronological when a page lands on top of posts served from cache.
-        posts.sort { $0.date != $1.date ? $0.date > $1.date : $0.messageId > $1.messageId }
+        // Keeps the list strictly newest-first when a page lands on top of posts served from cache.
+        FeedOrder.sortNewestFirst(&posts)
+        coalesceAlbums()
         isExhausted = merger.isExhausted
         persist()
     }
 
+    /// An album can straddle a page boundary: after a sort its parts sit adjacent, so one pass folds them.
+    private func coalesceAlbums() {
+        var i = 0
+        while i + 1 < posts.count {
+            if posts[i].albumId != 0, posts[i].albumId == posts[i + 1].albumId, posts[i].chatId == posts[i + 1].chatId {
+                posts[i] = Mapping.merged(posts[i], posts[i + 1])
+                posts.remove(at: i + 1)
+            } else {
+                i += 1
+            }
+        }
+    }
+
     // MARK: Single channel (Feed channel screen)
 
+    /// Newest first, like every list of posts (PRODUCT §2.3).
     func channelPosts(_ source: FeedInfo, fromMessageId: Int64 = 0) async throws -> (posts: [Post], oldestId: Int64, exhausted: Bool) {
-        try await fetchPage(source: source, fromMessageId: fromMessageId)
+        try await activity.run("Loading @\(source.username)") {
+            try await self.fetchPage(source: source, fromMessageId: fromMessageId)
+        }
     }
 
     // MARK: Live updates
 
+    /// Live posts insert at the top (PRODUCT §2.3); album parts fold into the post already on screen.
     func apply(newMessage m: Message) {
         guard let source = sources.values.first(where: { $0.chatId == m.chatId }), let post = Mapping.post(m, source: source) else { return }
-        guard !posts.contains(where: { $0.id == post.id }) else { return }
-        posts.insert(post, at: 0)
-        posts.sort { $0.date != $1.date ? $0.date > $1.date : $0.messageId > $1.messageId }
+        if post.albumId != 0, let i = posts.firstIndex(where: { $0.chatId == post.chatId && $0.albumId == post.albumId }) {
+            guard !posts[i].albumMessageIds.contains(post.messageId) else { return }
+            posts[i] = Mapping.merged(posts[i], post)
+        } else {
+            guard !posts.contains(where: { $0.id == post.id }) else { return }
+            posts.insert(post, at: 0)
+        }
+        FeedOrder.sortNewestFirst(&posts)
         persist()
     }
 
@@ -184,13 +209,13 @@ final class FeedRepository {
         posts.removeAll { $0.chatId == message.chatId && $0.messageId == oldMessageId }
         if let post = Mapping.post(message, source: source), !posts.contains(where: { $0.id == post.id }) {
             posts.insert(post, at: 0)
-            posts.sort { $0.date != $1.date ? $0.date > $1.date : $0.messageId > $1.messageId }
+            FeedOrder.sortNewestFirst(&posts)
         }
         persist()
     }
 
     func apply(interaction chatId: Int64, messageId: Int64, info: MessageInteractionInfo?) {
-        guard let i = posts.firstIndex(where: { $0.chatId == chatId && $0.messageId == messageId }) else { return }
+        guard let i = posts.firstIndex(where: { $0.chatId == chatId && ($0.messageId == messageId || $0.albumMessageIds.contains(messageId)) }) else { return }
         posts[i].views = info?.viewCount ?? posts[i].views
         posts[i].reactions = (info?.reactions?.reactions ?? []).compactMap { r in
             if case .reactionTypeEmoji(let e) = r.type { return Reaction(emoji: e.emoji, count: r.totalCount) }
@@ -200,9 +225,24 @@ final class FeedRepository {
 
     func apply(deleted chatId: Int64, messageIds: [Int64]) {
         let gone = Set(messageIds)
-        let before = posts.count
-        posts.removeAll { $0.chatId == chatId && gone.contains($0.messageId) }
-        if posts.count != before { persist() }
+        var changed = false
+        posts = posts.compactMap { p in
+            guard p.chatId == chatId else { return p }
+            // Album: drop only the deleted items; the post goes when nothing is left.
+            if p.albumMessageIds.count > 1, p.media.count == p.albumMessageIds.count,
+               p.albumMessageIds.contains(where: gone.contains) {
+                var q = p
+                let keep = q.albumMessageIds.indices.filter { !gone.contains(q.albumMessageIds[$0]) }
+                changed = true
+                guard !keep.isEmpty else { return nil }
+                q.media = keep.map { q.media[$0] }
+                q.albumMessageIds = keep.map { q.albumMessageIds[$0] }
+                return q
+            }
+            if gone.contains(p.messageId) { changed = true; return nil }
+            return p
+        }
+        if changed { persist() }
     }
 
     // MARK: §4.9 Post

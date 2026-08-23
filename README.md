@@ -13,6 +13,9 @@ and the usernames are tappable — the network is navigable without this app.
 - Protocol: [`PROTOCOL.md`](./PROTOCOL.md)
 - Product (screens, flows, copy): [`PRODUCT.md`](./PRODUCT.md)
 - Design kit (House Pour, shared across platforms): [`design/`](./design/)
+- Build it on your own phone: [`docs/BUILDING.md`](./docs/BUILDING.md)
+- Fork it: [`docs/FORKING.md`](./docs/FORKING.md) — keep the card + comment
+  format and your fork stays on the same network
 
 | Build | Stack | Where |
 | --- | --- | --- |

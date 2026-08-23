@@ -3,11 +3,14 @@ package ca.lucianlabs.tgsocial.ui.screens
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.FeedUi
 import ca.lucianlabs.tgsocial.ui.Screen
+import ca.lucianlabs.tgsocial.ui.Sheet
 import ca.lucianlabs.tgsocial.ui.Tab
 import ca.lucianlabs.tgsocial.ui.columnItem
 import ca.lucianlabs.tgsocial.ui.components.EmptyCard
@@ -29,8 +32,16 @@ fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
         return
     }
     items(feed.posts, key = { it.key }) { post ->
+        val index by vm.commentIndex.collectAsStateWithLifecycle()
         Box(Modifier.columnItem()) {
-            PostCard(post, onOpenChannel = { vm.push(Screen.FeedChannel(it)) })
+            PostCard(
+                post = post,
+                commentCount = vm.commentCount(post, index),
+                onOpenChannel = { vm.push(Screen.FeedChannel(it)) },
+                onOpenThread = { vm.openThread(post) },
+                onComment = { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) },
+                onOpenViewer = { vm.openViewer(post, it) },
+            )
         }
     }
     item(key = "feed-footer") {

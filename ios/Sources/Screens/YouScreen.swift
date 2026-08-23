@@ -8,7 +8,6 @@ struct YouScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshYou() }) {
-            HPTabs(items: Tab.allCases, selected: $model.tab) { $0.label }
             if let node = model.myNode, model.myCardState == .newerVersion {
                 // PROTOCOL §8: a v2 card is mine, but this client cannot read or write it.
                 header(node)

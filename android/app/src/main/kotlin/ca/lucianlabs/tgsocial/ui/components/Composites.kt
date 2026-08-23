@@ -3,10 +3,12 @@ package ca.lucianlabs.tgsocial.ui.components
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -36,10 +38,18 @@ import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.SyncStatus
 
-/** StatusPill — `Synced` gold; everything else neutral. */
+/** StatusPill — `Synced` gold; everything else neutral. A button: tapping opens the Status sheet (PRODUCT §2.10). */
 @Composable
-fun StatusPill(status: SyncStatus) {
-    HPPill(status.label, if (status == SyncStatus.SYNCED) HPPillTone.GOLD else HPPillTone.NEUTRAL)
+fun StatusPill(status: SyncStatus, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .defaultMinSize(minHeight = HPTokens.Space.touchMin, minWidth = HPTokens.Space.touchMin)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "Status" },
+        contentAlignment = Alignment.Center,
+    ) {
+        HPPill(status.label, if (status == SyncStatus.SYNCED) HPPillTone.GOLD else HPPillTone.NEUTRAL)
+    }
 }
 
 /** EmptyCard — h2, muted body, at most one accent action. */

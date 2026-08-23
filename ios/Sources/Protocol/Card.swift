@@ -9,11 +9,13 @@ public struct Card: Equatable, Codable, Hashable {
     public var isPublic: Bool
     public var feeds: [String]
     public var follows: [String]
+    /// The node's comments channel (PROTOCOL §6.1); nil means the node doesn't comment, or hasn't yet.
+    public var replies: String?
 
     public init(name: String? = nil, bio: String? = nil, link: String? = nil, isPublic: Bool = true,
-                feeds: [String] = [], follows: [String] = []) {
+                feeds: [String] = [], follows: [String] = [], replies: String? = nil) {
         self.name = name; self.bio = bio; self.link = link; self.isPublic = isPublic
-        self.feeds = feeds; self.follows = follows
+        self.feeds = feeds; self.follows = follows; self.replies = replies
     }
 
     public func follows(_ username: String) -> Bool {
@@ -82,7 +84,8 @@ public enum CardCodec {
         return .card(Card(
             name: value(for: "name"), bio: value(for: "bio"), link: value(for: "link"), isPublic: isPublic,
             feeds: Username.list(from: values["feeds"] ?? ""),
-            follows: Username.list(from: values["follows"] ?? "")
+            follows: Username.list(from: values["follows"] ?? ""),
+            replies: Username.list(from: values["replies"] ?? "").first
         ))
     }
 
@@ -95,7 +98,7 @@ public enum CardCodec {
         return Int(rest)
     }
 
-    /// Marker, then name, bio, link, public, feeds, follows; empty optionals omitted; `public` always written.
+    /// Marker, then name, bio, link, public, feeds, follows, replies; empty optionals omitted; `public` always written.
     public static func serialise(_ card: Card) -> String {
         var lines = [marker]
         if let name = card.name, !name.isEmpty { lines.append("name: \(name)") }
@@ -104,6 +107,7 @@ public enum CardCodec {
         lines.append("public: \(card.isPublic ? "yes" : "no")")
         if !card.feeds.isEmpty { lines.append("feeds: " + card.feeds.map { "@" + $0 }.joined(separator: " ")) }
         if !card.follows.isEmpty { lines.append("follows: " + card.follows.map { "@" + $0 }.joined(separator: " ")) }
+        if let replies = card.replies, !replies.isEmpty { lines.append("replies: @" + replies) }
         return lines.joined(separator: "\n")
     }
 

@@ -6,7 +6,10 @@
 import { h, button, tabs, toast, replace } from '../vendor/house-pour.js';
 import { Td } from './td.js';
 import { Repo } from './repo.js';
+import { Activity } from './activity.js';
 import { normaliseUsername } from './protocol.js';
+import { closeViewer } from './media.js';
+import { openStatusSheet } from './views/status.js';
 import * as signin from './views/signin.js';
 import * as setup from './views/setup.js';
 import * as feed from './views/feed.js';
@@ -15,6 +18,7 @@ import * as node from './views/node.js';
 import * as channel from './views/channel.js';
 import * as graph from './views/graph.js';
 import * as you from './views/you.js';
+import * as thread from './views/thread.js';
 import { openCompose } from './views/compose.js';
 
 const MAIN_TABS = [
@@ -38,31 +42,52 @@ class App {
     this.route = null;
     this.lastMain = '#/feed';
     this.leaveFns = [];
-    this.busyCount = 0;
     this.feedDirty = false;
     this.nodeLookupDone = false;
+    /** Written by the feed view for the Status sheet (PRODUCT §2.10). */
+    this.feedStats = null;
+    this.feedRefresh = null;
+    this.lastError = null;
+    /** Every in-flight operation lives here; the pill derives from it (PRODUCT §2.10). */
+    this.activity = new Activity({ onChange: () => this.paintStatus() });
+    this.td.activity = this.activity;
     this.els = {
-      head: document.getElementById('head'),
       lead: document.getElementById('topbar-lead'),
       status: document.getElementById('status'),
-      tabsSlot: document.getElementById('tabs-slot'),
+      dock: document.getElementById('dock'),
       view: document.getElementById('view'),
     };
     this.tabs = tabs(MAIN_TABS, 'feed', (id) => this.navigate(`#/${id}`));
-    this.els.tabsSlot.append(this.tabs);
-    this.toast = toast;
+    this.tabs.classList.add('floating');
+    this.els.dock.append(this.tabs);
+    this.els.status.addEventListener('click', () => openStatusSheet(this));
+    this.toast = (message, tone, opts) => {
+      if (tone === 'bad') this.lastError = { text: message, at: Date.now() };
+      return toast(message, tone, opts);
+    };
   }
 
   // ── status pill ──────────────────────────────────────────────────────────
 
+  /**
+   * PRODUCT §2.10: Syncing exactly while the activity registry is non-empty or
+   * TDLib is connecting/updating; Synced when the registry is empty and the
+   * connection is Connected; Offline while TDLib waits for network. The
+   * registry cannot wedge the pill: every entry ends in `finally` and expires
+   * after 30 s regardless (js/activity.js).
+   */
   status() {
+    // A fatal boot (missing config, tdweb absent, td.init threw) has nothing
+    // in flight and no auth events coming: never report Syncing behind the
+    // fatal card — the cold-start heuristic below would wedge the pill.
+    if (this.fatal) return 'Signed out';
     if (!this.td.isReady) {
       const booting = !this.td.authState || this.td.authState['@type'] === 'authorizationStateWaitTdlibParameters';
       return booting && this.repo?.myNode ? 'Syncing' : 'Signed out';
     }
     const c = this.td.connectionState;
     if (!navigator.onLine || c === 'connectionStateWaitingForNetwork') return 'Offline';
-    if (this.busyCount > 0 || c === 'connectionStateConnecting' || c === 'connectionStateConnectingToProxy' || c === 'connectionStateUpdating') return 'Syncing';
+    if (this.activity.size > 0 || c === 'connectionStateConnecting' || c === 'connectionStateConnectingToProxy' || c === 'connectionStateUpdating') return 'Syncing';
     return 'Synced';
   }
 
@@ -77,24 +102,26 @@ class App {
     el.classList.toggle('gold', s === 'Synced');
   }
 
-  /** Wrap a promise so the pill reads Syncing while it runs. */
-  busy(promise) {
-    this.busyCount += 1;
-    this.paintStatus();
-    const done = () => {
-      this.busyCount = Math.max(0, this.busyCount - 1);
-      this.paintStatus();
-    };
-    return Promise.resolve(promise).then(
-      (v) => {
-        done();
-        return v;
-      },
-      (e) => {
-        done();
-        throw e;
-      },
-    );
+  /**
+   * Register work with the activity registry so the pill reads Syncing while
+   * it runs and the Status sheet can name it. Ends on settle or 30 s timeout.
+   */
+  busy(promise, label = 'Refreshing the feed') {
+    return this.activity.run(label, promise);
+  }
+
+  /** Status sheet's Refresh Now: re-run the feed refresh and re-read my card. */
+  refreshNow() {
+    if (!this.repo?.myNode) return Promise.resolve();
+    this.feedDirty = true;
+    const read = this.repo.readNode(this.repo.myNode.username, { force: true }).catch(() => null);
+    // The feed session lives inside the Feed view, so off-feed there is no
+    // live refresh to re-run: mark the feed dirty (it refreshes on the next
+    // visit) and re-scan the comment index so the sheet's action always does
+    // visible work (§2.10). On the feed, start() already refreshes both.
+    if (this.route?.name === 'feed' && this.feedRefresh) this.feedRefresh();
+    else this.repo.refreshComments({ force: true }).catch(() => null);
+    return read;
   }
 
   // ── navigation ───────────────────────────────────────────────────────────
@@ -128,6 +155,10 @@ class App {
       const username = normaliseUsername(parts[1]);
       return { name: name === 'node' ? 'node' : 'channel', username: username || parts[1], params };
     }
+    if (name === 'thread' && parts[1] && parts[2]) {
+      const username = normaliseUsername(parts[1]);
+      return { name: 'thread', username: username || parts[1], serverId: Number(parts[2]) || 0, params };
+    }
     return { name, params };
   }
 
@@ -147,18 +178,25 @@ class App {
       }
     }
     this.route = route;
-    const { head, lead, view } = this.els;
+    const { lead, view } = this.els;
     this.paintStatus();
+    closeViewer();
 
     const setLead = (back) => {
       replace(lead, back
         ? button('‹ Back', { style: 'ghost', size: 'sm', ariaLabel: 'Back', onClick: () => this.back() })
         : h('a.brand', { href: '#/feed', 'aria-label': 'tgsocial home' }, 'tgsocial'));
     };
+    // The floating tab bar: hidden on Sign in, Setup, and inside full-screen
+    // viewers; present on pushed screens (PRODUCT §1).
+    const setTabs = (on, selected = null) => {
+      this.els.dock.hidden = !on;
+      if (on && selected) this.tabs.select(selected);
+    };
 
     if (this.fatal) {
       this.currentView = 'fatal';
-      head.dataset.tabs = 'off';
+      setTabs(false);
       setLead(false);
       replace(view, this.fatal);
       return;
@@ -170,13 +208,12 @@ class App {
       const booting = !this.td.authState || this.td.authState['@type'] === 'authorizationStateWaitTdlibParameters';
       if (booting && this.repo?.myNode && !this.fatal) {
         this.currentView = 'boot';
-        head.dataset.tabs = 'on';
-        this.tabs.select('feed');
+        setTabs(true, 'feed');
         setLead(false);
         replace(view, feed.render(this, { cacheOnly: true }));
         return;
       }
-      head.dataset.tabs = 'off';
+      setTabs(false);
       setLead(false);
       // the sign-in view repaints itself on auth updates; re-rendering it here would wipe a half-typed form
       if (this.currentView !== 'signin') {
@@ -191,7 +228,7 @@ class App {
     // first time after sign-in: find my node; show Setup when none (unless skipped)
     if (!this.repo.myNode && !this.nodeLookupDone) {
       this.nodeLookupDone = true;
-      head.dataset.tabs = 'off';
+      setTabs(false);
       setLead(false);
       replace(view, h('div.card', h('p.muted', 'Looking for your node…')));
       this.busy(this.repo.findMyNode()).then(() => {
@@ -215,11 +252,12 @@ class App {
     const main = MAIN_TABS.some((t) => t.id === route.name);
     if (main) {
       this.lastMain = `#/${route.name}`;
-      head.dataset.tabs = 'on';
-      this.tabs.select(route.name);
+      setTabs(true, route.name);
       setLead(false);
     } else {
-      head.dataset.tabs = 'off';
+      // pushed screens keep the floating tab bar; Setup does not (PRODUCT §1)
+      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread';
+      setTabs(pushed, this.lastMain.replace('#/', ''));
       setLead(true);
     }
 
@@ -246,11 +284,13 @@ class App {
       case 'channel':
         el = channel.render(this, { username: route.username });
         break;
+      case 'thread':
+        el = thread.render(this, { username: route.username, serverId: route.serverId, compose: route.params.compose === '1' });
+        break;
       case 'compose': {
         // modal over the last main view
-        head.dataset.tabs = 'on';
         const under = this.lastMain.replace('#/', '');
-        this.tabs.select(under);
+        setTabs(true, under);
         setLead(false);
         el = ({ feed, explore, graph, you })[under]?.render(this) ?? feed.render(this);
         setTimeout(() => openCompose(this, { feed: route.params.feed || null }), 0);

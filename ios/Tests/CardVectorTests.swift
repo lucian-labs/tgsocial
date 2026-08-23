@@ -19,6 +19,7 @@ final class CardVectorTests: XCTestCase {
             let `public`: Bool
             let feeds: [String]
             let follows: [String]
+            let replies: String?
         }
         struct SerialiseCase: Decodable {
             let name: String
@@ -31,6 +32,16 @@ final class CardVectorTests: XCTestCase {
         struct BacklinkCase: Decodable { let description: String; let node: String; let out: Bool }
         struct TimeCase: Decodable { let date: String; let out: String }
         struct CountCase: Decodable { let `in`: Int; let out: String }
+        struct CommentParseCase: Decodable {
+            struct Out: Decodable { let target: String; let body: String }
+            let `in`: String
+            let out: Out?
+        }
+        struct CommentSerialiseCase: Decodable { let target: String; let body: String; let out: String }
+        struct CommentVectors: Decodable {
+            let parse: [CommentParseCase]
+            let serialise: [CommentSerialiseCase]
+        }
 
         let parse: [ParseCase]
         let serialise: [SerialiseCase]
@@ -39,6 +50,7 @@ final class CardVectorTests: XCTestCase {
         let backlink: Cases<BacklinkCase>
         let timeFormat: Cases<TimeCase>
         let compactCount: Cases<CountCase>
+        let comment: CommentVectors
     }
 
     private func loadVectors() throws -> Vectors {
@@ -62,6 +74,7 @@ final class CardVectorTests: XCTestCase {
                 XCTAssertEqual(card.isPublic, expected.public, c.name)
                 XCTAssertEqual(card.feeds, expected.feeds, c.name)
                 XCTAssertEqual(card.follows, expected.follows, c.name)
+                XCTAssertEqual(card.replies, expected.replies, c.name)
             } else if c.newerVersion == true {
                 XCTAssertEqual(result, .newerVersion, c.name)
             } else {
@@ -74,10 +87,11 @@ final class CardVectorTests: XCTestCase {
         let v = try loadVectors()
         for c in v.serialise {
             let card = Card(name: c.card.name, bio: c.card.bio, link: c.card.link, isPublic: c.card.public,
-                            feeds: c.card.feeds, follows: c.card.follows)
+                            feeds: c.card.feeds, follows: c.card.follows, replies: c.card.replies)
             XCTAssertEqual(CardCodec.serialise(card), c.expect, c.name)
             // Round trip.
             XCTAssertEqual(CardCodec.parse(c.expect).card?.feeds, c.card.feeds, c.name)
+            XCTAssertEqual(CardCodec.parse(c.expect).card?.replies, c.card.replies, c.name)
         }
     }
 
@@ -139,6 +153,37 @@ final class CardVectorTests: XCTestCase {
         XCTAssertNil(IndexGroup.parse("hello"))
         XCTAssertEqual(IndexGroup.announcement(node: "tgs_ana"), "node: @tgs_ana")
     }
+
+    func testCommentParseVectors() throws {
+        let v = try loadVectors()
+        XCTAssertGreaterThan(v.comment.parse.count, 0)
+        for c in v.comment.parse {
+            let result = CommentCodec.parse(c.in)
+            if let expected = c.out {
+                XCTAssertEqual(result?.target, expected.target, c.in)
+                XCTAssertEqual(result?.body, expected.body, c.in)
+            } else {
+                XCTAssertNil(result, c.in)
+            }
+        }
+    }
+
+    func testCommentSerialiseVectors() throws {
+        let v = try loadVectors()
+        for c in v.comment.serialise {
+            XCTAssertEqual(CommentCodec.serialise(target: c.target, body: c.body), c.out)
+            // Round trip.
+            let parsed = CommentCodec.parse(c.out)
+            XCTAssertEqual(parsed?.target, c.target)
+            XCTAssertEqual(parsed?.body, c.body)
+        }
+    }
+
+    func testCommentTargetKeyIsCaseInsensitive() {
+        XCTAssertEqual(CommentCodec.targetKey("https://t.me/Waveloop_Devlog/144"),
+                       CommentCodec.targetKey("https://t.me/waveloop_devlog/144"))
+        XCTAssertNil(CommentCodec.targetKey("https://t.me/waveloop_devlog"))
+    }
 }
 
 final class FeedMergeTests: XCTestCase {
@@ -180,5 +225,34 @@ final class FeedMergeTests: XCTestCase {
         m.add([Item(sourceKey: "a", messageId: 5, date: 500)], to: "a", exhausted: false)
         XCTAssertFalse(m.canEmit)
         XCTAssertEqual(m.sourceToRefill, "b")
+    }
+
+    /// PRODUCT §2.3: every list of posts is strictly newest first, end to end. Three interleaved
+    /// sources, pages arriving in arbitrary order, must merge to one descending timeline.
+    func testThreeInterleavedSourcesEmitNewestFirst() {
+        var m = FeedMerger<Item>(sourceKeys: ["a", "b", "c"])
+        m.add([Item(sourceKey: "a", messageId: 1, date: 100),
+               Item(sourceKey: "a", messageId: 9, date: 900),
+               Item(sourceKey: "a", messageId: 4, date: 400)], to: "a", exhausted: true)
+        m.add([Item(sourceKey: "b", messageId: 8, date: 800),
+               Item(sourceKey: "b", messageId: 2, date: 200),
+               Item(sourceKey: "b", messageId: 5, date: 500)], to: "b", exhausted: true)
+        m.add([Item(sourceKey: "c", messageId: 6, date: 600),
+               Item(sourceKey: "c", messageId: 3, date: 300),
+               Item(sourceKey: "c", messageId: 7, date: 700)], to: "c", exhausted: true)
+        let out = m.drain(20)
+        XCTAssertEqual(out.map(\.date), [900, 800, 700, 600, 500, 400, 300, 200, 100])
+        XCTAssertTrue(FeedOrder.isNewestFirst(out))
+        XCTAssertTrue(m.isExhausted)
+    }
+
+    /// Date ties break by message id, still descending; live inserts re-sort through the same rule.
+    func testNewestFirstBreaksTiesByMessageId() {
+        var items = [Item(sourceKey: "a", messageId: 1, date: 500),
+                     Item(sourceKey: "a", messageId: 3, date: 500),
+                     Item(sourceKey: "a", messageId: 2, date: 500)]
+        FeedOrder.sortNewestFirst(&items)
+        XCTAssertEqual(items.map(\.messageId), [3, 2, 1])
+        XCTAssertTrue(FeedOrder.isNewestFirst(items))
     }
 }

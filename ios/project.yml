@@ -90,6 +90,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIRequiresFullScreen: false
         NSPhotoLibraryUsageDescription: tgsocial attaches a photo to your post.
+        NSPhotoLibraryAddUsageDescription: tgsocial saves photos you choose to your library.
 
   tgsocialTests:
     type: bundle.unit-test

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider scope: TDLib's managed files (filesDir/tdl) and the compose upload cache. -->
+<paths>
+    <files-path name="tdl" path="tdl/" />
+    <cache-path name="upload" path="upload/" />
+</paths>

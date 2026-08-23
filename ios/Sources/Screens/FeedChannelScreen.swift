@@ -1,6 +1,7 @@
 // Screens — Feed channel (PRODUCT.md §2.6): channel header, then its posts chronologically.
 
 import SwiftUI
+import TDLibKit
 
 struct FeedChannelScreen: View {
     @Environment(AppModel.self) private var model
@@ -11,6 +12,7 @@ struct FeedChannelScreen: View {
     @State private var exhausted = false
     @State private var loading = false
     @State private var failed = false
+    @State private var observerId = UUID()
 
     /// Which node this channel is verified for: my node, or any cached node that lists it.
     private var verifiedFor: String? {
@@ -57,8 +59,25 @@ struct FeedChannelScreen: View {
         }
         .task(id: username) {
             feed = model.nodes.cachedFeed(username)
+            // Live posts insert at the top while the screen is up (PRODUCT §2.3).
+            model.observeMessages(observerId) { apply(live: $0) }
             await load(reset: true)
         }
+        .onDisappear { model.stopObservingMessages(observerId) }
+    }
+
+    /// Mirrors FeedRepository.apply(newMessage:) for this screen's own list: album parts fold
+    /// into the post already on screen; everything stays strictly newest first.
+    private func apply(live m: Message) {
+        guard let feed, m.chatId == feed.chatId, let post = Mapping.post(m, source: feed) else { return }
+        if post.albumId != 0, let i = posts.firstIndex(where: { $0.chatId == post.chatId && $0.albumId == post.albumId }) {
+            guard !posts[i].albumMessageIds.contains(post.messageId) else { return }
+            posts[i] = Mapping.merged(posts[i], post)
+        } else {
+            guard !posts.contains(where: { $0.id == post.id }) else { return }
+            posts.insert(post, at: 0)
+        }
+        FeedOrder.sortNewestFirst(&posts)
     }
 
     private func load(reset: Bool) async {

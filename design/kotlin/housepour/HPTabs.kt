@@ -7,10 +7,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -19,23 +21,32 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/** The segmented control. `bg2` track, `line` border, pill radius; selected item is a `panel` pill with a contact shadow. */
+/**
+ * The segmented control. `bg2` track, `line` border, pill radius; selected item is a `panel` pill with a contact shadow.
+ * Equal widths. `fullWidth = false` hugs the content (every item as wide as the widest); `raised` adds the one card
+ * shadow — the floating bottom bar (PRODUCT §1) is this component with `panel` fill, hugging, raised.
+ */
 @Composable
 fun HPTabs(
     items: List<String>,
     selected: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    fullWidth: Boolean = true,
+    fill: Color = HPTokens.Colors.bg2,
+    raised: Boolean = false,
 ) {
     val shape = RoundedCornerShape(HPTokens.Radius.pill)
+    var track = if (fullWidth) modifier.fillMaxWidth() else modifier.width(IntrinsicSize.Max)
+    if (raised) track = track.hpShadow(HPTokens.Radius.pill, HPTokens.Shadow.contact, HPTokens.Shadow.cast)
     Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(HPTokens.Colors.bg2, shape)
+        modifier = track
+            .background(fill, shape)
             .border(HPTokens.BORDER_WIDTH.dp, HPTokens.Colors.line, shape)
             .padding(HPTokens.Space.tabsPad),
         horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.tabsGap),

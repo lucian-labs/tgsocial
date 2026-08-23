@@ -51,6 +51,9 @@ Rules:
   (§5). Default `yes`.
 - `feeds` — whitespace-separated channel usernames, each with a leading `@`.
   Order is the owner's preferred display order.
+- `replies` — one channel username with a leading `@`: the node's **comments
+  channel** (§6). Optional; absent means the node doesn't comment, or hasn't
+  yet.
 - `follows` — whitespace-separated node usernames, each with a leading `@`.
   Order is chronological (oldest first); clients append.
 - A key MAY be repeated; values concatenate with a space. This is how a client
@@ -62,8 +65,9 @@ Rules:
   accepted as aliases for `@<name>`. Duplicates collapse to the first.
 
 Serialisation when the client writes the card: emit the marker, then keys in
-the order `name, bio, link, public, feeds, follows`, omitting empty `name`,
-`bio`, `link`, `feeds`, `follows`; `public` is always written. One space
+the order `name, bio, link, public, feeds, follows, replies`, omitting empty
+`name`, `bio`, `link`, `feeds`, `follows`, `replies`; `public` is always
+written. One space
 after the colon. No trailing whitespace. `\n` line endings. Shared test
 vectors live in `docs/card-vectors.json`; every client's unit tests run them.
 If the result would exceed 4096 characters the client MUST refuse the write
@@ -210,7 +214,77 @@ Three modalities; clients implement all three and union the results.
 A directory entry shows the node's name, username, feed count, and — for +1
 results — "Followed by N of yours".
 
-## 6. Local state
+## 6. Comments and replies
+
+Comments live in the commenter's own channel, not the author's — the same
+ownership rule as everything else here. Nobody can put words on your post;
+they can only point at it from a channel they own.
+
+### 6.1 The comments channel
+
+Each node MAY have one **comments channel**: a public channel owned by the
+node's owner, listed in the card as `replies: @<username>`. Convention:
+`<node>_r` (e.g. `@tgs_elijah_r`), created by the client on the user's first
+comment after an explicit confirm ("Make your comments channel."). The owner
+manages it like any channel — edit or delete comments from any Telegram
+client, delete the channel to withdraw everything.
+
+### 6.2 The comment format
+
+A comment is an ordinary message in a comments channel whose first line is a
+`re:` pointer to the target, followed by the comment body. For media
+comments the pointer line leads the caption.
+
+```
+re: https://t.me/waveloop_devlog/144
+Nice one. The bass is huge.
+```
+
+- The first line MUST be `re: ` + a `t.me` post link (`PROTOCOL §4.8` deep
+  link form). Everything after the first newline is the body. A message
+  without that first line is not a comment (owners may post anything else in
+  their channel; readers skip it).
+- The target may be a feed post **or another comment** (comments channels
+  are public channels, so every comment has its own `t.me` link) — that is a
+  reply, and threads are exactly `re:` chains. Clients cap rendered depth at
+  5 and show deeper replies flattened.
+- One comment targets one post. Editing/deleting the message on Telegram
+  edits/deletes the comment.
+
+### 6.3 Reading comments — network-scoped by design
+
+There is no global comment index and none is wanted. When a client renders a
+post, the comments it shows are those found in the comments channels of:
+
+1. me,
+2. every node in my `follows:`,
+3. my +1 nodes (distance 2), best-effort and cached.
+
+The client maintains a local **comment index**: for each known comments
+channel, page `getChatHistory` newest-first (same repeat-until-filled loop
+as feeds), parse `re:` lines, and index by target link. Refresh alongside
+the feed; a post's comment count is "comments from your network", which is
+the honest number a serverless design can give. Two different users may see
+different comment sets — that is the model, not a bug: you read the people
+you chose.
+
+### 6.4 Writing
+
+`sendMessage(myRepliesChatId, inputMessageText | inputMessagePhoto | …)`
+with the `re:` line prepended (as text, or as the caption's first line).
+If the card has no `replies:` yet: create the channel (§4.3 steps 1–2 with
+the `_r` username; description `tgsocial v1 replies · @<node>`), add
+`replies:` to the card (§4.4), then send. The reply channel's description
+backlink lets readers verify it belongs to the node.
+
+### 6.5 Interop
+
+A plain-Telegram reader sees a channel of quotes with tappable links — the
+`re:` line is a working deep link, so the format degrades gracefully. Forks
+and other clients MUST keep §6.2 byte-compatible: `re: ` prefix, one space,
+full `https://t.me/...` link, newline, body.
+
+## 7. Local state
 
 The card is the source of truth for the graph. Locally a client keeps only:
 
@@ -218,21 +292,23 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - `myNode` pointer (chat id, supergroup id, username, pinned message id).
 - Card cache keyed by username with `fetchedAt`.
 - Per-source feed cursors for pagination (discardable).
+- The comment index (§6.3): comments-channel → parsed pointers (discardable).
 - UI preferences.
 
 Signing out (`logOut`) clears all of it.
 
-## 7. What v1 deliberately does not do
+## 8. What v1 deliberately does not do
 
 - No ranking, no recommendations. The main feed is strictly chronological.
-- No likes, comments, or reposts in-app. Those exist on Telegram; a post's
-  "Open in Telegram" link lands on the post with its reactions and comments.
+- No likes or reposts in-app. Telegram reactions and native channel
+  discussions stay on Telegram; a post's "Open in Telegram" link lands on
+  them. (tgsocial's own comment threads are §6 and are in-app.)
 - No followers count. There is no reverse index without a server; a future
   version may compute it from the index group.
 - No private feeds. A feed is a public channel.
 - No DMs. Telegram has them.
 
-## 8. Versioning
+## 9. Versioning
 
 The marker carries the version. A v2 card will start with `tgsocial v2` and
 v1 clients MUST treat it as "Newer card. Update the app." rather than

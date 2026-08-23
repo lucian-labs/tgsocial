@@ -19,17 +19,18 @@
 </head>
 <body>
   <div class="app" id="app">
-    <div class="head" id="head" data-tabs="off">
+    <div class="head" id="head">
       <header class="topbar">
         <div class="topbar-lead" id="topbar-lead">
           <a class="brand" href="#/feed" aria-label="tgsocial home">tgsocial</a>
         </div>
-        <span class="pill status" id="status" aria-live="polite">Signed out</span>
+        <button class="pill status" id="status" type="button" aria-live="polite" aria-label="Status. Opens the status sheet">Signed out</button>
       </header>
-      <div id="tabs-slot"></div>
     </div>
     <main class="view" id="view" aria-live="polite"></main>
   </div>
+  <nav class="dock" id="dock" hidden aria-label="Sections"></nav>
+  <div id="viewer-root"></div>
   <div id="modal"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 

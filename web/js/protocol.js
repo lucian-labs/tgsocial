@@ -10,7 +10,7 @@ export const USERNAME_RE = /^[A-Za-z_][A-Za-z0-9_]{4,31}$/;
 export const DEFAULT_INDEX_GROUP = 'tgsocial_index';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const KEYS = new Set(['name', 'bio', 'link', 'public', 'feeds', 'follows']);
+const KEYS = new Set(['name', 'bio', 'link', 'public', 'feeds', 'follows', 'replies']);
 
 // ── usernames ──────────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ export function isNewerCard(text) {
 }
 
 export function emptyCard() {
-  return { name: null, bio: null, link: null, public: true, feeds: [], follows: [] };
+  return { name: null, bio: null, link: null, public: true, feeds: [], follows: [], replies: null };
 }
 
 /** Parse a pinned-message text. Returns the card or null (not a v1 card). */
@@ -95,6 +95,7 @@ export function parseCard(text) {
   card.public = raw.public === undefined ? true : raw.public.trim().toLowerCase() !== 'no';
   card.feeds = parseUsernameList(raw.feeds);
   card.follows = parseUsernameList(raw.follows);
+  card.replies = parseUsernameList(raw.replies)[0] ?? null;
   return card;
 }
 
@@ -110,6 +111,8 @@ export function serialiseCard(card) {
   const follows = parseUsernameList((card.follows ?? []).map((u) => `@${String(u).replace(/^@/, '')}`).join(' '));
   if (feeds.length) lines.push(`feeds: ${feeds.map((u) => `@${u}`).join(' ')}`);
   if (follows.length) lines.push(`follows: ${follows.map((u) => `@${u}`).join(' ')}`);
+  const replies = card.replies ? normaliseUsername(`@${String(card.replies).replace(/^@/, '')}`) : null;
+  if (replies) lines.push(`replies: @${replies}`);
   const text = lines.join('\n');
   if (text.length > CARD_MAX) throw new RangeError('Card is full.');
   return text;
@@ -186,6 +189,41 @@ export function parseIndexLine(text) {
 
 export function indexLine(node) {
   return `node: @${node}`;
+}
+
+// ── comments (PROTOCOL §6) ─────────────────────────────────────────────────
+
+/** §6.2: `re: ` + one space + a full https t.me post link. Byte-compatible across clients. */
+export const COMMENT_TARGET_RE = /^re: (https:\/\/t\.me\/[A-Za-z0-9_]+\/\d+)\s*$/;
+
+/**
+ * Parse a comments-channel message text. `{ target, body }` when the first
+ * line is a `re:` pointer, else null (owners may post anything else in their
+ * channel; readers skip it).
+ */
+export function parseComment(text) {
+  if (typeof text !== 'string') return null;
+  const nl = text.indexOf('\n');
+  const first = nl < 0 ? text : text.slice(0, nl);
+  const m = COMMENT_TARGET_RE.exec(first.replace(/\r$/, ''));
+  if (!m) return null;
+  return { target: m[1], body: nl < 0 ? '' : text.slice(nl + 1) };
+}
+
+/** §6.5: `re: ` prefix, one space, full link, newline, body. */
+export function serialiseComment(target, body) {
+  const b = typeof body === 'string' ? body : '';
+  return b ? `re: ${target}\n${b}` : `re: ${target}`;
+}
+
+/**
+ * Canonical index key for a t.me post link: `<username lowercase>/<id>`.
+ * Usernames are case-insensitive (PROTOCOL §2); the message id is not.
+ */
+export function targetKey(link) {
+  if (typeof link !== 'string') return null;
+  const m = /^https?:\/\/(?:www\.)?t\.me\/([A-Za-z0-9_]+)\/(\d+)\/?$/.exec(link.trim());
+  return m ? `${m[1].toLowerCase()}/${m[2]}` : null;
 }
 
 // ── links, counts, time ────────────────────────────────────────────────────
@@ -311,6 +349,15 @@ export const RENDERABLE_CONTENT = new Set([
   'messageAnimation',
   'messageDocument',
   'messageAudio',
+  // PRODUCT §2.11: everything a post can carry renders in the app; the rest are summarised
+  'messageVoiceNote',
+  'messageVideoNote',
+  'messageSticker',
+  'messageAnimatedEmoji',
+  'messagePoll',
+  'messageLocation',
+  'messageVenue',
+  'messageContact',
 ]);
 
 /** A message is a post if its content is renderable and it is not a card. */
@@ -404,6 +451,69 @@ export function takeNext(merge, count) {
     items.push(best);
   }
   return { items, blockedOn: null };
+}
+
+/** TDLib groups album items by `media_album_id` ("0" when the message is on its own). */
+export function albumId(message) {
+  const id = message?.media_album_id;
+  if (id === undefined || id === null) return null;
+  const s = String(id);
+  return s === '0' || s === '' ? null : s;
+}
+
+/**
+ * After takeNext emitted `item`, pull the rest of its album off the same source
+ * without re-checking the date bound: album items share a source and a date
+ * (within seconds), and the bound already admitted the first of them. Returns
+ * the extra items, newest first, or [] when the item is not part of an album.
+ */
+export function takeAlbumRest(merge, item) {
+  const album = albumId(item?.message);
+  if (!album) return [];
+  const src = merge.sources[item.key];
+  const out = [];
+  while (src && src.buffer.length && albumId(src.buffer[0].message) === album) out.push(src.buffer.shift());
+  return out;
+}
+
+/**
+ * Group consecutive merge items of one source that share an album id into
+ * [{ key, items }] groups (a lone message is a group of one). Items inside a
+ * group are put in posting order (id ascending) so a viewer swipes through the
+ * album the way it was sent; the groups themselves keep the merge's
+ * newest-first order, keyed on the album's newest message.
+ */
+export function groupAlbums(items) {
+  const groups = [];
+  for (const item of items ?? []) {
+    const album = albumId(item.message);
+    const last = groups[groups.length - 1];
+    if (album && last && last.album === album && last.key === item.key) {
+      last.items.push(item);
+      continue;
+    }
+    groups.push({ key: item.key, album, items: [item] });
+  }
+  for (const g of groups) g.items.sort((a, b) => a.id - b.id);
+  return groups;
+}
+
+/** Strictly newest-first: every date ≥ the next one (ties broken by id desc). */
+export function isNewestFirst(list, date = (p) => p.date, id = (p) => p.id ?? 0) {
+  for (let i = 1; i < (list?.length ?? 0); i += 1) {
+    const a = list[i - 1];
+    const b = list[i];
+    if (date(a) < date(b)) return false;
+    if (date(a) === date(b) && id(a) < id(b)) return false;
+  }
+  return true;
+}
+
+/** Index at which a new post (date, id) slots into a newest-first list. */
+export function insertIndex(list, date, id = 0) {
+  let i = 0;
+  while (i < list.length && (list[i].date > date || (list[i].date === date && (list[i].id ?? 0) >= id))) i += 1;
+  return i;
 }
 
 /** Compact, serialisable cursor snapshot (PROTOCOL §6: discardable). */

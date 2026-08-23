@@ -2,10 +2,14 @@ package ca.lucianlabs.tgsocial.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -29,22 +33,28 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.util.UnstableApi
 import ca.lucianlabs.housepour.HPBackdrop
 import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
+import ca.lucianlabs.housepour.HPFloatingTabs
 import ca.lucianlabs.housepour.HPModal
-import ca.lucianlabs.housepour.HPTabs
+import ca.lucianlabs.housepour.HPNowPlaying
 import ca.lucianlabs.housepour.HPToastHost
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.housepour.HPTopbar
 import ca.lucianlabs.housepour.HPWordmark
 import ca.lucianlabs.housepour.HousePourTheme
-import ca.lucianlabs.housepour.hpColumnContentPadding
 import ca.lucianlabs.housepour.hpColumnWidth
+import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.ui.components.PullToRefresh
 import ca.lucianlabs.tgsocial.ui.components.StatusPill
+import ca.lucianlabs.tgsocial.ui.media.PostViewer
+import ca.lucianlabs.tgsocial.ui.media.rememberTgApp
+import ca.lucianlabs.tgsocial.ui.screens.CommentComposerSheet
 import ca.lucianlabs.tgsocial.ui.screens.ComposeSheet
+import ca.lucianlabs.tgsocial.ui.screens.DeleteCommentSheet
 import ca.lucianlabs.tgsocial.ui.screens.EditCardSheet
 import ca.lucianlabs.tgsocial.ui.screens.ExploreItems
 import ca.lucianlabs.tgsocial.ui.screens.FeedChannelItems
@@ -54,6 +64,8 @@ import ca.lucianlabs.tgsocial.ui.screens.ProfileItems
 import ca.lucianlabs.tgsocial.ui.screens.SetupItems
 import ca.lucianlabs.tgsocial.ui.screens.SignInScreen
 import ca.lucianlabs.tgsocial.ui.screens.SignOutSheet
+import ca.lucianlabs.tgsocial.ui.screens.StatusSheet
+import ca.lucianlabs.tgsocial.ui.screens.ThreadItems
 import ca.lucianlabs.tgsocial.ui.screens.YouItems
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -73,6 +85,7 @@ fun TgSocialApp(vm: AppViewModel = viewModel()) {
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 private fun Shell(vm: AppViewModel) {
     val stack by vm.stack.collectAsStateWithLifecycle()
@@ -80,17 +93,27 @@ private fun Shell(vm: AppViewModel) {
     val status by vm.status.collectAsStateWithLifecycle()
     val tab by vm.tab.collectAsStateWithLifecycle()
     val setupNeeded by vm.setupNeeded.collectAsStateWithLifecycle()
+    val viewer by vm.viewer.collectAsStateWithLifecycle()
     val screen = stack.last()
     val pushed = stack.size > 1
 
-    BackHandler(enabled = pushed || sheet != null) { vm.back() }
+    BackHandler(enabled = pushed || sheet != null || viewer != null) { vm.back() }
+
+    // PRODUCT §1 — the floating tab bar is hidden on Sign in (outside the shell), Setup, and inside
+    // full-screen viewers; it stays on pushed screens.
+    val onSetup = (screen is Screen.Home && setupNeeded) || screen is Screen.Setup
+    val tabsVisible = !onSetup && viewer == null
 
     // The topbar overlays the scroll container so cards pass under the translucent bar; the lists pad their top
-    // by the measured bar height (LocalTopInset).
+    // by the measured bar height (LocalTopInset). The floating bar does the same at the bottom (LocalBottomInset).
     val density = LocalDensity.current
     var topbarHeight by remember { mutableStateOf(0.dp) }
+    var bottomOverlayHeight by remember { mutableStateOf(0.dp) }
     Box(modifier = Modifier.fillMaxSize()) {
-        CompositionLocalProvider(LocalTopInset provides topbarHeight) {
+        CompositionLocalProvider(
+            LocalTopInset provides topbarHeight,
+            LocalBottomInset provides if (tabsVisible) bottomOverlayHeight else 0.dp,
+        ) {
             Box(modifier = Modifier.fillMaxSize().imePadding()) {
                 when (screen) {
                     Screen.Home -> if (setupNeeded) SetupHost(vm, feedsOnly = false) else Home(vm, tab)
@@ -107,17 +130,38 @@ private fun Shell(vm: AppViewModel) {
                         LoadMoreWhenNear(state) { vm.loadMoreChannel() }
                         ColumnList(key = screen, state = state) { FeedChannelItems(vm, channel) }
                     }
+                    is Screen.Thread -> {
+                        // PRODUCT §2.12 — the thread refreshes its comment index when opened; pull-to-refresh re-scans.
+                        val refreshing by vm.commentsRefreshing.collectAsStateWithLifecycle()
+                        val state = remember(screen) { LazyListState() }
+                        PullToRefresh(refreshing = refreshing, topInset = LocalTopInset.current, onRefresh = { vm.refreshComments(force = true) }) {
+                            ColumnList(key = screen, state = state) { ThreadItems(vm, screen.post) }
+                        }
+                    }
                 }
             }
         }
-        HPTopbar(
-            modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { topbarHeight = with(density) { it.height.toDp() } },
-            leading = {
-                if (pushed) HPButton("‹ Back", { vm.back() }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, contentDescription = "Back")
-                else HPWordmark(modifier = Modifier.semantics { contentDescription = "tgsocial" })
-            },
-            trailing = { StatusPill(status) },
-        )
+        if (viewer == null) {
+            HPTopbar(
+                modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { topbarHeight = with(density) { it.height.toDp() } },
+                leading = {
+                    if (pushed) HPButton("‹ Back", { vm.back() }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, contentDescription = "Back")
+                    else HPWordmark(modifier = Modifier.semantics { contentDescription = "tgsocial" })
+                },
+                trailing = { StatusPill(status) { vm.openSheet(Sheet.Status) } },
+            )
+        }
+        if (tabsVisible) {
+            BottomOverlay(
+                vm = vm,
+                tab = tab,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { bottomOverlayHeight = with(density) { it.height.toDp() } },
+            )
+        }
+        // PRODUCT §2.11 — the full-screen viewer covers the shell: topbar and floating tab bar are gone while it is up.
+        viewer?.let { PostViewer(vm, it) }
     }
 
     // One modal host that stays composed: it fades in when a sheet opens and keeps the last sheet's content
@@ -125,17 +169,53 @@ private fun Shell(vm: AppViewModel) {
     var lastSheet by remember { mutableStateOf<Sheet?>(null) }
     if (sheet != null) lastSheet = sheet
     HPModal(isPresented = sheet != null, onDismiss = vm::closeSheet) {
-        when (sheet ?: lastSheet) {
+        when (val s = sheet ?: lastSheet) {
             is Sheet.Compose -> ComposeSheet(vm)
             Sheet.EditCard -> EditCardSheet(vm)
             Sheet.SignOut -> SignOutSheet(vm)
+            Sheet.Status -> StatusSheet(vm)
+            is Sheet.CommentComposer -> CommentComposerSheet(vm)
+            is Sheet.DeleteComment -> DeleteCommentSheet(vm, s.comment)
             null -> Unit
         }
     }
 }
 
+/**
+ * PRODUCT §1 / §2.11 — the floating bottom pill, with the now-playing row docked above it while audio plays.
+ * Content scrolls under this overlay; lists pad their bottom by its measured height + `cardGap`.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun BottomOverlay(vm: AppViewModel, tab: Tab, modifier: Modifier = Modifier) {
+    val app = rememberTgApp()
+    val now by app.playback.now.collectAsStateWithLifecycle()
+    Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        now?.let { playing ->
+            // `rowGap` keeps the docked row's cast shadow off the tab pill — two raised surfaces never touch.
+            Box(Modifier.hpColumnWidth().padding(horizontal = HPTokens.Space.columnSide).padding(bottom = HPTokens.Space.rowGap)) {
+                HPNowPlaying(
+                    title = playing.title,
+                    playing = playing.playing,
+                    elapsed = Format.duration((playing.positionMs / 1000).toInt()),
+                    onToggle = { app.playback.toggleCurrent() },
+                    onStop = { app.playback.stopAudio() },
+                )
+            }
+        }
+        HPFloatingTabs(
+            items = Tab.entries.map { it.label },
+            selected = tab.ordinal,
+            onSelect = { vm.selectTab(Tab.entries[it]) },
+        )
+    }
+}
+
 /** Height of the overlaid topbar; lists pad their top by it so the first card starts below the bar. */
 val LocalTopInset = compositionLocalOf { 0.dp }
+
+/** Height of the floating tab bar overlay (bar + now-playing + safe area); lists pad their bottom by it + cardGap. */
+val LocalBottomInset = compositionLocalOf { 0.dp }
 
 @Composable
 private fun SetupHost(vm: AppViewModel, feedsOnly: Boolean) {
@@ -174,14 +254,6 @@ private fun Home(vm: AppViewModel, tab: Tab) {
         },
     ) {
         ColumnList(key = tab, state = state) {
-            item(key = "tabs") {
-                HPTabs(
-                    items = Tab.entries.map { it.label },
-                    selected = tab.ordinal,
-                    onSelect = { vm.selectTab(Tab.entries[it]) },
-                    modifier = Modifier.hpColumnWidth().padding(bottom = HPTokens.Space.tabsBottom),
-                )
-            }
             when (tab) {
                 Tab.FEED -> FeedItems(vm, feed, me)
                 Tab.EXPLORE -> ExploreItems(vm, explore, me)
@@ -192,10 +264,21 @@ private fun Home(vm: AppViewModel, tab: Tab) {
     }
 }
 
-/** The HPColumn as a LazyColumn: column width, side padding, bottom safe area. */
+/**
+ * The HPColumn as a LazyColumn: column width, side padding, and — when the floating tab bar is up — a bottom
+ * pad of the overlay height + `cardGap` so the last card clears the pill (PRODUCT §1).
+ */
 @Composable
 fun ColumnList(key: Any?, state: LazyListState = rememberLazyListState(), content: LazyListScope.() -> Unit) {
-    val padding: PaddingValues = hpColumnContentPadding(top = LocalTopInset.current + HPTokens.Space.topbarBottom)
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val bottomInset = LocalBottomInset.current
+    val bottom = if (bottomInset > 0.dp) bottomInset + HPTokens.Space.cardGap else HPTokens.Space.bottomSafe + nav
+    val padding = PaddingValues(
+        start = HPTokens.Space.columnSide,
+        end = HPTokens.Space.columnSide,
+        top = LocalTopInset.current + HPTokens.Space.topbarBottom,
+        bottom = bottom,
+    )
     LazyColumn(
         state = state,
         modifier = Modifier.fillMaxSize(),

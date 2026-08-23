@@ -31,11 +31,16 @@ import {
   pushMessages,
   markExhausted,
   takeNext,
+  takeAlbumRest,
+  groupAlbums,
   isExhausted,
   mergeCursors,
   rankPlusOne,
   entityRuns,
   DEFAULT_INDEX_GROUP,
+  parseComment,
+  serialiseComment,
+  targetKey,
 } from './protocol.js';
 
 const LS = {
@@ -43,6 +48,7 @@ const LS = {
   cards: 'tgs.cards',
   feed: 'tgs.feed',
   prefs: 'tgs.prefs',
+  comments: 'tgs.comments',
 };
 
 const CARD_TTL_MS = 10 * 60 * 1000;
@@ -102,7 +108,12 @@ async function pmap(items, limit, fn) {
 /** Trim a TDLib file object to what we need to re-download later. */
 function slimFile(file) {
   if (!file || !file.id) return null;
-  return { id: file.id, uniqueId: file.remote?.unique_id ?? null, done: !!file.local?.is_downloading_completed };
+  return { id: file.id, uniqueId: file.remote?.unique_id ?? null, done: !!file.local?.is_downloading_completed, size: file.size || file.expected_size || 0 };
+}
+
+/** TDLib minithumbnail → data URI for the blur-up placeholder (PRODUCT §2.11). */
+function miniUri(mini) {
+  return mini?.data ? `data:image/jpeg;base64,${mini.data}` : null;
 }
 
 export function supergroupUsername(sg) {
@@ -146,6 +157,10 @@ export class Repo {
     this.myNode = load(LS.myNode, null);
     this.cards = load(LS.cards, {});
     this.prefs = load(LS.prefs, {});
+    /** Comment index (PROTOCOL §6.3): comments-channel → parsed comments. Discardable. */
+    this.comments = load(LS.comments, {});
+    /** Memoised commentIndex(); dropped on every 'comments' notification. */
+    this.commentIndexCache = null;
     this.chatsById = new Map();
     this.chatIdByUsername = new Map();
     this.userNames = new Map();
@@ -153,6 +168,11 @@ export class Repo {
     this.me = null;
     /** Set when one of my created public channels carries a card newer than v1 (PROTOCOL §8). Not persisted. */
     this.newerNode = null;
+  }
+
+  /** Report an operation into the app's activity registry (status pill / Status sheet). */
+  track(label, work) {
+    return this.td.track(label, work);
   }
 
   // ── events ───────────────────────────────────────────────────────────────
@@ -163,6 +183,7 @@ export class Repo {
   }
 
   notify(what) {
+    if (what === 'comments') this.commentIndexCache = null;
     for (const fn of this.listeners) {
       try {
         fn(what);
@@ -186,6 +207,8 @@ export class Repo {
     this.newerNode = null;
     this.cards = {};
     this.prefs = {};
+    this.comments = {};
+    this.commentIndexCache = null;
     this.chatsById.clear();
     this.chatIdByUsername.clear();
   }
@@ -277,7 +300,11 @@ export class Repo {
    * it is recorded in `newerNode` and null is returned, so callers show
    * "Newer card. Update the app." instead of offering to create a second one.
    */
-  async findMyNode() {
+  findMyNode() {
+    return this.track('Looking for your node', () => this.findMyNodeInner());
+  }
+
+  async findMyNodeInner() {
     const res = await this.td.send({ '@type': 'getCreatedPublicChats', type: { '@type': 'publicChatTypeHasUsername' } });
     let newer = null;
     for (const chatId of res?.chat_ids ?? []) {
@@ -432,6 +459,11 @@ export class Repo {
     const key = usernameKey(username);
     const cached = this.cards[key];
     if (!force && cached && Date.now() - cached.fetchedAt < CARD_TTL_MS) return cached;
+    return this.track(`Reading card @${username}`, () => this.readNodeInner(username));
+  }
+
+  async readNodeInner(username) {
+    const key = usernameKey(username);
     let chat;
     try {
       chat = await this.chatByUsername(username);
@@ -486,9 +518,9 @@ export class Repo {
       this.notify('card');
     }
     try {
-      const { messageId, card: fresh } = await this.readMyCardMessage();
+      const { messageId, card: fresh } = await this.track('Writing your card', () => this.readMyCardMessage());
       const next = mutate(fresh);
-      await this.editCardMessage(messageId, this.serialise(next));
+      await this.track('Writing your card', () => this.editCardMessage(messageId, this.serialise(next)));
       if ((fresh.bio ?? '') !== (next.bio ?? '')) {
         await this.td.trySend({ '@type': 'setChatDescription', chat_id: this.myNode.chatId, description: nodeDescription(next) });
       }
@@ -604,6 +636,8 @@ export class Repo {
       const sg = await this.supergroup(chat).catch(() => null);
       if (!sg || !canPostStatus(sg.status)) continue;
       const username = supergroupUsername(sg);
+      // the comments channel is not a feed (PROTOCOL §6.1)
+      if (username && this.myCard?.replies && sameUsername(username, this.myCard.replies)) continue;
       out.push({ chatId, supergroupId: chat.type.supergroup_id, title: chat.title, username, canPost: true, photo: slimFile(chat.photo?.small) });
     }
     out.sort((a, b) => (a.username ? 0 : 1) - (b.username ? 0 : 1) || a.title.localeCompare(b.title));
@@ -705,10 +739,12 @@ export class Repo {
     return out;
   }
 
-  /** Message → post model (serialisable; files are slimmed). */
-  async toPost(message, source) {
-    const c = message.content ?? {};
-    const t = c['@type'];
+  /**
+   * Message → post model (serialisable; files are slimmed). `extra` carries the
+   * other messages of the same album (PRODUCT §2.11: swipe between album items);
+   * their media joins post.album and the first non-empty caption wins.
+   */
+  async toPost(message, source, extra = []) {
     const post = {
       key: `${message.chat_id}:${message.id}`,
       id: message.id,
@@ -720,27 +756,34 @@ export class Repo {
       text: '',
       entities: [],
       media: null,
+      album: [],
+      preview: null,
       views: message.interaction_info?.view_count ?? 0,
       reactions: [],
       forwardedFrom: null,
       link: deepLink(source.username, message.id),
     };
-    const formatted = t === 'messageText' ? c.text : c.caption;
-    if (formatted) {
-      post.text = formatted.text ?? '';
-      post.entities = (formatted.entities ?? []).map((e) => ({ offset: e.offset, length: e.length, type: e.type }));
+    for (const msg of [message, ...extra]) {
+      const c = msg.content ?? {};
+      if (!post.text) {
+        const formatted = c['@type'] === 'messageText' ? c.text : c.caption;
+        if (formatted?.text) {
+          post.text = formatted.text;
+          post.entities = (formatted.entities ?? []).map((e) => ({ offset: e.offset, length: e.length, type: e.type }));
+        }
+      }
+      const item = mediaItem(c);
+      if (item) {
+        item.messageId = msg.id;
+        post.album.push(item);
+      }
+      if (!post.preview) post.preview = linkPreviewOf(c);
+      post.date = Math.max(post.date, msg.date);
+      post.views = Math.max(post.views, msg.interaction_info?.view_count ?? 0);
     }
-    if (t === 'messagePhoto' && c.photo?.sizes?.length) {
-      post.media = { kind: 'photo', sizes: c.photo.sizes.map((s) => ({ w: s.width, h: s.height, file: slimFile(s.photo) })) };
-    } else if (t === 'messageVideo' && c.video) {
-      post.media = { kind: 'video', duration: c.video.duration, thumb: thumb(c.video.thumbnail), w: c.video.width, h: c.video.height };
-    } else if (t === 'messageAnimation' && c.animation) {
-      post.media = { kind: 'animation', duration: c.animation.duration, thumb: thumb(c.animation.thumbnail), w: c.animation.width, h: c.animation.height };
-    } else if (t === 'messageDocument' && c.document) {
-      post.media = { kind: 'document', fileName: c.document.file_name || 'File', thumb: thumb(c.document.thumbnail) };
-    } else if (t === 'messageAudio' && c.audio) {
-      post.media = { kind: 'audio', title: c.audio.title || c.audio.file_name || 'Audio', performer: c.audio.performer || '', duration: c.audio.duration };
-    }
+    // album items swipe in posting order (PRODUCT §2.11), whatever order they merged in
+    post.album.sort((a, b) => a.messageId - b.messageId);
+    post.media = post.album[0] ?? null;
     const ii = message.interaction_info;
     const reactions = Array.isArray(ii?.reactions) ? ii.reactions : ii?.reactions?.reactions ?? [];
     for (const r of reactions) {
@@ -843,8 +886,235 @@ export class Repo {
 
   async post(feedUsername, text) {
     this.assertOnline();
-    const chat = await this.chatByUsername(feedUsername);
-    return this.sendAndWait(chat.id, inputText(text), { silent: false });
+    return this.track(`Posting to @${feedUsername}`, async () => {
+      const chat = await this.chatByUsername(feedUsername);
+      return this.sendAndWait(chat.id, inputText(text), { silent: false });
+    });
+  }
+
+  // ── comments (PROTOCOL §6) ───────────────────────────────────────────────
+
+  /**
+   * Comments channels in scope: mine, my follows', and my cached +1 nodes'
+   * (§6.3 — network-scoped by design). All from the card cache; a node with
+   * no `replies:` key contributes nothing.
+   */
+  commentChannels() {
+    if (!this.myNode) return [];
+    const nodes = new Set([usernameKey(this.myNode.username)]);
+    for (const f of this.myCard?.follows ?? []) {
+      nodes.add(usernameKey(f));
+      for (const p of this.cachedCard(f)?.card?.follows ?? []) nodes.add(usernameKey(p));
+    }
+    const out = [];
+    const seen = new Set();
+    for (const node of nodes) {
+      const entry = this.cachedCard(node);
+      const channel = entry?.card?.replies;
+      if (!channel) continue;
+      const k = usernameKey(channel);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ channel, node: entry.username });
+    }
+    return out;
+  }
+
+  /**
+   * Message in a comments channel → comment model, or null when the first
+   * line is not a `re:` pointer (§6.2). Entity offsets shift past the
+   * pointer line; media joins the model the way it joins a post.
+   */
+  toComment(message, { channel, node }) {
+    const c = message.content ?? {};
+    const formatted = c['@type'] === 'messageText' ? c.text : c.caption;
+    const raw = formatted?.text ?? '';
+    const parsed = parseComment(raw);
+    if (!parsed) return null;
+    const cut = raw.length - parsed.body.length;
+    const entities = (formatted?.entities ?? [])
+      .map((e) => ({ offset: e.offset - cut, length: e.length, type: e.type }))
+      .filter((e) => e.offset >= 0 && e.length > 0);
+    const item = mediaItem(c);
+    if (item) item.messageId = message.id;
+    const entry = this.cachedCard(node);
+    return {
+      key: `${message.chat_id}:${message.id}`,
+      id: message.id,
+      chatId: message.chat_id,
+      channel,
+      node,
+      name: entry?.card?.name || entry?.title || `@${node}`,
+      avatar: entry?.photo ?? null,
+      date: message.date,
+      target: parsed.target,
+      targetKey: targetKey(parsed.target),
+      text: parsed.body,
+      entities,
+      media: item,
+      album: item ? [item] : [],
+      preview: null,
+      link: deepLink(channel, message.id),
+      mine: !!this.myNode && sameUsername(node, this.myNode.username),
+    };
+  }
+
+  /**
+   * §6.3: page each in-scope comments channel newest-first (same loop as
+   * feeds), parse `re:` lines, index by target. Refreshed alongside the feed;
+   * a channel whose read fails keeps its cached comments.
+   */
+  async refreshComments({ force = false } = {}) {
+    const channels = this.commentChannels();
+    const keep = new Set(channels.map((c) => usernameKey(c.channel)));
+    for (const k of Object.keys(this.comments)) {
+      if (!keep.has(k)) delete this.comments[k];
+    }
+    await pmap(channels, 3, async ({ channel, node }) => {
+      const k = usernameKey(channel);
+      const cached = this.comments[k];
+      if (!force && cached && Date.now() - cached.fetchedAt < CARD_TTL_MS) return;
+      try {
+        await this.track(`Reading comments @${channel}`, async () => {
+          const chat = await this.chatByUsername(channel);
+          const msgs = await this.history(chat.id, 0, 100);
+          const list = [];
+          for (const m of msgs) {
+            const comment = this.toComment(m, { channel, node });
+            if (comment && comment.targetKey) list.push(comment);
+          }
+          this.comments[k] = { channel, node, comments: list, fetchedAt: Date.now() };
+        });
+      } catch (e) {
+        console.warn('[repo] comments', channel, e.message);
+      }
+    });
+    save(LS.comments, this.comments);
+    this.notify('comments');
+  }
+
+  /**
+   * All indexed comments, targetKey → comments oldest-first. Memoised until
+   * the next 'comments' notification so a screenful of cards asking for
+   * counts shares one build instead of O(cards × comments) rebuilds.
+   */
+  commentIndex() {
+    if (this.commentIndexCache) return this.commentIndexCache;
+    const byTarget = new Map();
+    for (const entry of Object.values(this.comments)) {
+      for (const c of entry.comments ?? []) {
+        if (!byTarget.has(c.targetKey)) byTarget.set(c.targetKey, []);
+        byTarget.get(c.targetKey).push(c);
+      }
+    }
+    for (const list of byTarget.values()) list.sort((a, b) => a.date - b.date || a.id - b.id);
+    this.commentIndexCache = byTarget;
+    return byTarget;
+  }
+
+  /**
+   * The comment tree for one post link: [{ comment, children }], oldest
+   * first, replies resolved through `re:` chains (§6.2). `count` is the
+   * whole tree — "comments from your network".
+   */
+  commentThread(link) {
+    const index = this.commentIndex();
+    const seen = new Set();
+    const build = (key) => {
+      const out = [];
+      for (const c of index.get(key) ?? []) {
+        if (seen.has(c.key)) continue;
+        seen.add(c.key);
+        out.push({ comment: c, children: build(targetKey(c.link)) });
+      }
+      return out;
+    };
+    const tree = build(targetKey(link));
+    return { tree, count: seen.size };
+  }
+
+  commentCount(link) {
+    return this.commentThread(link).count;
+  }
+
+  /**
+   * §6.4 — first comment ever: create the comments channel (§4.3 steps 1–2,
+   * `_r` username, description `tgsocial v1 replies · @<node>`) and add
+   * `replies:` to the card.
+   */
+  async createRepliesChannel(username) {
+    if (!this.myNode) throw new Error('No node.');
+    this.assertOnline();
+    const u = normaliseUsername(username);
+    if (!u) throw new Error('That username is not valid.');
+    return this.track('Making your comments channel', async () => {
+      const entry = this.cachedCard(this.myNode.username);
+      const title = `${entry?.card?.name || entry?.title || this.myNode.username} replies`;
+      const chat = await this.td.send({
+        '@type': 'createNewSupergroupChat',
+        title,
+        is_forum: false,
+        is_channel: true,
+        description: `${MARKER} replies · @${this.myNode.username}`,
+        message_auto_delete_time: 0,
+        for_import: false,
+      });
+      try {
+        await this.td.send({ '@type': 'setSupergroupUsername', supergroup_id: chat.type?.supergroup_id, username: u });
+      } catch (e) {
+        await this.td.trySend({ '@type': 'deleteChat', chat_id: chat.id });
+        throw e;
+      }
+      this.chatsById.set(chat.id, chat);
+      this.chatIdByUsername.set(usernameKey(u), chat.id);
+      await this.writeCard((card) => ({ ...card, replies: u }));
+      return u;
+    });
+  }
+
+  /** §6.4: send the comment into my own comments channel. Returns the comment model. */
+  async postComment(targetLink, text) {
+    if (!this.myNode) throw new Error('No node.');
+    this.assertOnline();
+    const channel = this.myCard?.replies;
+    if (!channel) throw new PlainError('Make your comments channel first.');
+    return this.track('Writing a comment', async () => {
+      const chat = await this.chatByUsername(channel);
+      const msg = await this.sendAndWait(chat.id, inputText(serialiseComment(targetLink, text)));
+      const comment = this.toComment(msg, { channel, node: this.myNode.username });
+      const k = usernameKey(channel);
+      const entry = this.comments[k] ?? { channel, node: this.myNode.username, comments: [], fetchedAt: 0 };
+      if (comment) entry.comments.unshift(comment);
+      this.comments[k] = entry;
+      save(LS.comments, this.comments);
+      this.notify('comments');
+      return comment;
+    });
+  }
+
+  /** Delete my own comment: the message in my channel is the comment. */
+  async deleteComment(comment) {
+    this.assertOnline();
+    return this.track('Deleting your comment', async () => {
+      await this.td.send({ '@type': 'deleteMessages', chat_id: comment.chatId, message_ids: [comment.id], revoke: true });
+      const k = usernameKey(comment.channel);
+      const entry = this.comments[k];
+      if (entry) {
+        entry.comments = entry.comments.filter((c) => c.key !== comment.key);
+        save(LS.comments, this.comments);
+      }
+      this.notify('comments');
+    });
+  }
+
+  /** Resolve a post by its deep link (for a thread opened without a seed). */
+  async postByLink(username, serverId) {
+    const chat = await this.chatByUsername(username);
+    const sg = await this.supergroup(chat);
+    const source = { key: usernameKey(username), username: supergroupUsername(sg) || username, chatId: chat.id, title: chat.title, photo: slimFile(chat.photo?.small) };
+    const msg = await this.td.send({ '@type': 'getMessage', chat_id: chat.id, message_id: serverId * 1048576 });
+    if (!isPost(msg)) throw new Error('Post not found.');
+    return this.toPost(msg, source);
   }
 
   // ── sign out ─────────────────────────────────────────────────────────────
@@ -858,6 +1128,126 @@ export class Repo {
 function thumb(t) {
   if (!t) return null;
   return { file: slimFile(t.file), w: t.width, h: t.height };
+}
+
+/** One media item of a post (PRODUCT §2.11). Serialisable; files are slimmed. */
+export function mediaItem(c) {
+  const t = c?.['@type'];
+  if (t === 'messagePhoto' && c.photo?.sizes?.length) {
+    return {
+      kind: 'photo',
+      sizes: c.photo.sizes.map((s) => ({ w: s.width, h: s.height, file: slimFile(s.photo) })),
+      mini: miniUri(c.photo.minithumbnail),
+    };
+  }
+  if (t === 'messageVideo' && c.video) {
+    return {
+      kind: 'video',
+      file: slimFile(c.video.video),
+      duration: c.video.duration,
+      w: c.video.width,
+      h: c.video.height,
+      thumb: thumb(c.video.thumbnail),
+      mini: miniUri(c.video.minithumbnail),
+      mime: c.video.mime_type || 'video/mp4',
+      fileName: c.video.file_name || 'Video',
+      streamable: !!c.video.supports_streaming,
+    };
+  }
+  if (t === 'messageAnimation' && c.animation) {
+    return {
+      kind: 'animation',
+      file: slimFile(c.animation.animation),
+      duration: c.animation.duration,
+      w: c.animation.width,
+      h: c.animation.height,
+      thumb: thumb(c.animation.thumbnail),
+      mini: miniUri(c.animation.minithumbnail),
+      mime: c.animation.mime_type || 'video/mp4',
+      fileName: c.animation.file_name || 'GIF',
+    };
+  }
+  if (t === 'messageAudio' && c.audio) {
+    return {
+      kind: 'audio',
+      file: slimFile(c.audio.audio),
+      duration: c.audio.duration,
+      title: c.audio.title || c.audio.file_name || 'Audio',
+      performer: c.audio.performer || '',
+      mime: c.audio.mime_type || 'audio/mpeg',
+      fileName: c.audio.file_name || 'Audio',
+      cover: thumb(c.audio.album_cover_thumbnail),
+    };
+  }
+  if (t === 'messageVoiceNote' && c.voice_note) {
+    return {
+      kind: 'voice',
+      file: slimFile(c.voice_note.voice),
+      duration: c.voice_note.duration,
+      waveform: c.voice_note.waveform || null,
+      mime: c.voice_note.mime_type || 'audio/ogg',
+    };
+  }
+  if (t === 'messageVideoNote' && c.video_note) {
+    return {
+      kind: 'videoNote',
+      file: slimFile(c.video_note.video),
+      duration: c.video_note.duration,
+      length: c.video_note.length,
+      thumb: thumb(c.video_note.thumbnail),
+      mini: miniUri(c.video_note.minithumbnail),
+      mime: 'video/mp4',
+    };
+  }
+  if (t === 'messageDocument' && c.document) {
+    return {
+      kind: 'document',
+      file: slimFile(c.document.document),
+      fileName: c.document.file_name || 'File',
+      mime: c.document.mime_type || '',
+      thumb: thumb(c.document.thumbnail),
+      mini: miniUri(c.document.minithumbnail),
+    };
+  }
+  if (t === 'messageSticker' && c.sticker) {
+    const format = c.sticker.format?.['@type'] ?? '';
+    return {
+      kind: 'sticker',
+      file: slimFile(c.sticker.sticker),
+      w: c.sticker.width,
+      h: c.sticker.height,
+      animated: format !== 'stickerFormatWebp',
+      thumb: thumb(c.sticker.thumbnail),
+    };
+  }
+  if (t === 'messagePoll' && c.poll) {
+    const n = c.poll.options?.length ?? 0;
+    return { kind: 'summary', text: `Poll · ${n} ${n === 1 ? 'option' : 'options'}` };
+  }
+  if (t === 'messageLocation' || t === 'messageVenue') {
+    return { kind: 'summary', text: 'Location' };
+  }
+  if (t === 'messageContact') {
+    return { kind: 'summary', text: 'Contact' };
+  }
+  return null;
+}
+
+/** messageText link preview (TDLib ≥1.8.44 `link_preview`, older `web_page`). */
+export function linkPreviewOf(c) {
+  if (c?.['@type'] !== 'messageText') return null;
+  const lp = c.link_preview ?? c.web_page;
+  if (!lp?.url) return null;
+  const photo = lp.type?.photo ?? lp.photo ?? null;
+  const sizes = photo?.sizes?.length ? photo.sizes.map((s) => ({ w: s.width, h: s.height, file: slimFile(s.photo) })) : null;
+  return {
+    url: lp.url,
+    siteName: lp.site_name || '',
+    title: lp.title || lp.site_name || lp.display_url || lp.url,
+    description: lp.description?.text ?? (typeof lp.description === 'string' ? lp.description : ''),
+    thumb: sizes,
+    mini: miniUri(photo?.minithumbnail),
+  };
 }
 
 export function inputText(text) {
@@ -923,7 +1313,7 @@ export class FeedSession {
     const from = this.merge.sources[key].cursor;
     let msgs;
     try {
-      msgs = await this.repo.history(src.chatId, from, PAGE);
+      msgs = await this.repo.track(`Loading @${src.username}`, () => this.repo.history(src.chatId, from, PAGE));
     } catch (e) {
       console.warn('[feed] history', src.username, e.message);
       markExhausted(this.merge, key);
@@ -951,7 +1341,11 @@ export class FeedSession {
     await pmap(Object.keys(this.merge.sources), 4, (k) => this.fill(k));
   }
 
-  /** Returns up to `count` post models in strict date-desc order. */
+  /**
+   * Returns up to `count` post models in strict date-desc order (an album counts
+   * as one post: its remaining items are drained off the buffer so a page
+   * boundary never splits it in two).
+   */
   async loadMore(count = 20) {
     await this.prime();
     const out = [];
@@ -962,13 +1356,24 @@ export class FeedSession {
       if (r.blockedOn) await this.fill(r.blockedOn);
       else break;
     }
+    if (out.length) out.push(...takeAlbumRest(this.merge, out[out.length - 1]));
     const posts = [];
-    for (const item of out) {
-      const src = this.sources.get(item.key);
+    for (const group of groupAlbums(out)) {
+      const src = this.sources.get(group.key);
       if (!src) continue;
-      posts.push(await this.repo.toPost(item.message, src));
+      // items are in posting order (id asc); the album's newest message anchors the post
+      const [head, ...rest] = [...group.items].sort((a, b) => b.id - a.id);
+      posts.push(await this.repo.toPost(head.message, src, rest.map((i) => i.message)));
     }
     return posts;
+  }
+
+  /** Resolved source for a chat id, or null — for live inserts (PRODUCT §2.3). */
+  sourceForChat(chatId) {
+    for (const src of this.sources.values()) {
+      if (src && src.chatId === chatId) return src;
+    }
+    return null;
   }
 }
 

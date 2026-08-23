@@ -51,6 +51,46 @@ object Format {
 
     fun compact(n: Int): String = compact(n.toLong())
 
+    /** File size: `640 B`, `2.4 KB`, `2.4 MB`, `1.1 GB`. */
+    fun size(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val units = listOf("KB", "MB", "GB")
+        var value = bytes.toDouble()
+        var idx = -1
+        while (value >= 1024 && idx < units.lastIndex) {
+            value /= 1024.0
+            idx++
+        }
+        val text = if (value < 10) String.format(Locale.ROOT, "%.1f", value) else Math.round(value).toString()
+        return "$text ${units[idx]}"
+    }
+
+    /** Relative age for the Status sheet: `just now`, `n min ago`, `n h ago`, else the dated form. */
+    fun ago(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String {
+        val s = ((nowMs - epochMs) / 1000).coerceAtLeast(0)
+        return when {
+            s < 60 -> "just now"
+            s < 3600 -> "${s / 60} min ago"
+            s < 86_400 -> "${s / 3600} h ago"
+            else -> time(epochMs / 1000, nowMs / 1000)
+        }
+    }
+
+    /**
+     * PRODUCT §2.10 — masked phone for the Status sheet: `+1 604 ••• 0199`. The three digits before the last
+     * four are masked; the country code and area stay readable.
+     */
+    fun maskPhone(phone: String): String {
+        val digits = phone.filter { it.isDigit() }
+        if (digits.length <= 7) return "•••"
+        val last4 = digits.takeLast(4)
+        val prefix = digits.dropLast(7)
+        val ccLen = (prefix.length - 3).coerceAtLeast(1).coerceAtMost(prefix.length)
+        val cc = prefix.take(ccLen)
+        val area = prefix.drop(ccLen)
+        return listOf("+$cc", area, "•••", last4).filter { it.isNotBlank() }.joinToString(" ")
+    }
+
     /** Video duration `m:ss` / `h:mm:ss`. */
     fun duration(seconds: Int): String {
         val h = seconds / 3600

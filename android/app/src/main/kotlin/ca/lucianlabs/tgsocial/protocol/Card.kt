@@ -11,6 +11,8 @@ data class Card(
     val public: Boolean = true,
     val feeds: List<String> = emptyList(),
     val follows: List<String> = emptyList(),
+    /** PROTOCOL §6.1 — the node's comments channel, without `@`. Absent means no comments yet. */
+    val replies: String? = null,
 ) {
     fun follows(username: String): Boolean = follows.any { Username.same(it, username) }
     fun hasFeed(username: String): Boolean = feeds.any { Username.same(it, username) }
@@ -42,7 +44,7 @@ sealed class CardParse {
 object CardFormat {
     const val MARKER = "tgsocial v1"
     private val MARKER_ANY = Regex("^tgsocial v(\\d+)$")
-    private val KEY_ORDER = listOf("name", "bio", "link", "public", "feeds", "follows")
+    private val KEY_ORDER = listOf("name", "bio", "link", "public", "feeds", "follows", "replies")
 
     fun parse(text: String): CardParse {
         val lines = text.split("\n").map { it.trimEnd('\r') }
@@ -73,6 +75,7 @@ object CardFormat {
                 public = public,
                 feeds = str("feeds")?.let { Username.list(it) } ?: emptyList(),
                 follows = str("follows")?.let { Username.list(it) } ?: emptyList(),
+                replies = str("replies")?.let { Username.list(it).firstOrNull() },
             )
         )
     }
@@ -92,6 +95,7 @@ object CardFormat {
                 "public" -> line(key, if (card.public) "yes" else "no")
                 "feeds" -> line(key, card.feeds.joinToString(" ") { "@$it" })
                 "follows" -> line(key, card.follows.joinToString(" ") { "@$it" })
+                "replies" -> line(key, card.replies?.let { "@$it" })
             }
         }
         return sb.toString()

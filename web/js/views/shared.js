@@ -2,9 +2,10 @@
  * Built only from House Pour classes; all Telegram text goes through
  * createTextNode (the `h` helper never sets innerHTML).
  */
-import { h, button, pill, avatar, media, sectionMark } from '../../vendor/house-pour.js';
-import { entityRuns, formatTime, compactCount, formatDuration, channelLink } from '../protocol.js';
-import { pickPhotoSize, userMessage } from '../repo.js';
+import { h, button, pill, avatar, sectionMark } from '../../vendor/house-pour.js';
+import { entityRuns, formatTime, compactCount, channelLink, serverMessageId } from '../protocol.js';
+import { userMessage } from '../repo.js';
+import { mediaBlocks } from '../media.js';
 
 export function openExternal(url) {
   window.open(url, '_blank', 'noopener');
@@ -67,8 +68,14 @@ export function avatarFor(app, name, slim, size = 'row') {
   return el;
 }
 
-/** PRODUCT §2.3 post card. */
-export function postCard(app, post) {
+/** Open the Thread screen for a post (PRODUCT §2.12). `compose` opens the composer at once. */
+export function openThread(app, post, { compose = false } = {}) {
+  app.threadSeed = post;
+  app.navigate(`#/thread/${post.username}/${serverMessageId(post.id)}${compose ? '?compose=1' : ''}`);
+}
+
+/** PRODUCT §2.3 post card. `thread: false` renders it at the top of its own Thread screen. */
+export function postCard(app, post, { thread = true } = {}) {
   const title = h('button.post-title', {
     type: 'button',
     'aria-label': `Open ${post.title} feed`,
@@ -86,69 +93,58 @@ export function postCard(app, post) {
 
   const parts = [head];
   if (post.forwardedFrom) parts.push(h('div.post-fwd', `Forwarded from ${post.forwardedFrom}`));
-  if (post.text) parts.push(h('div.post-body', renderEntities(app, post.text, post.entities)));
-  const media = mediaBlock(app, post.media);
-  if (media) parts.push(media);
+  if (post.text) {
+    const body = h('div.post-body', renderEntities(app, post.text, post.entities));
+    if (thread) {
+      // tapping the text opens the Thread screen (PRODUCT §2.3)
+      body.classList.add('opens-thread');
+      body.addEventListener('click', () => openThread(app, post));
+    }
+    parts.push(body);
+  }
+  // media renders and plays in the app (PRODUCT §2.11); taps there never leave it
+  parts.push(...mediaBlocks(app, normalisePostMedia(post), { openExternal }));
 
   const counts = [];
   if (post.views > 0) counts.push(`${compactCount(post.views)} views`);
   for (const r of post.reactions) counts.push(`${r.emoji} ${compactCount(r.count)}`);
-  const open = button('Open in Telegram', {
-    style: 'ghost',
-    size: 'sm',
-    onClick: (e) => {
-      e.stopPropagation();
-      openExternal(post.link);
-    },
-  });
-  parts.push(h('div.post-foot', h('div.post-counts', counts.join(' · ')), open));
+  const countsEl = h('div.post-counts', counts.join(' · '));
+  if (thread) {
+    // "N comments" — from your network (PROTOCOL §6.3); tappable → Thread
+    const n = app.repo?.commentCount(post.link) ?? 0;
+    const commentsBtn = h('button.post-comments-count', { type: 'button', 'aria-label': 'Open thread' },
+      `${counts.length ? ' · ' : ''}${compactCount(n)} ${n === 1 ? 'comment' : 'comments'}`);
+    commentsBtn.addEventListener('click', () => openThread(app, post));
+    countsEl.append(commentsBtn);
+    if (app.repo) {
+      // self-unsubscribe once the card leaves the DOM: in-screen repaints
+      // (Refresh) replace cards without a route change, so waiting for the
+      // route's leaveFns would let dead subscriptions pile up
+      const unsub = app.repo.subscribe((what) => {
+        if (what !== 'comments') return;
+        if (!commentsBtn.isConnected) return unsub();
+        const c = app.repo.commentCount(post.link);
+        commentsBtn.textContent = `${counts.length ? ' · ' : ''}${compactCount(c)} ${c === 1 ? 'comment' : 'comments'}`;
+      });
+      app.onLeave(unsub);
+    }
+  }
+  parts.push(h('div.post-foot', countsEl));
 
-  const card = h('article.card.post', { tabindex: 0, role: 'link', 'aria-label': `Post by ${post.title}. Open in Telegram` }, parts);
-  card.addEventListener('click', () => openExternal(post.link));
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') openExternal(post.link);
-  });
-  return card;
+  const open = button('Open in Telegram', { style: 'ghost', size: 'sm', onClick: () => openExternal(post.link) });
+  const actions = h('div.btn-row.post-actions');
+  if (thread) actions.append(button('Comment', { style: 'ghost', size: 'sm', onClick: () => openThread(app, post, { compose: true }) }));
+  actions.append(open);
+  parts.push(actions);
+
+  return h('article.card.post', { 'aria-label': `Post by ${post.title}` }, parts);
 }
 
-/** Kit HPMedia with the post card's top gap. */
-function mediaBox(src, aspect) {
-  const box = media(src, aspect);
-  box.classList.add('post-media');
-  return box;
-}
-
-function mediaBlock(app, media) {
-  if (!media) return null;
-  const targetWidth = Math.round(Math.min(window.innerWidth, 540) * (window.devicePixelRatio || 1));
-  if (media.kind === 'photo') {
-    const size = pickPhotoSize(media.sizes, targetWidth);
-    if (!size) return null;
-    const box = mediaBox(null, `${size.w} / ${size.h}`);
-    box.img.width = size.w;
-    box.img.height = size.h;
-    loadImage(app, box.img, size.file);
-    return box;
-  }
-  if (media.kind === 'video' || media.kind === 'animation') {
-    const tag = media.kind === 'video' ? formatDuration(media.duration) : 'GIF';
-    const hasThumb = !!media.thumb?.file?.id;
-    // no thumbnail: the bg2 placeholder at 4:3 carries the duration tag alone
-    const box = mediaBox(null, hasThumb && media.w && media.h ? `${media.w} / ${media.h}` : '4 / 3');
-    const tagPill = pill(tag);
-    tagPill.classList.add('post-media-tag');
-    box.append(tagPill);
-    if (hasThumb) loadImage(app, box.img, media.thumb.file);
-    return box;
-  }
-  if (media.kind === 'document') {
-    return h('div.post-file', media.fileName);
-  }
-  if (media.kind === 'audio') {
-    const label = [media.performer, media.title].filter(Boolean).join(' — ');
-    return h('div.post-file', `${label} · ${formatDuration(media.duration)}`);
-  }
-  return null;
+/** Older cached feed models predate post.album/post.preview; normalise in place. */
+function normalisePostMedia(post) {
+  if (!Array.isArray(post.album)) post.album = post.media ? [post.media] : [];
+  if (post.preview === undefined) post.preview = null;
+  return post;
 }
 
 /** COMPONENTS NodeRow. entry: card cache entry; opts: { via, following, onFollow, showFollow } */

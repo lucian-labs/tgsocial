@@ -34,12 +34,20 @@ enum Route: Hashable {
     case profile(username: String)
     case feedChannel(username: String)
     case manageFeeds
+    /// PRODUCT §2.12: the post with its comment tree.
+    case thread(post: Post)
 }
 
 enum Modal: Equatable {
     case compose(feed: String?)
     case editCard
     case signOut
+    /// PRODUCT §2.10: opened by tapping the status pill.
+    case status
+    /// PRODUCT §2.12: the comment composer, aimed at a post or another comment.
+    case comment(target: CommentTarget)
+    /// PRODUCT §2.12: `Delete this comment?` confirm.
+    case deleteComment(Comment)
 }
 
 @MainActor @Observable
@@ -48,10 +56,15 @@ final class AppModel {
     @ObservationIgnored private(set) var td: TDClient!
     @ObservationIgnored let store = LocalStore()
     @ObservationIgnored let sends = SendTracker()
+    /// Every in-flight operation registers here (PRODUCT §2.10); the pill derives from it.
+    let activity = ActivityRegistry()
+    let audio = AudioPlayback()
+    let video = VideoCoordinator()
     @ObservationIgnored private(set) var media: MediaLoader!
     @ObservationIgnored private(set) var nodes: NodeRepository!
     @ObservationIgnored private(set) var feed: FeedRepository!
     @ObservationIgnored private(set) var discovery: DiscoveryRepository!
+    private(set) var comments: CommentRepository!
 
     // Auth / connection
     var auth: AuthPhase = .loading
@@ -59,13 +72,23 @@ final class AppModel {
     var authError: String?
     var secretsMissing = false
     var tdlibVersion = ""
+    /// The last surfaced failure, for the Status sheet (`FLOOD_WAIT 23 s at 13:58`).
+    var lastError: LastError?
 
     // Navigation
     var tab: Tab = .feed
     var path: [Route] = []
     var modal: Modal?
+    /// The full-screen media viewer (PRODUCT §2.11); non-nil hides topbar and tab bar.
+    var viewer: ViewerRequest?
     var toast: HPToastMessage?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    /// Screens with their own post list (Feed channel) register here to receive live
+    /// `updateNewMessage`s while they are up (PRODUCT §2.3 "inserted at the top").
+    @ObservationIgnored private var messageObservers: [UUID: (Message) -> Void] = [:]
+
+    func observeMessages(_ id: UUID, _ handler: @escaping (Message) -> Void) { messageObservers[id] = handler }
+    func stopObservingMessages(_ id: UUID) { messageObservers.removeValue(forKey: id) }
 
     // My node
     var myNode: MyNode?
@@ -89,6 +112,10 @@ final class AppModel {
     /// The last refresh was skipped (offline) or reached no source; the cache is on screen and the next
     /// reconnect refreshes again (PRODUCT §4).
     var feedStale = false
+    /// When the last feed refresh completed (Status sheet "refreshed 14:02").
+    var lastFeedRefresh: Foundation.Date?
+    /// When my card was last read (Status sheet "card 2 min ago").
+    var myCardFetchedAt: Foundation.Date?
 
     // Discovery mirrored for views
     var nearby: [DirectoryEntry] = []
@@ -101,17 +128,20 @@ final class AppModel {
     var candidates: [FeedCandidate] = []
     var candidatesLoading = false
 
-    var busyCount = 0
     @ObservationIgnored private var floodUntil: Foundation.Date?
 
     // MARK: Init
 
     init() {
+        // §2.11 both ways: a starting video pauses audio (VideoCoordinator.willPlay), and
+        // starting or resuming audio pauses the audible inline video.
+        audio.onWillPlay = { [weak self] in self?.video.pauseActive() }
         td = TDClient { [weak self] update in self?.handle(update) }
-        media = MediaLoader(td: td)
-        nodes = NodeRepository(td: td, store: store, sends: sends)
-        feed = FeedRepository(td: td, store: store, nodes: nodes, sends: sends)
+        media = MediaLoader(td: td, activity: activity)
+        nodes = NodeRepository(td: td, store: store, sends: sends, activity: activity)
+        feed = FeedRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         discovery = DiscoveryRepository(td: td, nodes: nodes)
+        comments = CommentRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         myNode = store.load(MyNode.self, LocalStore.myNode)
         myCard = store.load(Card.self, LocalStore.myCard)
         myTitle = store.load(String.self, LocalStore.myTitle) ?? ""
@@ -130,15 +160,72 @@ final class AppModel {
     var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0" }
     var buildNumber: String { Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1" }
 
-    // MARK: Status
+    // MARK: Status (PRODUCT §2.10)
 
+    /// `Syncing` exactly while the activity registry is non-empty or TDLib is
+    /// connecting/updating; `Synced` when the registry is empty and the connection is
+    /// `Connected`; `Offline` while TDLib waits for network. Registry entries clear
+    /// themselves on success, failure, cancellation, and after 30 s regardless
+    /// (ActivityRegistry), so the pill cannot stick.
     var status: StatusKind {
         if auth != .ready { return .signedOut }
         switch connection {
         case .connectionStateWaitingForNetwork: return .offline
         case .connectionStateConnecting, .connectionStateConnectingToProxy, .connectionStateUpdating: return .syncing
-        case .connectionStateReady: return busyCount > 0 ? .syncing : .synced
+        case .connectionStateReady: return activity.isEmpty ? .synced : .syncing
         }
+    }
+
+    var connectionLabel: String {
+        switch connection {
+        case .connectionStateReady: return "Connected"
+        case .connectionStateConnecting: return "Connecting"
+        case .connectionStateUpdating: return "Updating"
+        case .connectionStateWaitingForNetwork: return "Waiting for network"
+        case .connectionStateConnectingToProxy: return "Connecting to proxy"
+        }
+    }
+
+    var telegramLabel: String {
+        guard auth == .ready else { return "Signed out" }
+        let phone = PhoneMask.format(me?.phoneNumber ?? "")
+        return phone.isEmpty ? "Signed in" : "Signed in \u{00B7} " + phone
+    }
+
+    var nodeLabel: String {
+        guard let node = myNode else { return "None" }
+        guard let at = myCardFetchedAt else { return "@" + node.username }
+        return "@\(node.username) \u{00B7} card \(RelativeTime.format(at))"
+    }
+
+    var feedLabel: String {
+        let s = feed.sources.count
+        var parts = ["\(s) source\(s == 1 ? "" : "s")", "\(posts.count) post\(posts.count == 1 ? "" : "s")"]
+        if let at = lastFeedRefresh { parts.append("refreshed " + PostTime.format(at)) }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    var pendingLabel: String {
+        let lines = activity.summary
+        return lines.isEmpty ? "Nothing" : lines.joined(separator: "\n")
+    }
+
+    var lastErrorLabel: String {
+        guard let e = lastError else { return "None" }
+        return "\(e.text) at \(PostTime.format(e.at))"
+    }
+
+    struct LastError: Equatable {
+        var text: String
+        var at: Foundation.Date
+    }
+
+    func noteError(_ text: String) { lastError = LastError(text: text, at: Foundation.Date()) }
+
+    /// Status sheet: re-runs the feed refresh and re-reads my card (PRODUCT §2.10).
+    func refreshNow() async {
+        await refreshMyCard()
+        await refreshFeed()
     }
 
     var isOffline: Bool { if case .connectionStateWaitingForNetwork = connection { return true } else { return false } }
@@ -149,6 +236,7 @@ final class AppModel {
     // MARK: Toast
 
     func showToast(_ text: String, tone: HPToastTone = .neutral) {
+        if tone == .bad { noteError(text) }
         toastTask?.cancel()
         toast = HPToastMessage(text, tone: tone)
         toastTask = Task { [weak self] in
@@ -177,6 +265,8 @@ final class AppModel {
         case .updateNewMessage(let u):
             feed.apply(newMessage: u.message)
             posts = feed.posts
+            comments.apply(newMessage: u.message)
+            for handler in messageObservers.values { handler(u.message) }
         case .updateMessageSendSucceeded(let u):
             feed.apply(sent: u.message, oldMessageId: u.oldMessageId)
             posts = feed.posts
@@ -187,6 +277,7 @@ final class AppModel {
             if u.isPermanent, !u.fromCache {
                 feed.apply(deleted: u.chatId, messageIds: u.messageIds)
                 posts = feed.posts
+                comments.apply(deleted: u.chatId, messageIds: u.messageIds)
             }
         case .updateChatTitle(let u):
             nodes.apply(chatId: u.chatId, title: u.title)
@@ -262,8 +353,7 @@ final class AppModel {
     func useAnotherNumber() { auth = .phone }
 
     private func authCall(_ op: @escaping () async throws -> Ok) async {
-        busyCount += 1; defer { busyCount -= 1 }
-        do { _ = try await op() }
+        do { _ = try await activity.run("Signing in") { try await op() } }
         catch {
             let f = TDFailure(error)
             showToast(Self.authErrorText(f), tone: .bad)
@@ -283,7 +373,8 @@ final class AppModel {
     // MARK: Ready → cold start (PRODUCT §4)
 
     private func onReady() async {
-        busyCount += 1; defer { busyCount -= 1 }
+        // No blanket counter here: each operation on this path registers itself with the
+        // activity registry, so the pill reflects what is actually in flight.
         me = try? await td.api.getMe()
         if myNode == nil {
             if let (node, info) = try? await nodes.findMyNode() { adopt(node: node, info: info) }
@@ -302,6 +393,7 @@ final class AppModel {
         do {
             let info = try await perform { try await self.nodes.readNode(username: node.username, force: true) }
             if info.state != .notANode { adopt(node: node, info: info) }
+            myCardFetchedAt = info.fetchedAt
         } catch {
             if !isOffline { showToast(TDFailure(error).message, tone: .bad) }
         }
@@ -309,6 +401,7 @@ final class AppModel {
 
     private func adopt(node: MyNode, info: NodeInfo) {
         let wasNewer = myNode != nil && myCardState == .newerVersion
+        myCardFetchedAt = info.fetchedAt
         myNode = node
         myCardState = info.state == .newerVersion ? .newerVersion : .ok
         if myCardState == .ok { myCard = info.card } else { myCard = nil }
@@ -348,6 +441,7 @@ final class AppModel {
             let f = TDFailure(error)
             if let s = f.floodWaitSeconds, s > 0 {
                 showToast("Telegram asked us to wait \(s) s.", tone: .bad)
+                noteError("FLOOD_WAIT \(s) s")
                 floodUntil = Foundation.Date().addingTimeInterval(TimeInterval(s))
                 try await Task.sleep(for: .seconds(s))
                 return try await op()
@@ -362,14 +456,15 @@ final class AppModel {
         guard auth == .ready else { return }
         // Offline, reads serve cache: the cached posts are already on screen; refresh again when the network returns.
         if isOffline { feedStale = true; feedReady = true; posts = feed.posts; return }
-        feedLoading = true; busyCount += 1
-        defer { feedLoading = false; busyCount -= 1; feedReady = true }
+        feedLoading = true
+        defer { feedLoading = false; feedReady = true }
         do {
             try await perform {
                 try await self.feed.resolveSources(myFeeds: self.myCard?.feeds ?? [], follows: self.myCard?.follows ?? [])
                 try await self.feed.refresh()
             }
             feedStale = false
+            lastFeedRefresh = Foundation.Date()
         } catch {
             // The repository kept the cached posts; only the failure is surfaced.
             feedStale = true
@@ -377,6 +472,8 @@ final class AppModel {
         }
         posts = feed.posts
         feedExhausted = feed.isExhausted
+        // The comment index refreshes alongside the feed (PROTOCOL §6.3).
+        await refreshComments()
     }
 
     func loadMoreFeed() async {
@@ -392,9 +489,9 @@ final class AppModel {
     /// Graph walk + directory, through the flood-wait wrapper: a FLOOD_WAIT inside the per-chat burst toasts
     /// and backs off like every other call (PRODUCT §4); any other failure keeps the last results.
     func refreshDiscovery(force: Bool = false) async {
-        guard auth == .ready else { return }
-        exploreLoading = true; busyCount += 1
-        defer { exploreLoading = false; busyCount -= 1 }
+        guard auth == .ready, !exploreLoading else { return }
+        exploreLoading = true
+        defer { exploreLoading = false }
         let me = myNode?.username
         let follows = myCard?.follows ?? []
         do {
@@ -478,7 +575,7 @@ final class AppModel {
         guard let node = myNode, myCardState == .ok, myCard?.isPublic ?? true else { return }
         if isOffline { showToast("You're offline.", tone: .bad); return }
         do {
-            switch try await perform({ try await self.nodes.announce(node: node.username) }) {
+            switch try await activity.run("Announcing", { try await self.perform { try await self.nodes.announce(node: node.username) } }) {
             case .announced: showToast("Announced.", tone: .good)
             case .alreadyAnnounced: showToast("Already announced.")
             }
@@ -502,10 +599,11 @@ final class AppModel {
 
     func createNode(username: String) async -> Bool {
         if isOffline { showToast("You're offline.", tone: .bad); return false }
-        busyCount += 1; defer { busyCount -= 1 }
         let card = Card(name: suggestedTitle, isPublic: true)
         do {
-            let (node, info) = try await perform { try await self.nodes.createNode(username: username, title: self.suggestedTitle, card: card) }
+            let (node, info) = try await activity.run("Creating your node") {
+                try await self.perform { try await self.nodes.createNode(username: username, title: self.suggestedTitle, card: card) }
+            }
             inSetup = true
             adopt(node: node, info: info)
             await loadCandidates()
@@ -518,7 +616,6 @@ final class AppModel {
 
     func findExistingNode() async {
         if isOffline { showToast("You're offline.", tone: .bad); return }
-        busyCount += 1; defer { busyCount -= 1 }
         do {
             if let (node, info) = try await perform({ try await self.nodes.findMyNode() }) {
                 inSetup = needsSetup && info.state == .ok
@@ -537,7 +634,6 @@ final class AppModel {
     func refreshYou() async {
         guard auth == .ready else { return }
         if myNode == nil { await findExistingNode(); return }
-        busyCount += 1; defer { busyCount -= 1 }
         await refreshMyCard()
         if myCardState == .ok {
             let feeds = myCard?.feeds ?? []
@@ -548,7 +644,9 @@ final class AppModel {
     func loadCandidates() async {
         guard auth == .ready else { return }
         candidatesLoading = true; defer { candidatesLoading = false }
-        if let list = try? await nodes.myFeedCandidates(excluding: myNode?.chatId) { candidates = list }
+        if let list = try? await activity.run("Reading your channels", { try await nodes.myFeedCandidates(excluding: myNode?.chatId) }) {
+            candidates = list
+        }
     }
 
     func verifyFeed(_ candidate: FeedCandidate) async -> Bool {
@@ -573,9 +671,10 @@ final class AppModel {
         var resolved = feed.sources[Username.key(feedUsername)] ?? nodes.cachedFeed(feedUsername)
         if resolved == nil { resolved = try? await nodes.readFeed(username: feedUsername) }
         guard let info = resolved else { showToast("Feed not found.", tone: .bad); return false }
-        busyCount += 1; defer { busyCount -= 1 }
         do {
-            _ = try await perform { try await self.feed.post(text: text, photoPath: photoPath, to: info) }
+            _ = try await activity.run("Posting") {
+                try await self.perform { try await self.feed.post(text: text, photoPath: photoPath, to: info) }
+            }
             posts = feed.posts
             showToast("Posted.", tone: .good)
             await refreshFeed()
@@ -587,19 +686,160 @@ final class AppModel {
         }
     }
 
+    // MARK: Comments (PROTOCOL §6, PRODUCT §2.12)
+
+    /// The comments channels of me, my follows, and the cached +1 nodes.
+    private var commentChannels: [CommentRepository.ChannelRef] {
+        var refs: [CommentRepository.ChannelRef] = []
+        var seen = Set<String>()
+        func add(_ channel: String?, owner: String, title: String, photo: PhotoRef?, plusOne: Bool, mine: Bool) {
+            guard let channel, seen.insert(Username.key(channel)).inserted else { return }
+            refs.append(CommentRepository.ChannelRef(channelUsername: channel, ownerUsername: owner,
+                                                     ownerTitle: title, ownerPhoto: photo,
+                                                     isPlusOne: plusOne, isMine: mine))
+        }
+        if let node = myNode {
+            add(myCard?.replies, owner: node.username,
+                title: (myCard?.name?.isEmpty == false ? myCard?.name : nil) ?? myTitle,
+                photo: myPhoto, plusOne: false, mine: true)
+        }
+        for follow in myCard?.follows ?? [] {
+            guard let info = nodes.cachedNode(follow), let card = info.card else { continue }
+            add(card.replies, owner: info.username, title: info.displayName, photo: info.photo, plusOne: false, mine: false)
+        }
+        for entry in nearby {
+            guard let card = entry.node.card else { continue }
+            add(card.replies, owner: entry.node.username, title: entry.node.displayName,
+                photo: entry.node.photo, plusOne: true, mine: false)
+        }
+        return refs
+    }
+
+    /// Best-effort: a channel that cannot be read is skipped; a FLOOD_WAIT backs off like every other call.
+    func refreshComments() async {
+        guard auth == .ready, !isOffline else { return }
+        let refs = commentChannels
+        guard !refs.isEmpty else { return }
+        do { try await perform { try await self.comments.refresh(channels: refs) } } catch {}
+    }
+
+    /// Thread open / pull-to-refresh (§6.3): rescan, then read deeper into channels whose scan
+    /// has not reached the post's date, so comments older than the refresh window are reachable.
+    func refreshComments(for post: Post) async {
+        await refreshComments()
+        guard auth == .ready, !isOffline else { return }
+        do { try await perform { try await self.comments.deepen(untilDate: post.date) } } catch {}
+    }
+
+    /// Every t.me link that points at this post (an album has one per item).
+    func commentTargets(for post: Post) -> [String] {
+        var links = [post.deepLink]
+        for id in post.albumMessageIds where id != post.messageId {
+            links.append(DeepLink.post(username: post.sourceUsername, messageId: id))
+        }
+        return links
+    }
+
+    /// "Comments from your network" — the honest, serverless number (PRODUCT §2.12).
+    func commentCount(for post: Post) -> Int {
+        comments.count(forTargets: commentTargets(for: post))
+    }
+
+    func threadComments(for post: Post) -> [Comment] {
+        comments.comments(forTargets: commentTargets(for: post))
+    }
+
+    /// The card's Comment button and the thread's gold action both land here.
+    func startComment(on post: Post) {
+        guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
+        let quote = post.text.plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        modal = .comment(target: CommentTarget(link: post.deepLink, quoteTitle: post.sourceTitle, quoteText: quote))
+    }
+
+    /// `Reply` on a comment targets that comment's t.me link (PRODUCT §2.12).
+    func startReply(to comment: Comment) {
+        guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
+        modal = .comment(target: CommentTarget(link: comment.link, quoteTitle: comment.ownerTitle, quoteText: comment.body))
+    }
+
+    var suggestedRepliesUsername: String {
+        (myNode?.username ?? "") + "_r"
+    }
+
+    /// First comment ever: create the channel, then add `replies:` to the card (PROTOCOL §6.4).
+    func makeCommentsChannel(username: String) async -> Bool {
+        guard let node = myNode, myCardState == .ok else { showToast(Self.newerCardText, tone: .bad); return false }
+        if isOffline { showToast("You're offline.", tone: .bad); return false }
+        let title = ((myCard?.name?.isEmpty == false ? myCard?.name : nil) ?? myTitle) + " comments"
+        do {
+            try await activity.run("Making your comments channel") {
+                try await self.perform {
+                    // A channel left over from an attempt whose card write failed is reused, not
+                    // recreated — otherwise the orphan wedges the first-comment flow for good.
+                    if await self.nodes.ownedPublicChannel(username: username) == nil {
+                        try await self.comments.createChannel(username: username, node: node.username, title: title)
+                    }
+                }
+            }
+        } catch {
+            showToast(TDFailure(error).message, tone: .bad)
+            return false
+        }
+        var next = myCard ?? Card()
+        next.replies = username
+        return await writeCard(next)
+    }
+
+    /// Optimistic (PRODUCT §2.12): the repository shows the pending comment immediately and rolls
+    /// it back on failure; only the failure toasts.
+    func postComment(text: String, photoPath: String?, target: CommentTarget) async -> Bool {
+        guard let node = myNode, let replies = myCard?.replies else { return false }
+        if isOffline { showToast("You're offline.", tone: .bad); return false }
+        do {
+            try await activity.run("Posting") {
+                try await self.perform {
+                    try await self.comments.post(body: text, photoPath: photoPath, target: target,
+                                                 channelUsername: replies,
+                                                 ownerUsername: node.username,
+                                                 ownerTitle: (self.myCard?.name?.isEmpty == false ? self.myCard?.name : nil) ?? self.myTitle,
+                                                 ownerPhoto: self.myPhoto)
+                }
+            }
+            return true
+        } catch {
+            showToast(TDFailure(error).message, tone: .bad)
+            return false
+        }
+    }
+
+    func deleteComment(_ comment: Comment) async {
+        modal = nil
+        if isOffline { showToast("You're offline.", tone: .bad); return }
+        do {
+            try await activity.run("Deleting your comment") {
+                try await self.perform { try await self.comments.delete(comment) }
+            }
+        } catch {
+            showToast(TDFailure(error).message, tone: .bad)
+        }
+    }
+
     // MARK: Sign out (wipes local state)
 
     func signOut() async {
         modal = nil
+        viewer = nil
+        audio.stop()
         auth = .loggingOut
         _ = try? await td.api.logOut()
         store.clear()
         myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil; me = nil
         setupSkipped = false; nodeLookupDone = false; inSetup = false
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
-        feed.clear(); nodes.clear(); discovery.clear()
+        feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
         path = []; tab = .feed
         feedReady = false; feedStale = false; feedExhausted = false
+        lastError = nil; lastFeedRefresh = nil; myCardFetchedAt = nil
     }
 
     // MARK: Links

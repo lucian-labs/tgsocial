@@ -44,4 +44,5 @@ final class LocalStore {
     static let postCache = "posts"
     static let setupSkipped = "setupSkipped"
     static let feedCandidates = "candidates"
+    static let commentIndex = "comments"
 }

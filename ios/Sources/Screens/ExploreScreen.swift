@@ -10,7 +10,6 @@ struct ExploreScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshDiscovery(force: true) }) {
-            HPTabs(items: Tab.allCases, selected: $model.tab) { $0.label }
             HPTextField(nil, text: $query, placeholder: "Find a node", kind: .text) { submit() }
 
             HPSectionMark("Nearby")

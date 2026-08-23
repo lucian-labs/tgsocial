@@ -1,6 +1,7 @@
 package ca.lucianlabs.tgsocial.ui
 
 import android.net.Uri
+import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.FeedCandidate
 import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.NodeEntry
@@ -25,13 +26,26 @@ sealed class Screen {
     data object ManageFeeds : Screen()
     data class Profile(val username: String) : Screen()
     data class FeedChannel(val username: String) : Screen()
+    /** PRODUCT §2.12 — the thread screen for one post. */
+    data class Thread(val post: Post) : Screen()
 }
+
+/** What a comment points at: a post or another comment. [title]/[excerpt] feed the composer's quote line. */
+data class CommentTarget(val link: String, val title: String, val excerpt: String)
 
 sealed class Sheet {
     data class Compose(val feedUsername: String?) : Sheet()
     data object EditCard : Sheet()
     data object SignOut : Sheet()
+    /** PRODUCT §2.10 — the Status sheet, opened by tapping the status pill. */
+    data object Status : Sheet()
+    /** PRODUCT §2.12 — the comment composer. */
+    data class CommentComposer(val target: CommentTarget) : Sheet()
+    data class DeleteComment(val comment: Comment) : Sheet()
 }
+
+/** PRODUCT §2.11 — the full-screen viewer over one post's media, opened at [page]. */
+data class ViewerUi(val post: Post, val page: Int)
 
 data class FeedUi(
     val posts: List<Post> = emptyList(),
@@ -40,6 +54,8 @@ data class FeedUi(
     val exhausted: Boolean = false,
     val sourceCount: Int = 0,
     val ready: Boolean = false,
+    /** Epoch ms of the last completed refresh — the Status sheet's `refreshed HH:mm`. */
+    val refreshedAt: Long = 0,
 )
 
 data class ExploreUi(
@@ -106,4 +122,20 @@ data class EditCardUi(
     val bio: String = "",
     val link: String = "",
     val saving: Boolean = false,
+)
+
+/**
+ * PRODUCT §2.12 — the comment composer. [needsChannel] shows the first-run `YOUR COMMENTS CHANNEL` card;
+ * the composer proceeds once the channel exists.
+ */
+data class CommentComposerUi(
+    val target: CommentTarget? = null,
+    val text: String = "",
+    val photo: Uri? = null,
+    val posting: Boolean = false,
+    val needsChannel: Boolean = false,
+    val channelName: String = "",
+    val channelAvailability: Availability = Availability.UNKNOWN,
+    val channelNote: String = "",
+    val creatingChannel: Boolean = false,
 )

@@ -21,6 +21,8 @@
   --app-compose-rows: 6;
   /* chevron glyph size in list rows — uses the h2 step of the ramp */
   --app-chevron-size: var(--hp-type-h2-size);
+  /* room the docked now-playing row adds under the column */
+  --app-dock-extra: calc(var(--hp-space-touch-min) + var(--hp-space-card-gap));
 }
 
 /* ── focus (visible on web, per PRODUCT §4) ──────────────────────────────── */
@@ -62,14 +64,37 @@
   -webkit-backdrop-filter: none;
   min-height: calc(var(--hp-space-touch-min) + 2 * var(--hp-space-topbar-y));
 }
-.head .tabs {
-  margin: 0 var(--space-column-side) var(--hp-space-topbar-y);
-}
-.head[data-tabs='off'] .tabs { display: none; }
 
 .topbar-lead { display: flex; align-items: center; min-height: var(--hp-space-touch-min); }
 
-.status { white-space: nowrap; }
+/* The status pill is a button (tap → Status sheet, PRODUCT §2.10). The pill
+   keeps its size; a transparent halo brings the hit target to 40pt (rule 6). */
+button.status {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: var(--font-body);
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+}
+button.status::after {
+  content: '';
+  position: absolute;
+  inset: calc(-2 * var(--hp-space-tabs-pad)) calc(-1 * var(--hp-space-tabs-pad));
+}
+
+/* Content scrolls under the floating tab bar: the column pads its bottom by
+   the bar height + cardGap so the last card clears it (PRODUCT §1). */
+.app {
+  padding-bottom: calc(var(--hp-space-bottom-safe) + env(safe-area-inset-bottom, 0px));
+}
+body[data-now-playing] .app {
+  padding-bottom: calc(var(--hp-space-bottom-safe) + env(safe-area-inset-bottom, 0px) + var(--app-dock-extra));
+}
+
+/* Full-screen viewers hide the topbar and the floating tab bar (PRODUCT §2.11) */
+body[data-viewer] .head,
+body[data-viewer] .dock { display: none; }
 
 /* rows of small controls under the tabs (Refresh) */
 .toolbar {
@@ -110,7 +135,6 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 
 /* ── post card (PRODUCT §2.3) ────────────────────────────────────────────── */
 
-.post { cursor: pointer; }
 .post-head { display: flex; align-items: flex-start; gap: var(--hp-space-row-gap); }
 .post-head-text { flex: 1; min-width: 0; }
 .post-title {
@@ -180,6 +204,108 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+.post-file .icon { flex: none; width: var(--hp-space-row-pad); height: var(--hp-space-row-pad); color: var(--muted); }
+.post-file-text { flex: 1; min-width: 0; }
+.post-file-name {
+  font: var(--type-body);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-file-meta {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  line-height: var(--hp-type-mono-small-line);
+  color: var(--muted);
+}
+.post-file .btn { flex: none; }
+.post-file .ring { position: static; }
+.post-file .ring svg { background: transparent; box-shadow: none; }
+
+/* audio / voice player rows inside a post */
+.post-player {
+  margin: var(--hp-space-row-gap) 0 0;
+  padding: var(--hp-space-input-y) var(--hp-space-input-x);
+  border: var(--hp-border-width) solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--bg-2);
+}
+
+/* video note: circular inline player (PRODUCT §2.11) */
+.post-media.video-note {
+  width: 60%;
+  margin-left: auto;
+  margin-right: auto;
+  border-radius: var(--radius-pill);
+  aspect-ratio: 1 / 1;
+}
+.post-media.video-note video { height: 100%; object-fit: cover; }
+
+/* sticker: rendered static at sticker scale, no media chrome */
+.post-media.sticker {
+  width: 45%;
+  background: transparent;
+}
+
+/* one-line summary for poll / location / contact */
+.post-summary {
+  margin: var(--hp-space-row-gap) 0 0;
+  color: var(--muted);
+}
+
+/* link preview: bordered row, opens the link (the one exception) */
+.post-preview {
+  display: flex;
+  align-items: stretch;
+  gap: var(--hp-space-row-gap);
+  margin: var(--hp-space-row-gap) 0 0;
+  padding: var(--hp-space-input-y) var(--hp-space-input-x);
+  border: var(--hp-border-width) solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--bg-2);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+}
+.post-preview-text { flex: 1; min-width: 0; }
+.post-preview-site {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--muted);
+}
+.post-preview-title {
+  font: var(--type-body);
+  font-weight: var(--hp-type-body-strong-weight);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.post-preview-desc {
+  font-size: var(--hp-type-small-size);
+  line-height: var(--hp-type-small-line);
+  color: var(--muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.post-preview .media {
+  flex: none;
+  width: calc(2 * var(--hp-space-avatar-row));
+  height: calc(2 * var(--hp-space-avatar-row));
+  align-self: center;
+}
+.post-preview .media img { height: 100%; object-fit: cover; }
+
+/* GIF tag pill sits like the duration pill */
+.post-media .pill { pointer-events: none; }
 .post-foot {
   display: flex;
   align-items: center;
@@ -195,6 +321,59 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   min-width: 0;
 }
 .post-foot .btn { flex: none; }
+/* tapping the text opens the Thread screen (PRODUCT §2.3) */
+.post-body.opens-thread { cursor: pointer; }
+/* "N comments" is a button in the counts line, same mono faint voice */
+.post-comments-count {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-family: var(--font-mono);
+  color: var(--faint);
+  cursor: pointer;
+  min-height: var(--hp-space-touch-min);
+  transition: color var(--motion-color) ease;
+}
+.post-comments-count:hover { color: var(--accent); }
+/* Comment · Open in Telegram: small ghosts, hugging right */
+.post-actions {
+  justify-content: flex-end;
+  margin-top: var(--hp-space-tabs-pad);
+}
+.post-actions .btn { flex: none; width: auto; }
+
+/* ── thread (PRODUCT §2.12) ──────────────────────────────────────────────── */
+
+.comment + .comment { border-top: var(--hp-border-width) solid var(--line); margin-top: var(--hp-space-row-pad); padding-top: var(--hp-space-row-pad); }
+.comment .post-head .pill { flex: none; align-self: center; }
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-row-gap);
+  margin-top: var(--hp-space-tabs-pad);
+}
+.comment-meta .btn { flex: none; width: auto; }
+.comment-replies, .comment-pending {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  line-height: var(--hp-type-mono-small-line);
+  color: var(--faint);
+}
+/* replies indent one level (12pt) with a hairline gutter in line; flat past depth 5 */
+.comment-children {
+  margin-top: var(--hp-space-row-pad);
+  padding-left: var(--hp-space-input-bottom);
+  border-left: var(--hp-border-width) solid var(--line);
+}
+.comment-children.flat { padding-left: 0; border-left: none; }
+.comment-quote {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .loading-row, .end-row {
   text-align: center;
@@ -309,3 +488,27 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 .prose h2 { margin-top: var(--hp-space-card-pad); }
 .prose p { margin-bottom: var(--hp-space-row-pad); }
 .prose .wordmark { margin-top: var(--hp-space-card-pad); }
+
+/* ── status sheet (PRODUCT §2.10) ────────────────────────────────────────── */
+
+.status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--hp-space-row-gap);
+  padding: var(--hp-space-row-pad) 0;
+  border-bottom: var(--hp-border-width) solid var(--line);
+}
+.status-row:last-of-type { border-bottom: none; }
+.status-label { flex: none; }
+.status-value {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-size);
+  line-height: var(--hp-type-mono-line);
+  color: var(--muted);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.status-value .pending-item { display: block; }
+.status-sheet .btn + .btn { margin-top: var(--hp-space-btn-row-gap); }

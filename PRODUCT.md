@@ -135,7 +135,8 @@ The main feed (`PROTOCOL §4.8`). A vertical list of **post cards**:
 │ [ ▶ 0:00 ───────── 3:42  Track title ]     │  audio + voice: inline House Pour player row (§2.11)
 │ [ ▤ file name · 2.4 MB          Open ]     │  document row; Open → in-app viewer when viewable
 │                                            │
-│ 1.2k views · 14 reactions     Open in Telegram │  footer: mono faint left, ghost sm right
+│ 1.2k views · 14 reactions · 3 comments     │  footer counts: mono faint (comments = from your network, §2.12)
+│ ( Comment )              ( Open in Telegram ) │  ghost sm buttons
 └────────────────────────────────────────────┘
 ```
 
@@ -149,8 +150,9 @@ The main feed (`PROTOCOL §4.8`). A vertical list of **post cards**:
   arriving live are inserted at the top. Never oldest-first, on any screen
   that lists posts (Feed, Feed channel).
 - Tapping the title opens the feed's channel screen (2.6). Tapping the text
-  opens the post on Telegram (`t.me` link, `PROTOCOL §4.8`). Tapping media
+  or the comments count opens the **Thread screen** (§2.12). Tapping media
   opens it **in the app** (§2.11) — never the browser, never Telegram.
+  `Open in Telegram` remains the one hand-off.
 - Pull-to-refresh (native) / `Refresh` ghost button under the tabs (web).
 - Infinite scroll: load more when the last card is within two screens of the
   bottom. A muted `Loading…` row at the end; `That's everything.` when all
@@ -337,6 +339,55 @@ Player rules (all platforms):
   swipe between the media items of one post (albums), and restores scroll
   position on dismiss.
 
+### 2.12 Comments and threads
+
+Comments follow `PROTOCOL §6`: a comment lives in the commenter's own public
+**comments channel** and points at its target with a `re:` link, so what you
+see on a post is "comments from your network" — the honest, serverless
+number. The count in the post footer is that number.
+
+**Thread screen** (push, `‹ Back`): the post rendered at the top (full post
+card, media playable), then:
+
+```
+COMMENTS · 3                                  (section mark, serif count)
+┌ card ─────────────────────────────────────┐
+│ (avatar) Ana Iliovic          14:07        │  same header row as a post card
+│ Nice one. The bass is huge.                │  body; media renders like a post
+│ 1 reply · Reply                            │  mono faint · ghost sm
+│   └ (avatar) Bob              14:20        │  replies indent one level (12pt),
+│     Agreed.                                │  hairline gutter in `line`; depth
+│     Reply                                  │  capped at 5, deeper shows flat
+└───────────────────────────────────────────┘
+No comments from your network yet.            (empty, muted, full stop)
+( Comment )                                   (btn primary — the screen's one gold action)
+```
+
+**Comment composer** (modal, same card as Compose): a muted quote line of
+the target ("re: WaveLoop devlog — 'Post text…'"), textarea placeholder
+`Say it.`, `( Add Photo )` ghost sm, `( Post )` primary + `( Cancel )` ghost.
+
+First comment ever: the modal first shows one extra card —
+`YOUR COMMENTS CHANNEL` section mark, muted `Your comments live in a public
+channel you own. Anyone can read it on Telegram; you can edit or delete
+anything there.`, input prefilled `<node>_r` with the availability pill,
+`( Make Channel )` primary. On success the composer proceeds. The channel is
+added to the card's `replies:` (`PROTOCOL §6.4`).
+
+Behaviour:
+
+- Comment sending is optimistic: the comment appears in the thread
+  immediately with a faint `Posting…` mono tag, then settles or rolls back
+  with a toast.
+- `Reply` on a comment opens the composer targeting that comment's `t.me`
+  link; the thread renders `re:` chains as the indented tree.
+- The thread refreshes its comment index for the visible target when opened
+  (`PROTOCOL §6.3`); pull-to-refresh re-scans.
+- Deleting your comment: swipe / long-press → `Delete` (danger confirm
+  modal `Delete this comment?`) — deletes the message in your channel.
+- A commenter row's avatar/name opens their node profile. Comments from
+  nodes you don't follow (found via +1) show a small `+1` neutral pill.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -344,7 +395,8 @@ chrome, no "Oops", no apologies. Buttons are verb-first title case. Empty
 states end in a full stop and offer one action at most. Numbers the user is
 meant to feel (follow counts in section marks) are serif.
 
-Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`. Never
+Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
+`reply`, `thread`, `comments channel`. Never
 "friends", "subscribe", "timeline", "algorithm".
 
 ## 4. Behaviour rules

@@ -57,22 +57,27 @@ offline).
 
 `flows.mjs` swaps `vendor/tdweb/tdweb.js` for `test/mock-tdweb.js` via route
 interception and walks sign-in (code + 2FA), setup (create node, feed picker,
-verify backlink), feed (merge, media, entities, infinite scroll), explore,
-profile (optimistic follow + rollback), feed channel, graph, you (edit card,
-listing, announce, compose), sign-out wipe, cold-start cache, the FLOOD_WAIT
-toast and the Offline pill.
+verify backlink), feed (merge, media, entities, infinite scroll, live insert),
+media (player rows, GIF autoplay, full-screen viewer with album swipe, the
+now-playing dock), comments (thread screen, first-run channel creation,
+optimistic post, delete), the Status sheet, explore, profile (optimistic
+follow + rollback), feed channel, graph, you (edit card, listing, announce,
+compose), sign-out wipe, cold-start cache, the FLOOD_WAIT toast and the
+Offline pill.
 
 ## Layout
 
 ```
-index.html            shell: topbar + .tabs + view + toast/modal roots
+index.html            shell: topbar + view + floating tab dock + toast/modal/viewer roots
 privacy.html          docs/PRIVACY.md as a House Pour page
 css/tokens.css        GENERATED --hp-* token supplement (design/web/tokens.build.mjs)
 css/app.css           product composites (post card, node row, graph, profile head) — var(--token) only
-js/app.js             boot, hash router, status pill, sign-out
-js/td.js              TdClient wrapper: auth stream, send + FLOOD_WAIT backoff, update bus, file → blob cache
-js/protocol.js        pure protocol module (card, usernames, backlink, deep link, merge cursor, entities) — no DOM/TDLib
-js/repo.js            MyNode, card cache, feed sources + FeedSession, discovery, posting (localStorage state)
+js/app.js             boot, hash router, status pill + floating tab dock, sign-out
+js/td.js              TdClient wrapper: auth stream, send + FLOOD_WAIT backoff, update bus, downloads, file → blob cache
+js/activity.js        in-flight operation registry behind the Syncing pill and the Status sheet
+js/protocol.js        pure protocol module (card + replies, comments, usernames, backlink, deep link, merge cursor, entities) — no DOM/TDLib
+js/repo.js            MyNode, card cache, feed sources + FeedSession, comment index, discovery, posting (localStorage state)
+js/media.js           PRODUCT §2.11: inline players, full-screen viewer, one-audio-at-a-time, download rings
 js/graph.js           canvas radial graph
 js/views/*.js         one module per screen + shared composites
 vendor/house-pour.css GENERATED from design/tokens.json + upstream stylesheet + design/web/house-pour.components.css (do not edit)

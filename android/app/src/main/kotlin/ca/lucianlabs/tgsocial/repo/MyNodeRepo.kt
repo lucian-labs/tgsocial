@@ -37,7 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class CardFullException : Exception("Card is full.")
 
 /** PROTOCOL §4.2–§4.4, §4.7, §5.3 — my node: find, create, write, feeds, backlink, announce. */
-class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, private val nodes: NodeRepo) {
+class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, private val nodes: NodeRepo, private val activity: ActivityRegistry) {
     companion object {
         const val INDEX_GROUP = "tgsocial_index"
         private val LINK_PREVIEW_OFF = LinkPreviewOptions(isDisabled = true, url = "", forceSmallMedia = false, forceLargeMedia = false, showAboveText = false)
@@ -48,7 +48,7 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
         )
     }
 
-    suspend fun me(): User? = tg.client.getMe().orNull()
+    suspend fun me(): User? = tg.callOrNull { getMe() }
 
     /** Suggested default node name: `tgs_<telegram username>` or `tgs_<firstname><4 digits>`. */
     suspend fun suggestedUsername(): String {
@@ -68,9 +68,9 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
     suspend fun find(): Pair<MyNode, NodeSnapshot>? {
         val chats = tg.call { getCreatedPublicChats(type = PublicChatTypeHasUsername()) }
         for (chatId in chats.chatIds) {
-            val chat = tg.client.getChat(chatId = chatId).orNull() ?: continue
+            val chat = tg.callOrNull { getChat(chatId = chatId) } ?: continue
             if (!chat.isChannel) continue
-            val pinned = tg.client.getChatPinnedMessage(chatId = chatId).orNull() ?: continue
+            val pinned = tg.callOrNull { getChatPinnedMessage(chatId = chatId) } ?: continue
             val text = (pinned.content as? MessageText)?.text?.text ?: continue
             if (CardFormat.parse(text) is CardParse.NotACard) continue
             val snapshot = nodes.read(chat)
@@ -149,7 +149,7 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
      * sendMessage returns a message with a temporary id; the server id arrives in updateMessageSendSucceeded.
      * The collector is attached before the send so the ack cannot be missed.
      */
-    private suspend fun sendAndAwait(chatId: Long, text: String): Long {
+    internal suspend fun sendAndAwait(chatId: Long, text: String): Long {
         val acks = java.util.concurrent.ConcurrentHashMap<Long, Long>()
         val job = tg.scope.launch {
             tg.sendSucceeded.collect { if (it.message.chatId == chatId) acks[it.oldMessageId] = it.message.id }
@@ -164,7 +164,7 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
                 acks.getValue(sent.id)
             }
             if (acked != null) return acked
-            val last = tg.client.getChatHistory(chatId = chatId, fromMessageId = 0L, offset = 0, limit = 1, onlyLocal = false).orNull()?.messages?.firstOrNull()
+            val last = tg.callOrNull { getChatHistory(chatId = chatId, fromMessageId = 0L, offset = 0, limit = 1, onlyLocal = false) }?.messages?.firstOrNull()
             return last?.id ?: sent.id
         } finally {
             job.cancel()
@@ -172,22 +172,26 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
     }
 
     /** §4.4 — edit the pinned card in place; re-pin if the pin was lost. Refuses when the card would not fit. */
-    suspend fun writeCard(node: MyNode, card: Card): MyNode {
+    suspend fun writeCard(node: MyNode, card: Card): MyNode = activity.track("Writing your card") {
+        writeCardInner(node, card)
+    }
+
+    private suspend fun writeCardInner(node: MyNode, card: Card): MyNode {
         val text = card.serialise()
         if (text.length > Card.MAX_LENGTH) throw CardFullException()
         var messageId = node.pinnedMessageId
-        val pinned = tg.client.getChatPinnedMessage(chatId = node.chatId).orNull()
+        val pinned = tg.callOrNull { getChatPinnedMessage(chatId = node.chatId) }
         if (pinned != null && (pinned.content as? MessageText)?.text?.text?.let { CardFormat.parse(it) is CardParse.Parsed } == true) {
             messageId = pinned.id
         } else if (messageId != 0L) {
             // Pin lost: re-pin the existing card message.
-            tg.client.pinChatMessage(chatId = node.chatId, messageId = messageId, disableNotification = true, onlyForSelf = false)
+            tg.callOrNull { pinChatMessage(chatId = node.chatId, messageId = messageId, disableNotification = true, onlyForSelf = false) }
         }
         tg.call {
             editMessageText(chatId = node.chatId, messageId = messageId, inputMessageContent = InputMessageText(text = FormattedText(text = text, entities = emptyArray()), linkPreviewOptions = LINK_PREVIEW_OFF, clearDraft = false))
         }
         // Keep the description's bio in step (PROTOCOL §2: SHOULD begin with the marker · bio).
-        runCatching { tg.client.setChatDescription(chatId = node.chatId, description = CardFormat.description(card.bio)) }
+        tg.callOrNull { setChatDescription(chatId = node.chatId, description = CardFormat.description(card.bio)) }
         val updated = node.copy(pinnedMessageId = messageId)
         store.saveMyNode(updated)
         nodes.cached(node.username)?.let { nodes.put(it.copy(card = card, fetchedAt = System.currentTimeMillis())) }
@@ -197,30 +201,62 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
     /** §4.7 — channels I can post to. Private ones are listed disabled ("Needs a public link."). */
     suspend fun feedCandidates(excludeChatId: Long): List<FeedCandidate> {
         val ids = LinkedHashSet<Long>()
-        tg.client.getCreatedPublicChats(type = PublicChatTypeHasUsername()).orNull()?.chatIds?.forEach { ids += it }
+        tg.callOrNull { getCreatedPublicChats(type = PublicChatTypeHasUsername()) }?.chatIds?.forEach { ids += it }
         // loadChats until 404 (all loaded), then getChats.
         var guard = 0
         while (guard++ < 20) {
-            val r = tg.client.loadChats(chatList = ChatListMain(), limit = 100)
+            val r = withTimeoutOrNull(40_000L) { tg.client.loadChats(chatList = ChatListMain(), limit = 100) } ?: break
             if (r is TdlResult.Failure) break
         }
-        tg.client.getChats(chatList = ChatListMain(), limit = 200).orNull()?.chatIds?.forEach { ids += it }
+        tg.callOrNull { getChats(chatList = ChatListMain(), limit = 200) }?.chatIds?.forEach { ids += it }
         val out = ArrayList<FeedCandidate>()
         for (id in ids) {
             if (id == excludeChatId) continue
-            val chat = tg.client.getChat(chatId = id).orNull() ?: continue
+            val chat = tg.callOrNull { getChat(chatId = id) } ?: continue
             if (!chat.isChannel) continue
-            val sg = tg.client.getSupergroup(supergroupId = chat.supergroupId).orNull() ?: continue
+            val sg = tg.callOrNull { getSupergroup(supergroupId = chat.supergroupId) } ?: continue
             val canPost = when (val s = sg.status) {
                 is ChatMemberStatusCreator -> true
                 is ChatMemberStatusAdministrator -> s.rights.canPostMessages
                 else -> false
             }
             if (!canPost) continue
-            val full = tg.client.getSupergroupFullInfo(supergroupId = chat.supergroupId).orNull()
+            val full = tg.callOrNull { getSupergroupFullInfo(supergroupId = chat.supergroupId) }
             out += FeedCandidate(chatId = id, supergroupId = chat.supergroupId, title = chat.title, username = sg.username, description = full?.description.orEmpty(), canPost = true)
         }
         return out.sortedWith(compareByDescending<FeedCandidate> { it.isPublic }.thenBy { it.title.lowercase() })
+    }
+
+    /**
+     * PROTOCOL §6.4 — make the comments channel on the user's first comment: §4.3 steps 1–2 with the `_r`
+     * username and the description `tgsocial v1 replies · @<node>`, then add `replies:` to the card (§4.4).
+     * Returns the updated node pointer and card.
+     */
+    suspend fun createRepliesChannel(node: MyNode, card: Card, username: String): Pair<MyNode, Card> {
+        when (val check = tg.call { checkChatUsername(chatId = 0L, username = username) }) {
+            is CheckChatUsernameResultOk -> Unit
+            is CheckChatUsernameResultUsernameOccupied -> throw TdError(400, "That name is taken.")
+            is CheckChatUsernameResultPublicChatsTooMany -> throw TdError(400, "Too many public channels.")
+            is CheckChatUsernameResultUsernameInvalid -> throw TdError(400, "That name isn't allowed.")
+            is CheckChatUsernameResultUsernamePurchasable -> throw TdError(400, "That name is taken.")
+            else -> throw TdError(400, check.toString())
+        }
+        val chat = tg.call {
+            createNewSupergroupChat(
+                title = username, isForum = false, isChannel = true, description = "tgsocial v1 replies · @${node.username}",
+                location = null, messageAutoDeleteTime = 0, forImport = false,
+            )
+        }
+        try {
+            tg.call { setSupergroupUsername(supergroupId = chat.supergroupId, username = username) }
+        } catch (e: Exception) {
+            // Don't leave a half-made channel behind.
+            runCatching { tg.client.deleteChat(chatId = chat.id) }
+            throw e
+        }
+        val next = card.copy(replies = username)
+        val updated = writeCard(node, next)
+        return updated to next
     }
 
     /** §3 — append `tgsocial: @node` to a feed's description. */
@@ -234,7 +270,7 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
     suspend fun announce(node: MyNode, card: Card) {
         if (!card.public) throw TdError(400, "Your node is unlisted.")
         val group = tg.call { searchPublicChat(username = INDEX_GROUP) }
-        val joined = tg.client.joinChat(chatId = group.id)
+        val joined = withTimeoutOrNull(40_000L) { tg.client.joinChat(chatId = group.id) }
         if (joined is TdlResult.Failure && joined.code != 400) joined.orThrow()
         sendAndAwait(group.id, "node: @${node.username}")
     }

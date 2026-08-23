@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.housepour.HPAvatar
 import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonSize
@@ -26,6 +28,7 @@ import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.ChannelUi
 import ca.lucianlabs.tgsocial.ui.Screen
+import ca.lucianlabs.tgsocial.ui.Sheet
 import ca.lucianlabs.tgsocial.ui.columnItem
 import ca.lucianlabs.tgsocial.ui.components.EmptyCard
 import ca.lucianlabs.tgsocial.ui.components.FooterNote
@@ -64,7 +67,17 @@ fun LazyListScope.FeedChannelItems(vm: AppViewModel, c: ChannelUi) {
         }
     }
     items(c.posts, key = { it.key }) { post ->
-        Box(Modifier.columnItem()) { PostCard(post, onOpenChannel = { if (it != c.username) vm.push(Screen.FeedChannel(it)) }) }
+        val index by vm.commentIndex.collectAsStateWithLifecycle()
+        Box(Modifier.columnItem()) {
+            PostCard(
+                post = post,
+                commentCount = vm.commentCount(post, index),
+                onOpenChannel = { if (it != c.username) vm.push(Screen.FeedChannel(it)) },
+                onOpenThread = { vm.openThread(post) },
+                onComment = { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) },
+                onOpenViewer = { vm.openViewer(post, it) },
+            )
+        }
     }
     item(key = "channel-footer") {
         Box(Modifier.columnItem()) {

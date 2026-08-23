@@ -8,7 +8,6 @@ struct FeedScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshFeed() }) {
-            HPTabs(items: Tab.allCases, selected: $model.tab) { $0.label }
             if model.posts.isEmpty {
                 if model.feedLoading && !model.feedReady {
                     FeedFooter(text: "Loading\u{2026}")

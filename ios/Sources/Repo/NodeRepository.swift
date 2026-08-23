@@ -8,14 +8,15 @@ final class NodeRepository {
     private let td: TDClient
     private let store: LocalStore
     private let sends: SendTracker
+    private let activity: ActivityRegistry
 
     private(set) var nodes: [String: NodeInfo] = [:]
     private(set) var feeds: [String: FeedInfo] = [:]
     /// Cache freshness window for profile reads that are not forced.
     static let staleAfter: TimeInterval = 300
 
-    init(td: TDClient, store: LocalStore, sends: SendTracker) {
-        self.td = td; self.store = store; self.sends = sends
+    init(td: TDClient, store: LocalStore, sends: SendTracker, activity: ActivityRegistry) {
+        self.td = td; self.store = store; self.sends = sends; self.activity = activity
         nodes = store.load([String: NodeInfo].self, LocalStore.nodeCache) ?? [:]
         feeds = store.load([String: FeedInfo].self, LocalStore.feedCache) ?? [:]
     }
@@ -37,8 +38,10 @@ final class NodeRepository {
     func readNode(username: String, force: Bool = false) async throws -> NodeInfo {
         let key = Username.key(username)
         if !force, let hit = nodes[key], Foundation.Date().timeIntervalSince(hit.fetchedAt) < Self.staleAfter { return hit }
-        let chat = try await api.searchPublicChat(username: username)
-        let info = try await nodeInfo(chat: chat, username: username)
+        let info = try await activity.run("Reading card @\(username)") {
+            let chat = try await self.api.searchPublicChat(username: username)
+            return try await self.nodeInfo(chat: chat, username: username)
+        }
         nodes[key] = info
         persist()
         return info
@@ -92,6 +95,8 @@ final class NodeRepository {
     func readFeed(username: String, force: Bool = false) async throws -> FeedInfo {
         let key = Username.key(username)
         if !force, let hit = feeds[key], Foundation.Date().timeIntervalSince(hit.fetchedAt) < Self.staleAfter { return hit }
+        let token = activity.begin("Loading @\(username)")
+        defer { activity.end(token) }
         let chat = try await api.searchPublicChat(username: username)
         var description = ""
         if let sgId = Mapping.supergroupId(of: chat), let full = try? await api.getSupergroupFullInfo(supergroupId: sgId) {
@@ -129,6 +134,8 @@ final class NodeRepository {
     /// (PROTOCOL §8) still counts as my node — returned with `state == .newerVersion` and no parsed card —
     /// so the app says "Newer card. Update the app." instead of offering to create a second node.
     func findMyNode() async throws -> (MyNode, NodeInfo)? {
+        let token = activity.begin("Looking for your node")
+        defer { activity.end(token) }
         let created = try await api.getCreatedPublicChats(type: .publicChatTypeHasUsername)
         for chatId in created.chatIds {
             guard let chat = try? await api.getChat(chatId: chatId), Mapping.isChannel(chat),
@@ -150,6 +157,22 @@ final class NodeRepository {
             nodes[info.key] = info
             persist()
             return (node, info)
+        }
+        return nil
+    }
+
+    /// Whether I already own a public channel with this username (getCreatedPublicChats).
+    /// Lets the comments-channel flow reuse a channel left over from a failed card write
+    /// instead of reporting my own channel as Taken. Best-effort: nil on any API failure.
+    func ownedPublicChannel(username: String) async -> Chat? {
+        let key = Username.key(username)
+        guard let created = try? await api.getCreatedPublicChats(type: .publicChatTypeHasUsername) else { return nil }
+        for chatId in created.chatIds {
+            guard let chat = try? await api.getChat(chatId: chatId),
+                  let sgId = Mapping.supergroupId(of: chat),
+                  let sg = try? await api.getSupergroup(supergroupId: sgId),
+                  let name = Mapping.username(of: chat, supergroup: sg) else { continue }
+            if Username.key(name) == key { return chat }
         }
         return nil
     }
@@ -220,6 +243,8 @@ final class NodeRepository {
     /// Edits the pinned card in place; re-pins if the pin was lost. Returns the (possibly updated) node pointer.
     func writeCard(_ card: Card, node: MyNode) async throws -> MyNode {
         guard !CardCodec.isFull(card) else { throw TDFailure(code: 400, message: "Card is full.") }
+        let token = activity.begin("Writing your card")
+        defer { activity.end(token) }
         let text = FormattedText(entities: [], text: CardCodec.serialise(card))
         let content = InputMessageContent.inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: Self.noPreview, text: text))
         var messageId = node.pinnedMessageId

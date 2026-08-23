@@ -2,11 +2,17 @@
 
 import SwiftUI
 
+/// The status pill is a button: tapping it opens the Status sheet (PRODUCT §1, §2.10).
 struct StatusPill: View {
+    @Environment(AppModel.self) private var model
     let status: StatusKind
     var body: some View {
-        HPPill(status.label, tone: status == .synced ? .gold : .neutral)
-            .accessibilityLabel("Status: \(status.label)")
+        Button { model.modal = .status } label: {
+            HPPill(status.label, tone: status == .synced ? .gold : .neutral)
+                .hpTouchTarget()
+        }
+        .buttonStyle(HPPressStyle())
+        .accessibilityLabel("Status: \(status.label). Opens the status sheet.")
     }
 }
 
@@ -44,8 +50,10 @@ struct Screen<Content: View>: View {
     }
 
     @ViewBuilder private var scroll: some View {
+        // The floating tab bar provides the bottom inset (safeAreaInset in RootView), so the
+        // column keeps only cardGap below the last card (PRODUCT §1).
         let body = ScrollView(.vertical, showsIndicators: false) {
-            HPColumn {
+            HPColumn(bottomPadded: false) {
                 VStack(alignment: .leading, spacing: 0) { content }
                     .padding(.top, HPTokens.Space.topbarBottom)
             }

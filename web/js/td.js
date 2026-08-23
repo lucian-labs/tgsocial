@@ -21,6 +21,32 @@ export class TdError extends Error {
   }
 }
 
+export class DownloadCancelled extends Error {
+  constructor() {
+    super('Download cancelled.');
+    this.name = 'DownloadCancelled';
+    this.cancelled = true;
+  }
+}
+
+/** PRODUCT §2.10 Connection row copy for each TDLib connection state. */
+export const CONNECTION_COPY = {
+  connectionStateReady: 'Connected',
+  connectionStateConnecting: 'Connecting',
+  connectionStateUpdating: 'Updating',
+  connectionStateWaitingForNetwork: 'Waiting for network',
+  connectionStateConnectingToProxy: 'Connecting to proxy',
+};
+
+export function connectionCopy(state) {
+  return CONNECTION_COPY[state] ?? 'Connecting';
+}
+
+/** Downloads with no progress for this long are given up on (not cancelled in TDLib — the next tap resumes). */
+const DOWNLOAD_STALL_MS = 60000;
+/** A connection that stays Connecting/Updating this long gets a nudge (setNetworkType) so TDLib re-checks its socket. */
+const CONNECTION_STALL_MS = 30000;
+
 export class Td {
   constructor() {
     this.client = null;
@@ -28,11 +54,21 @@ export class Td {
     this.connectionState = null;
     this.tdlibVersion = null;
     this.listeners = new Map();
-    this.fileWaiters = new Map();
+    this.downloads = new Map();
     this.blobUrls = new Map();
     this.fileBlobs = new Map();
     this.floodUntil = 0;
     this.onFloodWait = null;
+    /** Set by the app: an Activity registry every request-bound operation reports into. */
+    this.activity = null;
+    this.connectionSince = 0;
+    this.lastNudge = 0;
+    this.watchdog = null;
+  }
+
+  track(label, work) {
+    if (!this.activity) return typeof work === 'function' ? work() : work;
+    return this.activity.run(label, work);
   }
 
   static available() {
@@ -74,17 +110,12 @@ export class Td {
       this.authState = update.authorization_state;
       this.emit('auth', this.authState);
     } else if (type === 'updateConnectionState') {
-      this.connectionState = update.state?.['@type'] ?? null;
+      const next = update.state?.['@type'] ?? null;
+      if (next !== this.connectionState) this.connectionSince = Date.now();
+      this.connectionState = next;
       this.emit('connection', this.connectionState);
     } else if (type === 'updateFile') {
-      const f = update.file;
-      if (f?.local?.is_downloading_completed) {
-        const waiters = this.fileWaiters.get(f.id);
-        if (waiters) {
-          this.fileWaiters.delete(f.id);
-          for (const w of waiters) w.resolve(f);
-        }
-      }
+      this.onFileUpdate(update.file);
     } else if (type === 'updateFatalError') {
       console.warn('[td] fatal', update.error);
     }
@@ -104,6 +135,7 @@ export class Td {
       logVerbosityLevel: 0,
       useDatabase: true,
     });
+    this.startWatchdog();
     const ready = this.waitAuth((s) => s && s['@type'] !== 'authorizationStateWaitTdlibParameters', 30000);
     const params = {
       '@type': 'setTdlibParameters',
@@ -153,6 +185,35 @@ export class Td {
 
   get isReady() {
     return this.authState?.['@type'] === 'authorizationStateReady';
+  }
+
+  // ── connection watchdog ──────────────────────────────────────────────────
+
+  /**
+   * iOS Safari suspends the tdweb worker's WebSocket when the tab is hidden;
+   * on return TDLib can sit in Connecting/Updating for minutes. Nudging it with
+   * setNetworkType makes it re-check the socket at once. Runs on visibility /
+   * online events and every CONNECTION_STALL_MS while the state is not Ready.
+   */
+  startWatchdog() {
+    if (this.watchdog || typeof window === 'undefined') return;
+    const nudge = () => this.nudge();
+    window.addEventListener('online', nudge);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') nudge();
+    });
+    this.watchdog = setInterval(() => {
+      const c = this.connectionState;
+      const stalled = c && c !== 'connectionStateReady' && c !== 'connectionStateWaitingForNetwork' && Date.now() - this.connectionSince > CONNECTION_STALL_MS;
+      if (stalled) this.nudge();
+    }, 5000);
+  }
+
+  nudge() {
+    if (!this.client || Date.now() - this.lastNudge < 5000) return;
+    this.lastNudge = Date.now();
+    const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+    this.client.send({ '@type': 'setNetworkType', type: { '@type': online ? 'networkTypeOther' : 'networkTypeNone' } }).catch(() => null);
   }
 
   // ── requests ─────────────────────────────────────────────────────────────
@@ -220,41 +281,162 @@ export class Td {
 
   // ── files ────────────────────────────────────────────────────────────────
 
-  /** Resolve a File object to a blob: URL, cached by remote.unique_id. */
-  async fileUrl(file) {
+  fileKey(file) {
+    return file?.remote?.unique_id || `id:${file?.id}`;
+  }
+
+  onFileUpdate(f) {
+    if (!f?.id) return;
+    const d = this.downloads.get(f.id);
+    if (!d) return;
+    d.file = f;
+    d.lastProgress = Date.now();
+    const total = f.expected_size || f.size || 0;
+    const got = f.local?.downloaded_size ?? 0;
+    for (const fn of d.progress) {
+      try {
+        fn(total ? Math.min(1, got / total) : 0, got, total);
+      } catch (e) {
+        console.warn('[td] progress', e);
+      }
+    }
+    if (f.local?.is_downloading_completed) this.settleDownload(f.id, null, f);
+    else if (!f.local?.is_downloading_active && d.cancelled) this.settleDownload(f.id, new DownloadCancelled());
+  }
+
+  settleDownload(fileId, error, file) {
+    const d = this.downloads.get(fileId);
+    if (!d) return;
+    this.downloads.delete(fileId);
+    clearTimeout(d.stall);
+    if (d.end) d.end();
+    if (error) d.reject(error);
+    else d.resolve(file);
+  }
+
+  /**
+   * Download a TDLib File (PROTOCOL §4.10). Resolves the completed File.
+   * opts.priority: 1 when merely visible, 32 when tapped (a later call with a
+   * higher priority re-issues downloadFile, which TDLib treats as a bump).
+   * opts.onProgress(fraction, downloaded, total) fires on every updateFile.
+   * opts.label names the entry in the activity registry ("Downloading photo").
+   * Stalls (no bytes for DOWNLOAD_STALL_MS) reject; cancel() rejects with
+   * DownloadCancelled.
+   */
+  download(file, { priority = 1, onProgress = null, label = 'Downloading file' } = {}) {
+    if (!file?.id) return Promise.reject(new Error('No file.'));
+    if (file.local?.is_downloading_completed) return Promise.resolve(file);
+    let d = this.downloads.get(file.id);
+    if (d) {
+      if (onProgress) d.progress.add(onProgress);
+      if (priority > d.priority) {
+        d.priority = priority;
+        this.send({ '@type': 'downloadFile', file_id: file.id, priority, offset: 0, limit: 0, synchronous: false }).catch(() => null);
+      }
+      return d.promise;
+    }
+    d = { file, priority, progress: new Set(), cancelled: false, lastProgress: Date.now(), end: null };
+    if (onProgress) d.progress.add(onProgress);
+    d.promise = new Promise((resolve, reject) => {
+      d.resolve = resolve;
+      d.reject = reject;
+    });
+    this.downloads.set(file.id, d);
+    if (this.activity) d.end = this.activity.begin(label);
+    const tick = () => {
+      if (!this.downloads.has(file.id)) return;
+      if (Date.now() - d.lastProgress > DOWNLOAD_STALL_MS) this.settleDownload(file.id, new Error('Download timed out.'));
+      else d.stall = setTimeout(tick, 5000);
+    };
+    d.stall = setTimeout(tick, 5000);
+    this.send({ '@type': 'downloadFile', file_id: file.id, priority, offset: 0, limit: 0, synchronous: false }).then(
+      (res) => {
+        if (res?.local?.is_downloading_completed) this.settleDownload(file.id, null, res);
+        else if (res) this.onFileUpdate(res);
+      },
+      (e) => this.settleDownload(file.id, e),
+    );
+    return d.promise;
+  }
+
+  isDownloading(fileId) {
+    return this.downloads.has(fileId);
+  }
+
+  /** Cancel an in-flight download (tap on the ring). Waiters reject with DownloadCancelled. */
+  async cancel(fileId) {
+    const d = this.downloads.get(fileId);
+    if (!d) return;
+    d.cancelled = true;
+    await this.trySend({ '@type': 'cancelDownloadFile', file_id: fileId, only_if_pending: false });
+    this.settleDownload(fileId, new DownloadCancelled());
+  }
+
+  /** Current TDLib File for an id (fresh local state). */
+  getFile(fileId) {
+    return this.trySend({ '@type': 'getFile', file_id: fileId });
+  }
+
+  /** Bytes [offset, offset+count) of a file's downloaded prefix as a Blob, or null. */
+  async readPart(fileId, offset, count) {
+    const part = await this.trySend({ '@type': 'readFilePart', file_id: fileId, offset, count });
+    return part?.data instanceof Blob ? part.data : null;
+  }
+
+  /** Resolve a File object to a blob: URL, cached by remote.unique_id. Null on failure. */
+  async fileUrl(file, opts = {}) {
     if (!file || !file.id) return null;
-    const key = file.remote?.unique_id || `id:${file.id}`;
+    const key = this.fileKey(file);
     if (this.blobUrls.has(key)) return this.blobUrls.get(key);
-    const blob = await this.fileBlob(file);
+    const blob = await this.fileBlob(file, opts);
     if (!blob) return null;
+    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
     const url = URL.createObjectURL(blob);
     this.blobUrls.set(key, url);
     return url;
   }
 
-  async fileBlob(file) {
-    const key = file.remote?.unique_id || `id:${file.id}`;
-    if (this.fileBlobs.has(key)) return this.fileBlobs.get(key);
+  /** Cached blob: URL when the file has already been read, else null (no download). */
+  cachedUrl(file) {
+    return this.blobUrls.get(this.fileKey(file)) ?? null;
+  }
+
+  /** Like fileUrl but rejects instead of swallowing (so a viewer can tell cancel from failure). */
+  async fileUrlOrThrow(file, opts = {}) {
+    if (!file || !file.id) throw new Error('No file.');
+    const key = this.fileKey(file);
+    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
+    const blob = await this.fileBlobOrThrow(file, opts);
+    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
+    const url = URL.createObjectURL(blob);
+    this.blobUrls.set(key, url);
+    return url;
+  }
+
+  async fileBlob(file, opts = {}) {
+    try {
+      return await this.fileBlobOrThrow(file, opts);
+    } catch (e) {
+      if (!e?.cancelled) console.warn('[td] file', e.message);
+      return null;
+    }
+  }
+
+  async fileBlobOrThrow(file, { priority = 1, onProgress = null, label = 'Downloading file', mime = null } = {}) {
+    const key = this.fileKey(file);
+    const cached = this.fileBlobs.get(key);
+    if (cached instanceof Blob) return cached;
+    if (cached) {
+      // an in-flight read: join it, and bump its priority if this caller is more urgent
+      if (this.downloads.has(file.id)) this.download(file, { priority, onProgress, label });
+      return cached;
+    }
     const pending = (async () => {
-      let f = file;
-      if (!f.local?.is_downloading_completed) {
-        const done = new Promise((resolve, reject) => {
-          const set = this.fileWaiters.get(file.id) ?? new Set();
-          set.add({ resolve, reject });
-          this.fileWaiters.set(file.id, set);
-        });
-        const res = await this.send({ '@type': 'downloadFile', file_id: file.id, priority: 1, offset: 0, limit: 0, synchronous: false });
-        if (res?.local?.is_downloading_completed) {
-          this.fileWaiters.delete(file.id);
-          f = res;
-        } else {
-          f = await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error('Download timed out.')), 90000))]);
-        }
-      }
+      const f = await this.download(file, { priority, onProgress, label });
       const part = await this.send({ '@type': 'readFile', file_id: f.id });
       const data = part?.data;
-      if (!(data instanceof Blob)) return null;
-      return data;
+      if (!(data instanceof Blob)) throw new Error('File is empty.');
+      return mime && !data.type ? new Blob([data], { type: mime }) : data;
     })();
     this.fileBlobs.set(key, pending);
     try {
@@ -263,8 +445,7 @@ export class Td {
       return blob;
     } catch (e) {
       this.fileBlobs.delete(key);
-      console.warn('[td] file', e.message);
-      return null;
+      throw e;
     }
   }
 }

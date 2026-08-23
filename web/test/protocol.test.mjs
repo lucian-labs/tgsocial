@@ -27,6 +27,14 @@ import {
   withBacklink,
   parseIndexLine,
   isPost,
+  albumId,
+  takeAlbumRest,
+  groupAlbums,
+  isNewestFirst,
+  insertIndex,
+  parseComment,
+  serialiseComment,
+  targetKey,
 } from '../js/protocol.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +87,26 @@ for (const c of vectors.compactCount.cases) {
     assert.equal(compactCount(c.in), c.out);
   });
 }
+
+for (const c of vectors.comment.parse) {
+  test(`comment parse: ${JSON.stringify(c.in.split('\n')[0])}`, () => {
+    assert.deepEqual(parseComment(c.in), c.out);
+  });
+}
+
+for (const c of vectors.comment.serialise) {
+  test(`comment serialise: ${c.target}`, () => {
+    assert.equal(serialiseComment(c.target, c.body), c.out);
+    assert.deepEqual(parseComment(serialiseComment(c.target, c.body)), { target: c.target, body: c.body });
+  });
+}
+
+test('targetKey canonicalises t.me links (case-insensitive username)', () => {
+  assert.equal(targetKey('https://t.me/Waveloop_Devlog/144'), 'waveloop_devlog/144');
+  assert.equal(targetKey('https://t.me/tgs_ana_r/12/'), 'tgs_ana_r/12');
+  assert.equal(targetKey('https://example.com/x/1'), null);
+  assert.equal(targetKey('not a link'), null);
+});
 
 test('serialise round-trips every parse vector', () => {
   for (const c of vectors.parse) {
@@ -193,4 +221,95 @@ test('rankPlusOne ranks by mutual count and excludes me and direct follows', () 
   ]);
   const ranked = rankPlusOne('tgs_me', ['tgs_ana', 'tgs_bob'], cards);
   assert.deepEqual(ranked.map((r) => [r.username, r.mutual]), [['tgs_carol', 2], ['tgs_dave', 1]]);
+});
+
+// PRODUCT §2.3: strictly newest first, end to end. Three sources whose pages
+// interleave every which way (one source even arrives in two fetches, the
+// second older than anything buffered) must come out in one descending run,
+// with load-more pages continuing the run rather than restarting it.
+test('three interleaved sources emit one strictly newest-first run across pages', () => {
+  const id = (n) => n * 1048576;
+  const m = createMerge(['a', 'b', 'c']);
+  pushMessages(m, 'a', [{ id: id(31), date: 1000 }, { id: id(30), date: 940 }, { id: id(29), date: 700 }, { id: id(28), date: 400 }]);
+  pushMessages(m, 'b', [{ id: id(52), date: 990 }, { id: id(51), date: 950 }, { id: id(50), date: 450 }]);
+  pushMessages(m, 'c', [{ id: id(73), date: 960 }, { id: id(72), date: 960 }, { id: id(71), date: 800 }, { id: id(70), date: 410 }]);
+  const emitted = [];
+  const page = (n) => {
+    const r = takeNext(m, n);
+    emitted.push(...r.items);
+    return r;
+  };
+  let r = page(5);
+  assert.deepEqual(r.items.map((i) => `${i.key}${i.date}`), ['a1000', 'b990', 'c960', 'c960', 'b950']);
+  // same date: higher id first
+  assert.equal(r.items[2].id, id(73));
+  assert.equal(r.blockedOn, null);
+  r = page(5);
+  assert.deepEqual(r.items.map((i) => `${i.key}${i.date}`), ['a940', 'c800', 'a700', 'b450']);
+  // b's buffer ran dry at 450 while a still holds 400 — the merge must wait for b, not skip ahead
+  assert.equal(r.blockedOn, 'b');
+  // the refill returns older messages than b's cursor, as getChatHistory does
+  pushMessages(m, 'b', [{ id: id(49), date: 440 }, { id: id(48), date: 405 }]);
+  r = page(5);
+  // c ran dry at 410: b405 is held until c says it has nothing between 405 and 410
+  assert.deepEqual(r.items.map((i) => `${i.key}${i.date}`), ['b440', 'c410']);
+  assert.equal(r.blockedOn, 'c');
+  markExhausted(m, 'c');
+  r = page(5);
+  assert.deepEqual(r.items.map((i) => `${i.key}${i.date}`), ['b405']);
+  assert.equal(r.blockedOn, 'b');
+  markExhausted(m, 'b');
+  r = page(5);
+  assert.deepEqual(r.items.map((i) => `${i.key}${i.date}`), ['a400']);
+  markExhausted(m, 'a');
+  assert.equal(isExhausted(m), true);
+  assert.equal(emitted.length, 13);
+  assert.equal(isNewestFirst(emitted), true);
+  for (let i = 1; i < emitted.length; i += 1) assert.ok(emitted[i - 1].date >= emitted[i].date, `item ${i} older than the next`);
+});
+
+test('isNewestFirst rejects ascending runs and same-date id inversions', () => {
+  assert.equal(isNewestFirst([{ date: 3, id: 3 }, { date: 2, id: 2 }, { date: 1, id: 1 }]), true);
+  assert.equal(isNewestFirst([{ date: 1, id: 1 }, { date: 2, id: 2 }]), false);
+  assert.equal(isNewestFirst([{ date: 2, id: 1 }, { date: 2, id: 2 }]), false);
+  assert.equal(isNewestFirst([]), true);
+});
+
+test('insertIndex slots a live post into a newest-first list', () => {
+  const list = [{ date: 50, id: 5 }, { date: 40, id: 4 }, { date: 30, id: 3 }];
+  assert.equal(insertIndex(list, 60, 6), 0);
+  assert.equal(insertIndex(list, 45, 9), 1);
+  assert.equal(insertIndex(list, 40, 9), 1);
+  assert.equal(insertIndex(list, 40, 1), 2);
+  assert.equal(insertIndex(list, 10, 1), 3);
+});
+
+test('albums: takeAlbumRest drains the rest of an album from its source', () => {
+  const id = (n) => n * 1048576;
+  const m = createMerge(['a', 'b']);
+  pushMessages(m, 'a', [
+    { id: id(13), date: 500, media_album_id: '7' },
+    { id: id(12), date: 500, media_album_id: '7' },
+    { id: id(11), date: 499, media_album_id: '7' },
+    { id: id(10), date: 300, media_album_id: '0' },
+  ]);
+  pushMessages(m, 'b', [{ id: id(20), date: 499 }]);
+  // count 1 emits the album's newest item; the rest follow without consulting the bound
+  const r = takeNext(m, 1);
+  assert.equal(r.items.length, 1);
+  const rest = takeAlbumRest(m, r.items[0]);
+  assert.deepEqual(rest.map((i) => i.id), [id(12), id(11)]);
+  assert.deepEqual(takeAlbumRest(m, r.items[0]), []);
+  const tail = takeNext(m, 5).items;
+  markExhausted(m, 'b');
+  tail.push(...takeNext(m, 5).items);
+  const groups = groupAlbums([...r.items, ...rest, ...tail]);
+  assert.deepEqual(groups.map((g) => [g.key, g.album, g.items.map((i) => i.id)]), [
+    ['a', '7', [id(11), id(12), id(13)]],
+    ['b', null, [id(20)]],
+    ['a', null, [id(10)]],
+  ]);
+  assert.equal(albumId({ media_album_id: '0' }), null);
+  assert.equal(albumId({}), null);
+  assert.equal(albumId({ media_album_id: '42' }), '42');
 });

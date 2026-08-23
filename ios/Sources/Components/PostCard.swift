@@ -1,10 +1,14 @@
-// Components — PostCard (PRODUCT.md §2.3, COMPONENTS.md "Composite").
+// Components — PostCard (PRODUCT.md §2.3, COMPONENTS.md "Composite"). Tapping the text or the
+// comments count opens the Thread screen; tapping media opens it in the app; `Open in Telegram`
+// remains the one hand-off.
 
 import SwiftUI
 
 struct PostCard: View {
     @Environment(AppModel.self) private var model
     let post: Post
+    /// Set on the Thread screen's own post so text taps do not push the thread again.
+    var inThread: Bool = false
     let onOpenFeed: (String) -> Void
 
     var body: some View {
@@ -30,40 +34,80 @@ struct PostCard: View {
                     .padding(.top, HPTokens.Space.pillY)
             }
 
-            // Body (tap → post on Telegram)
-            Button { model.open(post.deepLink) } label: {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let from = post.forwardedFrom, !from.isEmpty {
-                        HPMuted("Forwarded from \(from)")
-                            .padding(.top, HPTokens.Space.rowPad)
+            // Body text (tap → Thread screen, PRODUCT §2.3).
+            if !post.text.isEmpty || post.forwardedFrom?.isEmpty == false {
+                Button { openThread() } label: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let from = post.forwardedFrom, !from.isEmpty {
+                            HPMuted("Forwarded from \(from)")
+                                .padding(.top, HPTokens.Space.rowPad)
+                        }
+                        if !post.text.isEmpty {
+                            RichTextView(text: post.text)
+                                .padding(.top, HPTokens.Space.rowPad)
+                        }
                     }
-                    if !post.text.isEmpty {
-                        RichTextView(text: post.text)
-                            .padding(.top, HPTokens.Space.rowPad)
-                    }
-                    if let media = post.media {
-                        PostMediaView(media: media)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .disabled(inThread)
+                .accessibilityLabel(inThread ? "Post text" : "Open thread")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open post on Telegram")
 
-            // Footer: counts left, Open in Telegram right.
+            // Media (PRODUCT §2.11): everything opens or plays inside the app.
+            PostMediaList(ownerId: post.id, media: post.media, caption: post.text.plain,
+                          onOpenExternal: { model.open(post.deepLink) })
+
+            // Footer counts: mono faint; the comments count is tappable (→ Thread). One joined
+            // line "1.2k views · 14 reactions · 3 comments" (§2.3) — the interpunct renders
+            // between the counts and the comments segment so the join survives the tap target.
+            HStack(alignment: .center, spacing: HPTokens.Space.tabsPad) {
+                if !countsText.isEmpty {
+                    HPMonoSmall(countsText, color: HPTokens.Colors.faint)
+                        .lineLimit(1)
+                }
+                if !countsText.isEmpty, commentCount > 0 {
+                    HPMonoSmall("\u{00B7}", color: HPTokens.Colors.faint)
+                }
+                if commentCount > 0 {
+                    Button { openThread() } label: {
+                        HPMonoSmall(commentsText, color: HPTokens.Colors.faint)
+                            .lineLimit(1)
+                            .frame(minHeight: HPTokens.Space.touchMin)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(inThread)
+                    .accessibilityLabel("Open thread, \(commentsText)")
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.top, HPTokens.Space.rowGap)
+
             HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
-                HPMonoSmall(footerText, color: HPTokens.Colors.faint)
-                    .lineLimit(1)
+                if !inThread {
+                    HPButton("Comment", style: .ghost, size: .small) { model.startComment(on: post) }
+                }
                 Spacer(minLength: HPTokens.Space.rowGap)
                 HPButton("Open in Telegram", style: .ghost, size: .small) { model.open(post.deepLink) }
             }
-            .padding(.top, HPTokens.Space.rowGap)
         }
         .opacity(post.isPending ? HPAlpha.disabled : 1)
     }
 
-    private var footerText: String {
+    private func openThread() {
+        guard !inThread else { return }
+        model.path.append(.thread(post: post))
+    }
+
+    private var commentCount: Int { model.commentCount(for: post) }
+
+    private var commentsText: String {
+        "\(commentCount) comment\(commentCount == 1 ? "" : "s")"
+    }
+
+    private var countsText: String {
         var parts: [String] = []
         if post.isPending { parts.append("Sending") }
         if post.views > 0 { parts.append(CompactCount.format(post.views) + " views") }

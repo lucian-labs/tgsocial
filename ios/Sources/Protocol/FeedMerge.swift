@@ -56,7 +56,7 @@ public struct FeedMerger<Item: FeedEntry & Equatable>: Equatable {
         let known = Set(s.buffer.map(\.messageId))
         let fresh = items.filter { !known.contains($0.messageId) && $0.sourceKey == key }
         s.buffer.append(contentsOf: fresh)
-        s.buffer.sort { $0.date != $1.date ? $0.date > $1.date : $0.messageId > $1.messageId }
+        FeedOrder.sortNewestFirst(&s.buffer)
         if let oldest = [oldestFetchedId, items.map(\.messageId).min()].compactMap({ $0 }).min(), oldest > 0 {
             s.cursor = s.cursor == 0 ? oldest : min(s.cursor, oldest)
         }
@@ -77,10 +77,7 @@ public struct FeedMerger<Item: FeedEntry & Equatable>: Equatable {
         while out.count < count, canEmit {
             guard let bestKey = sources.values
                 .filter({ !$0.buffer.isEmpty })
-                .max(by: { a, b in
-                    let x = a.buffer[0], y = b.buffer[0]
-                    return x.date != y.date ? x.date < y.date : x.messageId < y.messageId
-                })?.key else { break }
+                .max(by: { a, b in FeedOrder.isNewer(b.buffer[0], than: a.buffer[0]) })?.key else { break }
             out.append(sources[bestKey]!.buffer.removeFirst())
         }
         return out

@@ -16,7 +16,7 @@
   const CARD = 'tgsocial v1';
 
   // ── world ────────────────────────────────────────────────────────────────
-  const users = { 1: { '@type': 'user', id: 1, first_name: 'Elijah', last_name: 'Lucian', usernames: { editable_username: 'elijah', active_usernames: ['elijah'] }, profile_photo: { big: { id: 9001, remote: { unique_id: 'u9001' }, local: {} } } } };
+  const users = { 1: { '@type': 'user', id: 1, first_name: 'Elijah', last_name: 'Lucian', phone_number: '16045550199', usernames: { editable_username: 'elijah', active_usernames: ['elijah'] }, profile_photo: { big: { id: 9001, remote: { unique_id: 'u9001' }, local: {} } } } };
   const chats = {};
   const supergroups = {};
   const fulls = {};
@@ -78,12 +78,14 @@
   channel({ id: -1003, sg: 1003, title: 'Très Buchet', username: 'tresbuchet', description: 'A restaurant, eventually.', admin: true });
   channel({ id: -1004, sg: 1004, title: 'Notes to self', username: null, description: '', creator: true, photo: false });
   channel({ id: -1010, sg: 1010, title: 'Ana Iliovic', username: 'tgs_ana', description: 'tgsocial v1 · Voice, product, Vancouver.' });
-  pin(-1010, `${CARD}\nname: Ana Iliovic\nbio: Voice, product, Vancouver.\nlink: anailiovic.com\npublic: yes\nfeeds: @ana_notes @thevii_dev\nfollows: @tgs_bob @tgs_carol @tgs_elijah`);
+  pin(-1010, `${CARD}\nname: Ana Iliovic\nbio: Voice, product, Vancouver.\nlink: anailiovic.com\npublic: yes\nfeeds: @ana_notes @thevii_dev\nfollows: @tgs_bob @tgs_carol @tgs_elijah\nreplies: @tgs_ana_r`);
   channel({ id: -1011, sg: 1011, title: "Ana's notes", username: 'ana_notes', description: 'tgsocial: @tgs_ana' });
   channel({ id: -1012, sg: 1012, title: 'VII devlog', username: 'thevii_dev', description: '' });
+  channel({ id: -1013, sg: 1013, title: 'Ana Iliovic replies', username: 'tgs_ana_r', description: 'tgsocial v1 replies · @tgs_ana' });
   channel({ id: -1020, sg: 1020, title: 'Bob', username: 'tgs_bob', description: 'tgsocial v1' });
-  pin(-1020, `${CARD}\nname: Bob\npublic: yes\nfeeds: @bob_feed\nfollows: @tgs_carol @tgs_dave`);
+  pin(-1020, `${CARD}\nname: Bob\npublic: yes\nfeeds: @bob_feed\nfollows: @tgs_carol @tgs_dave\nreplies: @tgs_bob_r`);
   channel({ id: -1021, sg: 1021, title: "Bob's feed", username: 'bob_feed', description: '' });
+  channel({ id: -1022, sg: 1022, title: 'Bob replies', username: 'tgs_bob_r', description: 'tgsocial v1 replies · @tgs_bob' });
   channel({ id: -1030, sg: 1030, title: 'Carol', username: 'tgs_carol', description: 'tgsocial v1' });
   pin(-1030, `${CARD}\nname: Carol\npublic: yes\nfollows: @tgs_ana`);
   channel({ id: -1040, sg: 1040, title: 'Dave', username: 'tgs_dave', description: 'tgsocial v1' });
@@ -114,18 +116,23 @@
     ] },
     caption: { '@type': 'formattedText', text: `Photo ${seed} with a link https://lucianlabs.ca`, entities: [{ offset: 19 + String(seed).length, length: 21, type: { '@type': 'textEntityTypeUrl' } }] },
   });
-  for (let i = 0; i < 48; i += 1) {
+  for (let i = 0; i < 56; i += 1) {
     const chatId = feedsToFill[i % feedsToFill.length];
     const id = serverId << 20;
     serverId -= 1;
     t -= 3600 * (1 + (i % 5));
-    const kind = i % 9;
+    const kind = i % 14;
     let m;
     if (kind === 1) m = { ...text(id, chatId, '', t), content: photo(i) };
-    else if (kind === 3) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVideo', video: { duration: 94, width: 640, height: 360, thumbnail: { width: 320, height: 180, file: { id: 8500 + i, remote: { unique_id: `v${i}` }, local: {} } } }, caption: { '@type': 'formattedText', text: 'A short clip', entities: [] } } };
-    else if (kind === 5) m = { ...text(id, chatId, '', t), content: { '@type': 'messageDocument', document: { file_name: `release-notes-${i}.pdf`, document: { id: 8600 + i, remote: { unique_id: `d${i}` }, local: {} } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
-    else if (kind === 7) m = { ...text(id, chatId, '', t), content: { '@type': 'messageAudio', audio: { duration: 212, title: 'Bench loop', performer: 'WaveLoop', audio: { id: 8700 + i, remote: { unique_id: `a${i}` }, local: {} } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
+    else if (kind === 3) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVideo', video: { duration: 94, width: 640, height: 360, supports_streaming: true, mime_type: 'video/mp4', video: { id: 8550 + i, remote: { unique_id: `vf${i}` }, local: {} }, thumbnail: { width: 320, height: 180, file: { id: 8500 + i, remote: { unique_id: `v${i}` }, local: {} } } }, caption: { '@type': 'formattedText', text: 'A short clip', entities: [] } } };
+    else if (kind === 5) m = { ...text(id, chatId, '', t), content: { '@type': 'messageDocument', document: { file_name: `release-notes-${i}.pdf`, mime_type: 'application/pdf', document: { id: 8600 + i, remote: { unique_id: `d${i}` }, local: {}, size: 2500000 } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
+    else if (kind === 7) m = { ...text(id, chatId, '', t), content: { '@type': 'messageAudio', audio: { duration: 212, title: 'Bench loop', performer: 'WaveLoop', mime_type: 'audio/mpeg', audio: { id: 8700 + i, remote: { unique_id: `a${i}` }, local: {} } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
     else if (kind === 8) m = { ...text(id, chatId, 'Pinned a message', t), content: { '@type': 'messagePinMessage', message_id: 1 } };
+    else if (kind === 9) m = { ...text(id, chatId, '', t), content: { '@type': 'messageAnimation', animation: { duration: 4, width: 480, height: 270, mime_type: 'video/mp4', file_name: 'loop.mp4', animation: { id: 8800 + i, remote: { unique_id: `an${i}` }, local: {} }, thumbnail: { width: 320, height: 180, file: { id: 8850 + i, remote: { unique_id: `ant${i}` }, local: {} } } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
+    else if (kind === 10) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVoiceNote', voice_note: { duration: 9, waveform: 'kqUqVaqlKlWqpSpVqqUqVQ==', mime_type: 'audio/ogg', voice: { id: 8900 + i, remote: { unique_id: `vo${i}` }, local: {} } } } };
+    else if (kind === 11) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVideoNote', video_note: { duration: 12, length: 240, video: { id: 8950 + i, remote: { unique_id: `vn${i}` }, local: {} }, thumbnail: { width: 240, height: 240, file: { id: 8960 + i, remote: { unique_id: `vnt${i}` }, local: {} } } } } };
+    else if (kind === 12) m = { ...text(id, chatId, '', t), content: { '@type': 'messageSticker', sticker: { width: 512, height: 512, format: { '@type': 'stickerFormatWebp' }, sticker: { id: 8970 + i, remote: { unique_id: `st${i}` }, local: {} } } } };
+    else if (kind === 13) m = { ...text(id, chatId, '', t), content: { '@type': 'messagePoll', poll: { question: { text: 'Which bank?' }, options: [{}, {}, {}] } } };
     else {
       m = text(id, chatId, `Post ${i}: bold words and a mention @tgs_ana and code here. Lorem ipsum dolor sit amet, consectetur adipiscing elit.`, t, {
         entities: [
@@ -139,7 +146,33 @@
     }
     history[chatId].push(m);
   }
+  // a two-photo album (media_album_id) and a link-preview post for the viewer
+  // paths — newest ids AND newest dates so the channel keeps TDLib's id/date order
+  {
+    for (const n of [0, 1]) {
+      history[-1002].push({ ...text((402 + n) << 20, -1002, '', NOW - 90), content: photo(90 + n), media_album_id: '77' });
+    }
+    const preview = text(401 << 20, -1002, 'Read the writeup at https://lucianlabs.ca', NOW - 100, { entities: [{ offset: 22, length: 21, type: { '@type': 'textEntityTypeUrl' } }] });
+    preview.content.link_preview = {
+      url: 'https://lucianlabs.ca',
+      site_name: 'Lucian Labs',
+      title: 'Lucian Labs',
+      description: { text: 'Product architecture from the bench.' },
+    };
+    history[-1002].push(preview);
+  }
   for (const id of feedsToFill) history[id].sort((a, b) => b.id - a.id);
+
+  // comments (PROTOCOL §6): Ana comments on the newest waveloop_devlog post; Bob replies to Ana
+  {
+    const target = history[-1002][0];
+    const link = `https://t.me/waveloop_devlog/${Math.floor(target.id / 1048576)}`;
+    history[-1013].push(text(600 << 20, -1013, `re: ${link}\nNice one. The bass is huge.`, NOW - 60));
+    history[-1022].push(text(601 << 20, -1022, `re: https://t.me/tgs_ana_r/600\nAgreed.`, NOW - 30));
+    // an owner may post anything else in their channel; readers skip it (§6.2)
+    history[-1013].push(text(599 << 20, -1013, 'Housekeeping: this channel holds my comments.', NOW - 7000));
+    history[-1013].sort((a, b) => b.id - a.id);
+  }
 
   // ── persistence across reloads (sessionStorage) ─────────────────────────
   const WORLD_KEY = `mockWorld:${scenario}`;
@@ -195,7 +228,7 @@
         setTimeout(() => {
           try {
             const r = this.handle(q);
-            if (/^(createNewSupergroupChat|setSupergroupUsername|deleteChat|sendMessage|pinChatMessage|editMessageText|setChatDescription|joinChat)$/.test(q['@type'])) setTimeout(() => persist(this.auth?.['@type'] === 'authorizationStateReady' ? 'ready' : null), 30);
+            if (/^(createNewSupergroupChat|setSupergroupUsername|deleteChat|deleteMessages|sendMessage|pinChatMessage|editMessageText|setChatDescription|joinChat)$/.test(q['@type'])) setTimeout(() => persist(this.auth?.['@type'] === 'authorizationStateReady' ? 'ready' : null), 30);
             resolve(r);
           } catch (e) {
             reject(e['@type'] === 'error' ? e : err(500, String(e.message || e)));
@@ -330,6 +363,9 @@
           return ok;
         }
         case 'setChatPhoto':
+          return ok;
+        case 'deleteMessages':
+          history[q.chat_id] = (history[q.chat_id] || []).filter((m) => !q.message_ids.includes(m.id));
           return ok;
         case 'loadChats':
           if (this.loaded) throw err(404, 'Not Found');

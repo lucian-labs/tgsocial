@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import ca.lucianlabs.housepour.HPToastState
 import ca.lucianlabs.housepour.HPToastTone
 import ca.lucianlabs.tgsocial.TgApp
+import ca.lucianlabs.tgsocial.model.Comment
+import ca.lucianlabs.tgsocial.model.CommentNode
 import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.MyNode
 import ca.lucianlabs.tgsocial.model.NodeEntry
@@ -15,7 +17,10 @@ import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.model.SyncStatus
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CardFormat
+import ca.lucianlabs.tgsocial.protocol.CommentFormat
+import ca.lucianlabs.tgsocial.protocol.FeedOrder
 import ca.lucianlabs.tgsocial.protocol.Username
+import ca.lucianlabs.tgsocial.repo.ActivityRegistry
 import ca.lucianlabs.tgsocial.repo.CardFullException
 import ca.lucianlabs.tgsocial.repo.MyNodeRepo
 import ca.lucianlabs.tgsocial.td.TdError
@@ -28,16 +33,20 @@ import dev.g000sha256.tdl.dto.AuthorizationStateWaitOtherDeviceConfirmation
 import dev.g000sha256.tdl.dto.AuthorizationStateWaitPassword
 import dev.g000sha256.tdl.dto.AuthorizationStateWaitPhoneNumber
 import dev.g000sha256.tdl.dto.AuthorizationStateWaitRegistration
+import dev.g000sha256.tdl.dto.ConnectionState
+import dev.g000sha256.tdl.dto.ConnectionStateConnecting
+import dev.g000sha256.tdl.dto.ConnectionStateConnectingToProxy
 import dev.g000sha256.tdl.dto.ConnectionStateReady
+import dev.g000sha256.tdl.dto.ConnectionStateUpdating
 import dev.g000sha256.tdl.dto.ConnectionStateWaitingForNetwork
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -50,6 +59,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val nodes get() = app.nodes
     private val myNodeRepo get() = app.myNode
     private val feedRepo get() = app.feed
+    private val commentRepo get() = app.comments
     private val discovery get() = app.discovery
     private val posting get() = app.posting
 
@@ -66,16 +76,47 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val stack: StateFlow<List<Screen>> = _stack.asStateFlow()
     private val _sheet = MutableStateFlow<Sheet?>(null)
     val sheet: StateFlow<Sheet?> = _sheet.asStateFlow()
+    private val _viewer = MutableStateFlow<ViewerUi?>(null)
+    val viewer: StateFlow<ViewerUi?> = _viewer.asStateFlow()
 
-    private val _syncing = MutableStateFlow(0)
-    val status: StateFlow<SyncStatus> = combine(tg.connection, _syncing, _auth) { conn, busy, a ->
+    // ---- status (PRODUCT §2.10)
+    /** The live list of in-flight operations; the Status sheet's `Pending` rows. */
+    val pending: StateFlow<List<ActivityRegistry.Entry>> get() = app.activity.entries
+    val lastError: StateFlow<ActivityRegistry.LastError?> get() = app.activity.lastError
+    val connection: StateFlow<ConnectionState?> get() = tg.connection
+    private val _phone = MutableStateFlow("")
+    val phone: StateFlow<String> = _phone.asStateFlow()
+    val tdlibVersion: String get() = tg.tdlibVersion
+
+    /**
+     * The status pill, derived — never counted. PRODUCT §2.10 assigns three states: `Syncing` exactly while the
+     * activity registry is non-empty (every entry clears on success, failure, cancellation, or a 30 s timeout, so
+     * a stuck `Syncing` is impossible by construction), `Synced` when it is empty and the connection is
+     * `Connected`, `Offline` while TDLib waits for network. The connection states the spec leaves unassigned map
+     * as follows: before a connection exists (`Connecting`, `Connecting to proxy`, or no state yet) the pill reads
+     * `Syncing` — `Synced` would be untrue — and these resolve or fall to waiting-for-network on their own;
+     * `Updating` reads `Synced` when the registry is empty, because TDLib is connected and applying its own
+     * unbounded diff — the sheet's Connection row says `Updating`, and nothing the app started is unattributed.
+     */
+    val status: StateFlow<SyncStatus> = combine(tg.connection, app.activity.entries, _auth) { conn, inFlight, a ->
         when {
             a.step != AuthStep.READY -> SyncStatus.SIGNED_OUT
             conn is ConnectionStateWaitingForNetwork -> SyncStatus.OFFLINE
-            busy > 0 || (conn != null && conn !is ConnectionStateReady) -> SyncStatus.SYNCING
+            inFlight.isNotEmpty() -> SyncStatus.SYNCING
+            conn == null || conn is ConnectionStateConnecting || conn is ConnectionStateConnectingToProxy -> SyncStatus.SYNCING
             else -> SyncStatus.SYNCED
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SyncStatus.SIGNED_OUT)
+
+    /** PRODUCT §2.10 — `Connection` mirrors TDLib `updateConnectionState`. */
+    fun connectionLabel(conn: ConnectionState?): String = when (conn) {
+        is ConnectionStateReady -> "Connected"
+        is ConnectionStateConnecting, null -> "Connecting"
+        is ConnectionStateConnectingToProxy -> "Connecting to proxy"
+        is ConnectionStateUpdating -> "Updating"
+        is ConnectionStateWaitingForNetwork -> "Waiting for network"
+        else -> "Connecting"
+    }
 
     // ---- my node
     private val _myNode = MutableStateFlow<MyNode?>(null)
@@ -104,21 +145,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val compose: StateFlow<ComposeUi> = _compose.asStateFlow()
     private val _editCard = MutableStateFlow(EditCardUi())
     val editCard: StateFlow<EditCardUi> = _editCard.asStateFlow()
+    private val _commentComposer = MutableStateFlow(CommentComposerUi())
+    val commentComposer: StateFlow<CommentComposerUi> = _commentComposer.asStateFlow()
 
     val cards get() = nodes.cards
+
+    // ---- comments (PRODUCT §2.12)
+    val commentIndex: StateFlow<Map<String, List<Comment>>> get() = commentRepo.index
+
+    fun postTargetKey(post: Post): String = CommentFormat.postKey(post.sourceUsername, post.messageId)
+    fun commentCount(post: Post, index: Map<String, List<Comment>>): Int = commentRepo.countFor(postTargetKey(post), index)
+    fun commentTree(post: Post, index: Map<String, List<Comment>>): List<CommentNode> = commentRepo.tree(postTargetKey(post), index)
 
     private var bootstrapped = false
     private var feedJob: Job? = null
     private var availabilityJob: Job? = null
+    private var replyChannelJob: Job? = null
 
     init {
         viewModelScope.launch { tg.authState.collect { onAuth(it) } }
-        viewModelScope.launch { tg.floodWaits.collect { toast.show("Telegram asked us to wait ${it.seconds} s.", HPToastTone.BAD) } }
+        viewModelScope.launch {
+            tg.floodWaits.collect {
+                app.activity.recordError("FLOOD_WAIT ${it.seconds} s")
+                toast.show("Telegram asked us to wait ${it.seconds} s.", HPToastTone.BAD)
+            }
+        }
         viewModelScope.launch {
             tg.newMessages.collect { m ->
                 if (!bootstrapped || m.isOutgoing && m.sendingState != null) return@collect
                 val post = runCatching { feedRepo.liveToPost(m) }.getOrNull() ?: return@collect
-                _feed.update { f -> if (f.posts.any { it.key == post.key }) f else f.copy(posts = (listOf(post) + f.posts).sortedByDescending { it.date }) }
+                // Live inserts land at the top — the list stays strictly newest first (PRODUCT §2.3).
+                _feed.update { f -> f.copy(posts = FeedOrder.insertLive(f.posts, post)) }
             }
         }
         tg.onClosed += { viewModelScope.launch { wipeLocal() } }
@@ -151,6 +208,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 block()
             } catch (e: TdError) {
                 _auth.update { it.copy(busy = false) }
+                app.activity.recordError(e.message)
                 toast.show(authErrorCopy(e), HPToastTone.BAD)
             } catch (e: TimeoutCancellationException) {
                 _auth.update { it.copy(busy = false) }
@@ -189,37 +247,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (bootstrapped) return
         bootstrapped = true
         viewModelScope.launch {
-            sync {
-                nodes.restore()
-                _tab.value = Tab.entries[store.lastTab().coerceIn(0, Tab.entries.lastIndex)]
-                // Cold start: the last cached feed first, never a blank screen behind a spinner.
-                val cached = feedRepo.cachedFeed()
-                if (cached.isNotEmpty()) _feed.update { it.copy(posts = cached, ready = true) }
-                val pointer = store.myNode()
-                if (pointer != null) {
-                    _myNode.value = pointer
-                    val snap = runCatching { nodes.fetch(pointer.username) }.getOrNull() ?: nodes.cached(pointer.username)
-                    // A card newer than this app understands is still my node (PROTOCOL §8): keep it, refuse writes.
-                    if (snap?.card != null || snap?.newerVersion == true) _me.value = snap
-                    else if (snap != null) {
-                        // Pointer stale: the pin is gone. Search again.
-                        findMyNode(quiet = true)
-                    }
-                } else {
+            nodes.restore()
+            _tab.value = Tab.entries[store.lastTab().coerceIn(0, Tab.entries.lastIndex)]
+            // Cold start: the last cached feed first, never a blank screen behind a spinner.
+            val cached = feedRepo.cachedFeed()
+            if (cached.isNotEmpty()) _feed.update { it.copy(posts = FeedOrder.sort(cached), ready = true) }
+            _phone.value = runCatching { myNodeRepo.me()?.phoneNumber }.getOrNull().orEmpty()
+            val pointer = store.myNode()
+            if (pointer != null) {
+                _myNode.value = pointer
+                val snap = runCatching { nodes.fetch(pointer.username) }.getOrNull() ?: nodes.cached(pointer.username)
+                // A card newer than this app understands is still my node (PROTOCOL §8): keep it, refuse writes.
+                if (snap?.card != null || snap?.newerVersion == true) _me.value = snap
+                else if (snap != null) {
+                    // Pointer stale: the pin is gone. Search again.
                     findMyNode(quiet = true)
                 }
-                _nodeSearched.value = true
-                if (_me.value == null && !store.setupSkipped()) {
-                    _setupNeeded.value = true
-                    prepareSetup()
-                }
+            } else {
+                findMyNode(quiet = true)
+            }
+            _nodeSearched.value = true
+            if (_me.value == null && !store.setupSkipped()) {
+                _setupNeeded.value = true
+                prepareSetup()
             }
             refreshFeed(resetCursors = true)
         }
     }
 
     private suspend fun findMyNode(quiet: Boolean): Boolean {
-        val found = runCatching { myNodeRepo.find() }.onFailure { if (!quiet) toast.show(errorCopy(it), HPToastTone.BAD) }.getOrNull()
+        val found = runCatching { myNodeRepo.find() }.onFailure { if (!quiet) fail(it) }.getOrNull()
         if (found != null) {
             _myNode.value = found.first
             _me.value = found.second
@@ -228,11 +285,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
         return false
-    }
-
-    private suspend inline fun <T> sync(block: () -> T): T {
-        _syncing.update { it + 1 }
-        try { return block() } finally { _syncing.update { (it - 1).coerceAtLeast(0) } }
     }
 
     private fun errorCopy(t: Throwable): String = when (t) {
@@ -244,6 +296,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         is TimeoutCancellationException -> if (tg.isOffline) "You're offline." else "Telegram didn't answer. Try again."
         else -> t.message ?: "Something went wrong."
+    }
+
+    /** Toast the failure and record it as the Status sheet's `Last error` (PRODUCT §2.10). */
+    private fun fail(t: Throwable) {
+        when (t) {
+            is TdError -> app.activity.recordError(t.floodWaitSeconds?.let { "FLOOD_WAIT $it s" } ?: t.message)
+            is TimeoutCancellationException -> app.activity.recordError("Request timed out")
+            else -> app.activity.recordError(t.message ?: t.javaClass.simpleName)
+        }
+        toast.show(errorCopy(t), HPToastTone.BAD)
     }
 
     /** A real cancellation (job cancelled, screen gone) — not a request timeout, which is a failure the user should see. */
@@ -263,6 +325,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ navigation
 
     fun selectTab(t: Tab) {
+        // The floating tab bar stays on pushed screens; picking a tab returns to the root of that tab.
+        if (_stack.value.size > 1) _stack.value = listOf(Screen.Home)
         _tab.value = t
         viewModelScope.launch { store.saveLastTab(t.ordinal) }
         when (t) {
@@ -278,12 +342,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             is Screen.Profile -> loadProfile(screen.username)
             is Screen.FeedChannel -> loadChannel(screen.username)
             is Screen.Setup, is Screen.ManageFeeds -> prepareSetup()
+            is Screen.Thread -> refreshComments(force = true)
             else -> Unit
         }
     }
 
+    /** PRODUCT §2.12 — tapping the text or the comments count opens the thread. */
+    fun openThread(post: Post) = push(Screen.Thread(post))
+
     /** Returns false when there was nothing to pop (let the system handle back). */
     fun back(): Boolean {
+        if (_viewer.value != null) { closeViewer(); return true }
         if (_sheet.value != null) { closeSheet(); return true }
         if (_stack.value.size > 1) {
             _stack.update { it.dropLast(1) }
@@ -302,14 +371,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         when (s) {
             is Sheet.Compose -> prepareCompose(s.feedUsername)
             Sheet.EditCard -> _editCard.value = EditCardUi(name = myCard?.name.orEmpty(), bio = myCard?.bio.orEmpty(), link = myCard?.link.orEmpty())
-            Sheet.SignOut -> Unit
+            is Sheet.CommentComposer -> prepareCommentComposer(s.target)
+            Sheet.SignOut, Sheet.Status, is Sheet.DeleteComment -> Unit
         }
         _sheet.value = s
     }
 
     fun closeSheet() {
         if (_sheet.value is Sheet.Compose && _compose.value.posting) return
+        if (_sheet.value is Sheet.CommentComposer && _commentComposer.value.posting) return
         _sheet.value = null
+    }
+
+    // ------------------------------------------------------------------ viewer (PRODUCT §2.11)
+
+    fun openViewer(post: Post, page: Int) {
+        _viewer.value = ViewerUi(post, page)
+    }
+
+    fun closeViewer() {
+        _viewer.value = null
     }
 
     // ------------------------------------------------------------------ feed
@@ -318,24 +399,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         feedJob?.cancel()
         feedJob = viewModelScope.launch {
             _feed.update { it.copy(refreshing = true, loading = true) }
-            sync {
-                runCatching {
-                    // Refresh my card and the cards of my follows so new feeds show up. Offline: reads serve cache.
-                    if (!tg.isOffline) _myNode.value?.let { n -> runCatching { nodes.fetch(n.username) }.getOrNull()?.let { if (it.card != null) _me.value = it } }
-                    val sources = feedRepo.resolveSources(_myNode.value?.username, myCard, fresh = resetCursors)
-                    if (resetCursors) feedRepo.reset()
-                    val posts = feedRepo.loadMore(20)
-                    _feed.update { it.copy(posts = posts, exhausted = feedRepo.exhausted, sourceCount = sources.size, ready = true) }
-                    if (posts.isNotEmpty()) feedRepo.cacheFeed(posts)
-                    nodes.persist()
-                }.onFailure { e ->
-                    if (!isCancelled(e)) {
-                        _feed.update { it.copy(ready = true) }
-                        if (!isQuietOffline(e)) toast.show(errorCopy(e), HPToastTone.BAD)
-                    }
+            runCatching {
+                // Refresh my card and the cards of my follows so new feeds show up. Offline: reads serve cache.
+                if (!tg.isOffline) _myNode.value?.let { n -> runCatching { nodes.fetch(n.username) }.getOrNull()?.let { if (it.card != null) _me.value = it } }
+                val sources = feedRepo.resolveSources(_myNode.value?.username, myCard, fresh = resetCursors)
+                if (resetCursors) feedRepo.reset()
+                val posts = FeedOrder.sort(feedRepo.loadMore(20))
+                _feed.update { it.copy(posts = posts, exhausted = feedRepo.exhausted, sourceCount = sources.size, ready = true, refreshedAt = System.currentTimeMillis()) }
+                if (posts.isNotEmpty()) feedRepo.cacheFeed(posts)
+                nodes.persist()
+            }.onFailure { e ->
+                if (!isCancelled(e)) {
+                    _feed.update { it.copy(ready = true) }
+                    if (!isQuietOffline(e)) fail(e)
                 }
             }
             _feed.update { it.copy(refreshing = false, loading = false) }
+            // The comment index refreshes alongside the feed (PROTOCOL §6.3).
+            runCatching { commentRepo.refresh(_myNode.value?.username, myCard) }
         }
     }
 
@@ -345,9 +426,158 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         feedJob = viewModelScope.launch {
             _feed.update { it.copy(loading = true) }
             runCatching { feedRepo.loadMore(20) }
-                .onSuccess { more -> _feed.update { it.copy(posts = it.posts + more.filter { p -> it.posts.none { q -> q.key == p.key } }, exhausted = feedRepo.exhausted) } }
-                .onFailure { e -> if (!isCancelled(e) && !isQuietOffline(e)) toast.show(errorCopy(e), HPToastTone.BAD) }
+                // Load-more appends older posts below; order is re-asserted (PRODUCT §2.3).
+                .onSuccess { more -> _feed.update { it.copy(posts = FeedOrder.append(it.posts, more), exhausted = feedRepo.exhausted) } }
+                .onFailure { e -> if (!isCancelled(e) && !isQuietOffline(e)) fail(e) }
             _feed.update { it.copy(loading = false) }
+        }
+    }
+
+    // ------------------------------------------------------------------ comments (PRODUCT §2.12 / PROTOCOL §6)
+
+    private val _commentsRefreshing = MutableStateFlow(false)
+    val commentsRefreshing: StateFlow<Boolean> = _commentsRefreshing.asStateFlow()
+
+    fun refreshComments(force: Boolean = false) {
+        viewModelScope.launch {
+            _commentsRefreshing.value = true
+            try {
+                runCatching { commentRepo.refresh(_myNode.value?.username, myCard, force = force) }
+            } finally {
+                _commentsRefreshing.value = false
+            }
+        }
+    }
+
+    fun targetForPost(post: Post): CommentTarget = CommentTarget(
+        link = ca.lucianlabs.tgsocial.protocol.DeepLink.post(post.sourceUsername, post.messageId),
+        title = post.sourceTitle,
+        excerpt = post.text?.text.orEmpty(),
+    )
+
+    fun targetForComment(comment: Comment): CommentTarget =
+        CommentTarget(link = comment.link, title = comment.authorName, excerpt = comment.post.text?.text.orEmpty())
+
+    private fun prepareCommentComposer(target: CommentTarget) {
+        val needsChannel = myCard != null && myCard?.replies == null
+        val suggested = _myNode.value?.username?.let { "${it}_r".take(32) }.orEmpty()
+        _commentComposer.value = CommentComposerUi(target = target, needsChannel = needsChannel, channelName = suggested)
+        if (needsChannel && suggested.isNotEmpty()) checkReplyChannelName()
+    }
+
+    fun setCommentText(t: String) { _commentComposer.update { it.copy(text = t) } }
+    fun setCommentPhoto(uri: Uri?) { _commentComposer.update { it.copy(photo = uri) } }
+
+    fun setReplyChannelName(name: String) {
+        _commentComposer.update { it.copy(channelName = name.trim(), channelAvailability = Availability.UNKNOWN) }
+        checkReplyChannelName()
+    }
+
+    private fun checkReplyChannelName() {
+        replyChannelJob?.cancel()
+        replyChannelJob = viewModelScope.launch {
+            delay(450)
+            val name = _commentComposer.value.channelName
+            if (Username.normalise(name) != name || name.isEmpty()) {
+                _commentComposer.update { it.copy(channelAvailability = Availability.TAKEN, channelNote = "Invalid") }
+                return@launch
+            }
+            _commentComposer.update { it.copy(channelAvailability = Availability.CHECKING) }
+            val r = runCatching { myNodeRepo.checkUsername(name, 0L) }.getOrNull()
+            _commentComposer.update {
+                when (r) {
+                    is MyNodeRepo.Availability.Available -> it.copy(channelAvailability = Availability.AVAILABLE, channelNote = "")
+                    is MyNodeRepo.Availability.Taken -> it.copy(channelAvailability = Availability.TAKEN, channelNote = r.reason)
+                    null -> it.copy(channelAvailability = Availability.UNKNOWN)
+                }
+            }
+        }
+    }
+
+    /** PRODUCT §2.12 first run — `( Make Channel )`: §6.4, then the composer proceeds. */
+    fun makeRepliesChannel() {
+        val node = _myNode.value ?: return
+        val card = cardOrToast() ?: return
+        val name = _commentComposer.value.channelName
+        if (Username.normalise(name) != name || name.isEmpty()) { toast.show("That name isn't allowed.", HPToastTone.BAD); return }
+        if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
+        viewModelScope.launch {
+            _commentComposer.update { it.copy(creatingChannel = true) }
+            runCatching { myNodeRepo.createRepliesChannel(node, card, name) }
+                .onSuccess { (updated, next) ->
+                    _myNode.value = updated
+                    _me.value = _me.value?.copy(card = next)
+                    nodes.persist()
+                    _commentComposer.update { it.copy(needsChannel = false, creatingChannel = false) }
+                }
+                .onFailure { e ->
+                    _commentComposer.update { it.copy(creatingChannel = false) }
+                    fail(e)
+                }
+        }
+    }
+
+    /** PRODUCT §2.12 — optimistic posting: the comment appears immediately, then settles or rolls back. */
+    fun postComment() {
+        val c = _commentComposer.value
+        val target = c.target ?: return
+        val me = _me.value ?: run { toast.show("Make your node first.", HPToastTone.BAD); return }
+        val repliesChannel = myCard?.replies ?: run { toast.show("Make your comments channel first.", HPToastTone.BAD); return }
+        if (c.text.isBlank() && c.photo == null) return
+        if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
+        val targetKey = CommentFormat.targetKey(target.link) ?: return
+        val body = c.text.trim()
+        val optimistic = Comment(
+            chatId = 0L,
+            messageId = -System.currentTimeMillis(),
+            date = (System.currentTimeMillis() / 1000).toInt(),
+            channelUsername = repliesChannel,
+            authorUsername = me.username,
+            authorName = me.displayName,
+            authorPhoto = me.photo,
+            targetKey = targetKey,
+            link = "",
+            post = Post(
+                chatId = 0L, messageId = -System.currentTimeMillis(), date = (System.currentTimeMillis() / 1000).toInt(),
+                sourceUsername = me.username, sourceTitle = me.displayName, sourcePhoto = me.photo,
+                text = if (body.isEmpty()) null else ca.lucianlabs.tgsocial.model.PostText(body),
+            ),
+            own = true,
+            pending = true,
+        )
+        viewModelScope.launch {
+            _commentComposer.update { it.copy(posting = true) }
+            commentRepo.addPending(optimistic)
+            _sheet.value = null
+            val text = CommentFormat.serialise(target.link, body)
+            runCatching {
+                // The send is a Pending row while it runs (PRODUCT §2.10).
+                app.activity.track("Posting your comment") {
+                    val chat = tg.call { searchPublicChat(username = repliesChannel) }
+                    if (c.photo != null) posting.postPhoto(chat.id, c.photo, text)
+                    else myNodeRepo.sendAndAwait(chat.id, text)
+                }
+            }.onSuccess {
+                _commentComposer.value = CommentComposerUi()
+                delay(600)
+                runCatching { commentRepo.rescan(repliesChannel, _myNode.value?.username, myCard) }
+                // The send succeeded: the optimistic entry settles even when that rescan failed — the real
+                // comment is in the channel and the next scan indexes it.
+                commentRepo.removePending(optimistic)
+            }.onFailure { e ->
+                commentRepo.removePending(optimistic)
+                _commentComposer.update { it.copy(posting = false) }
+                if (!isCancelled(e)) fail(e)
+            }
+        }
+    }
+
+    /** PRODUCT §2.12 — `Delete this comment?` confirmed: the message in my channel goes. */
+    fun deleteComment(comment: Comment) {
+        _sheet.value = null
+        viewModelScope.launch {
+            runCatching { commentRepo.delete(comment) }
+                .onFailure { e -> if (!isCancelled(e)) fail(e) }
         }
     }
 
@@ -368,17 +598,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun loadExplore() {
         viewModelScope.launch {
             _explore.update { it.copy(loading = true) }
-            sync {
-                val nearby = runCatching { discovery.nearby(_myNode.value?.username, myCard) }.getOrDefault(emptyList())
-                _explore.update { it.copy(nearby = nearby) }
-                val exclude = HashSet<String>()
-                _myNode.value?.username?.let { exclude += Username.key(it) }
-                myCard?.follows?.forEach { exclude += Username.key(it) }
-                nearby.forEach { exclude += Username.key(it.username) }
-                val directory = runCatching { discovery.directory(exclude) }.getOrDefault(emptyList())
-                _explore.update { it.copy(directory = directory, loading = false, loaded = true) }
-                nodes.persist()
-            }
+            val nearby = runCatching { discovery.nearby(_myNode.value?.username, myCard) }.getOrDefault(emptyList())
+            _explore.update { it.copy(nearby = nearby) }
+            val exclude = HashSet<String>()
+            _myNode.value?.username?.let { exclude += Username.key(it) }
+            myCard?.follows?.forEach { exclude += Username.key(it) }
+            nearby.forEach { exclude += Username.key(it.username) }
+            val directory = runCatching { discovery.directory(exclude) }.getOrDefault(emptyList())
+            _explore.update { it.copy(directory = directory, loading = false, loaded = true) }
+            nodes.persist()
         }
     }
 
@@ -387,11 +615,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun loadGraph() {
         viewModelScope.launch {
             _graph.update { it.copy(loading = true) }
-            sync {
-                val direct = myCard?.follows.orEmpty().mapNotNull { f -> runCatching { nodes.node(f) }.getOrNull()?.let { discovery.entry(it) } }
-                val plusOne = runCatching { discovery.nearby(_myNode.value?.username, myCard) }.getOrDefault(emptyList())
-                _graph.update { it.copy(direct = direct, plusOne = plusOne, loading = false, loaded = true) }
-            }
+            val direct = myCard?.follows.orEmpty().mapNotNull { f -> runCatching { nodes.node(f) }.getOrNull()?.let { discovery.entry(it) } }
+            val plusOne = runCatching { discovery.nearby(_myNode.value?.username, myCard) }.getOrDefault(emptyList())
+            _graph.update { it.copy(direct = direct, plusOne = plusOne, loading = false, loaded = true) }
         }
     }
 
@@ -436,7 +662,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val listedBy = (cached?.listedBy.orEmpty() + listingNodes(username)).distinct()
             val src = nodes.feedSource(username, listedBy, refresh = true) ?: run { _channel.update { it.copy(loading = false, exhausted = true) }; return@launch }
             val (posts, cursor) = runCatching { feedRepo.channelPosts(src) }.getOrDefault(emptyList<Post>() to null)
-            _channel.update { it.copy(source = src, posts = posts, cursor = cursor, exhausted = cursor == null, loading = false, verified = src.verifiedFor.isNotEmpty()) }
+            _channel.update { it.copy(source = src, posts = FeedOrder.sort(posts), cursor = cursor, exhausted = cursor == null, loading = false, verified = src.verifiedFor.isNotEmpty()) }
         }
     }
 
@@ -451,7 +677,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _channel.update { it.copy(loading = true) }
             val (posts, cursor) = runCatching { feedRepo.channelPosts(src, c.cursor ?: 0L) }.getOrDefault(emptyList<Post>() to null)
-            _channel.update { it.copy(posts = it.posts + posts.filter { p -> it.posts.none { q -> q.key == p.key } }, cursor = cursor, exhausted = cursor == null, loading = false) }
+            // Channel pages append below, order re-asserted — newest first end to end (PRODUCT §2.3).
+            _channel.update { it.copy(posts = FeedOrder.append(it.posts, posts), cursor = cursor, exhausted = cursor == null, loading = false) }
         }
     }
 
@@ -465,15 +692,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (CardFormat.isFull(next)) { toast.show("Card is full.", HPToastTone.BAD); return }
         _me.value = previous.copy(card = next)
         viewModelScope.launch {
-            sync {
-                runCatching { myNodeRepo.writeCard(node, next) }
-                    .onSuccess { updated -> _myNode.value = updated; nodes.persist(); onDone?.invoke() }
-                    .onFailure { e ->
-                        _me.value = previous
-                        nodes.put(previous)
-                        toast.show("Couldn't update your card. ${errorCopy(e)}", HPToastTone.BAD)
-                    }
-            }
+            runCatching { myNodeRepo.writeCard(node, next) }
+                .onSuccess { updated -> _myNode.value = updated; nodes.persist(); onDone?.invoke() }
+                .onFailure { e ->
+                    _me.value = previous
+                    nodes.put(previous)
+                    app.activity.recordError((e as? TdError)?.message ?: e.message.orEmpty())
+                    toast.show("Couldn't update your card. ${errorCopy(e)}", HPToastTone.BAD)
+                }
         }
     }
 
@@ -510,7 +736,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { myNodeRepo.announce(node, card) }
                 .onSuccess { toast.show("Announced.", HPToastTone.GOOD) }
-                .onFailure { toast.show(errorCopy(it), HPToastTone.BAD) }
+                .onFailure { fail(it) }
         }
     }
 
@@ -557,30 +783,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
         viewModelScope.launch {
             _setup.update { it.copy(creating = true) }
-            sync {
-                val me = runCatching { myNodeRepo.me() }.getOrNull()
-                val display = listOfNotNull(me?.firstName, me?.lastName).joinToString(" ").trim().ifEmpty { null }
-                runCatching { myNodeRepo.create(name, Card(name = display)) }
-                    .onSuccess { (node, snap) ->
-                        _myNode.value = node
-                        _me.value = snap
-                        // Stay on Setup: Card 2 (Your feeds) appears once the node exists (PRODUCT §2.2).
-                        // `_setupNeeded` is cleared by saveFeeds() or skipSetup(), not here.
-                        nodes.persist()
-                        loadCandidates()
-                    }
-                    .onFailure { toast.show(errorCopy(it), HPToastTone.BAD) }
-            }
+            val me = runCatching { myNodeRepo.me() }.getOrNull()
+            val display = listOfNotNull(me?.firstName, me?.lastName).joinToString(" ").trim().ifEmpty { null }
+            runCatching { myNodeRepo.create(name, Card(name = display)) }
+                .onSuccess { (node, snap) ->
+                    _myNode.value = node
+                    _me.value = snap
+                    // Stay on Setup: Card 2 (Your feeds) appears once the node exists (PRODUCT §2.2).
+                    // `_setupNeeded` is cleared by saveFeeds() or skipSetup(), not here.
+                    nodes.persist()
+                    loadCandidates()
+                }
+                .onFailure { fail(it) }
             _setup.update { it.copy(creating = false) }
         }
     }
 
     fun findExistingNode() {
         viewModelScope.launch {
-            sync {
-                val ok = findMyNode(quiet = false)
-                if (!ok) toast.show("No node found.", HPToastTone.BAD) else { nodes.persist(); loadCandidates(); refreshFeed() }
-            }
+            val ok = findMyNode(quiet = false)
+            if (!ok) toast.show("No node found.", HPToastTone.BAD) else { nodes.persist(); loadCandidates(); refreshFeed() }
         }
     }
 
@@ -618,7 +840,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { myNodeRepo.verifyFeed(cand.chatId, cand.description, node) }
                 .onSuccess { _setup.update { it.copy(verified = it.verified + Username.key(prompt)) }; toast.show("Verified.", HPToastTone.GOOD) }
-                .onFailure { toast.show(errorCopy(it), HPToastTone.BAD) }
+                .onFailure { fail(it) }
         }
     }
 
@@ -669,7 +891,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _compose.update { it.copy(posting = true) }
             runCatching {
-                if (c.photo != null) posting.postPhoto(feed.chatId, c.photo, c.text.trim()) else posting.postText(feed.chatId, c.text.trim())
+                // The send is a Pending row while it runs (PRODUCT §2.10).
+                app.activity.track("Posting to @${feed.username}") {
+                    if (c.photo != null) posting.postPhoto(feed.chatId, c.photo, c.text.trim()) else posting.postText(feed.chatId, c.text.trim())
+                }
             }.onSuccess {
                 _sheet.value = null
                 _compose.value = ComposeUi()
@@ -678,7 +903,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 refreshFeed(resetCursors = true)
             }.onFailure {
                 _compose.update { s -> s.copy(posting = false) }
-                toast.show(errorCopy(it), HPToastTone.BAD)
+                fail(it)
             }
         }
     }
@@ -699,7 +924,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         feedJob?.cancel()
         store.wipe()
         nodes.clear()
+        commentRepo.clear()
         app.media.clear()
+        app.playback.release()
+        app.activity.clear()
+        _phone.value = ""
         _myNode.value = null
         _me.value = null
         _setupNeeded.value = false
@@ -710,8 +939,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _channel.value = ChannelUi()
         _setup.value = SetupUi()
         _compose.value = ComposeUi()
+        _commentComposer.value = CommentComposerUi()
         _stack.value = listOf(Screen.Home)
         _sheet.value = null
+        _viewer.value = null
         _tab.value = Tab.FEED
     }
 }

@@ -35,6 +35,7 @@ class CardVectorsTest {
         public = this["public"]?.jsonPrimitive?.boolean ?: true,
         feeds = list("feeds"),
         follows = list("follows"),
+        replies = str("replies"),
     )
 
     @Test
@@ -60,10 +61,41 @@ class CardVectorsTest {
                 assertEquals("[$name] public", e.getValue("public").jsonPrimitive.boolean, parsed.public)
                 assertEquals("[$name] feeds", e.list("feeds"), parsed.feeds)
                 assertEquals("[$name] follows", e.list("follows"), parsed.follows)
+                assertEquals("[$name] replies", e.str("replies"), parsed.replies)
             }
             count++
         }
         assertTrue(count >= 12)
+    }
+
+    /** PROTOCOL §6.2 — the shared `comment` vectors: parseComment / serialiseComment. */
+    @Test
+    fun commentVectors() {
+        val block = vectors.getValue("comment").jsonObject
+        for (case in block.getValue("parse").jsonArray) {
+            val c = case.jsonObject
+            val input = c.getValue("in").jsonPrimitive.contentOrNull.orEmpty()
+            val out = c["out"]
+            val parsed = CommentFormat.parse(input)
+            if (out == null || out is JsonNull) {
+                assertNull("[$input] expected null", parsed)
+            } else {
+                assertNotNull("[$input] expected a comment", parsed)
+                val e = out.jsonObject
+                assertEquals("[$input] target", e.getValue("target").jsonPrimitive.contentOrNull, parsed!!.target)
+                assertEquals("[$input] body", e.getValue("body").jsonPrimitive.contentOrNull, parsed.body)
+            }
+        }
+        for (case in block.getValue("serialise").jsonArray) {
+            val c = case.jsonObject
+            val target = c.getValue("target").jsonPrimitive.contentOrNull.orEmpty()
+            val body = c.getValue("body").jsonPrimitive.contentOrNull.orEmpty()
+            assertEquals(c.getValue("out").jsonPrimitive.contentOrNull, CommentFormat.serialise(target, body))
+            // Round trip: a serialised comment parses back to the same pointer.
+            val reparsed = CommentFormat.parse(CommentFormat.serialise(target, body))
+            assertEquals(target, reparsed?.target)
+            assertEquals(body, reparsed?.body)
+        }
     }
 
     @Test

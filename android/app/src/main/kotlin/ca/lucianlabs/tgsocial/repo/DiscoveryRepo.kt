@@ -51,9 +51,9 @@ class DiscoveryRepo(private val tg: TelegramClient, private val nodes: NodeRepo)
     suspend fun directory(exclude: Set<String>): List<NodeEntry> {
         val found = LinkedHashMap<String, NodeSnapshot>()
         // Username prefix.
-        val hits = tg.client.searchPublicChats(query = PREFIX).orNull()?.chatIds ?: LongArray(0)
+        val hits = tg.callOrNull { searchPublicChats(query = PREFIX) }?.chatIds ?: LongArray(0)
         for (id in hits) {
-            val chat = tg.client.getChat(chatId = id).orNull() ?: continue
+            val chat = tg.callOrNull { getChat(chatId = id) } ?: continue
             if (!chat.isChannel) continue
             val snap = runCatching { nodes.read(chat) }.getOrNull() ?: continue
             if (snap.username.isBlank()) continue
@@ -61,13 +61,13 @@ class DiscoveryRepo(private val tg: TelegramClient, private val nodes: NodeRepo)
             if (snap.card != null) { nodes.put(snap); found[Username.key(snap.username)] = snap }
         }
         // Index group.
-        val group = tg.client.searchPublicChat(username = INDEX_GROUP).orNull()
+        val group = tg.callOrNull { searchPublicChat(username = INDEX_GROUP) }
         if (group != null) {
             val msgs = ArrayList<dev.g000sha256.tdl.dto.Message>()
             var from = 0L
             var rounds = 0
             while (msgs.size < 200 && rounds++ < 8) {
-                val batch = tg.client.getChatHistory(chatId = group.id, fromMessageId = from, offset = 0, limit = 100, onlyLocal = false).orNull()?.messages?.filterNotNull().orEmpty()
+                val batch = tg.callOrNull { getChatHistory(chatId = group.id, fromMessageId = from, offset = 0, limit = 100, onlyLocal = false) }?.messages?.filterNotNull().orEmpty()
                 if (batch.isEmpty()) break
                 msgs += batch
                 from = batch.last().id

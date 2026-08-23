@@ -9,14 +9,30 @@
         "bio": "Staff product architect. Software, music, voice.",
         "link": "https://elijahlucian.ca",
         "public": true,
-        "feeds": ["waveloop_devlog", "tresbuchet"],
-        "follows": ["tgs_ana", "tgs_bob", "tgs_carol"]
+        "feeds": [
+          "waveloop_devlog",
+          "tresbuchet"
+        ],
+        "follows": [
+          "tgs_ana",
+          "tgs_bob",
+          "tgs_carol"
+        ],
+        "replies": null
       }
     },
     {
       "name": "minimal card",
       "text": "tgsocial v1",
-      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": [] }
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      }
     },
     {
       "name": "not a card — wrong marker",
@@ -37,37 +53,137 @@
     {
       "name": "whitespace around colon, CRLF endings, trailing spaces",
       "text": "tgsocial v1\r\nname :  Ana Iliovic  \r\nfeeds:@ana_notes   @thevii_dev \r\n",
-      "expect": { "name": "Ana Iliovic", "bio": null, "link": null, "public": true, "feeds": ["ana_notes", "thevii_dev"], "follows": [] }
+      "expect": {
+        "name": "Ana Iliovic",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "ana_notes",
+          "thevii_dev"
+        ],
+        "follows": [],
+        "replies": null
+      }
     },
     {
       "name": "repeated key concatenates",
       "text": "tgsocial v1\nfollows: @tgs_a @tgs_b\nfollows: @tgs_c",
-      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": ["tgs_a", "tgs_b", "tgs_c"] }
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [
+          "tgs_a",
+          "tgs_b",
+          "tgs_c"
+        ],
+        "replies": null
+      }
     },
     {
       "name": "unknown keys ignored, keys are case-insensitive, values keep case",
       "text": "tgsocial v1\nName: Bob\ncolour: blue\nFEEDS: @Bob_Feed",
-      "expect": { "name": "Bob", "bio": null, "link": null, "public": true, "feeds": ["Bob_Feed"], "follows": [] }
+      "expect": {
+        "name": "Bob",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "Bob_Feed"
+        ],
+        "follows": [],
+        "replies": null
+      }
     },
     {
       "name": "public no",
       "text": "tgsocial v1\npublic: no",
-      "expect": { "name": null, "bio": null, "link": null, "public": false, "feeds": [], "follows": [] }
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": false,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      }
     },
     {
       "name": "invalid usernames dropped (too short, leading digit, bad chars, missing @), duplicates removed",
       "text": "tgsocial v1\nfollows: @abcd @1abcde @tgs_ok @tgs_ok @bad-name tgs_noat @tgs_ok2",
-      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": ["tgs_ok", "tgs_ok2"] }
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [
+          "tgs_ok",
+          "tgs_ok2"
+        ],
+        "replies": null
+      }
     },
     {
       "name": "telegram link form accepted as username",
       "text": "tgsocial v1\nfeeds: https://t.me/waveloop_devlog t.me/tresbuchet @third_feed",
-      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": ["waveloop_devlog", "tresbuchet", "third_feed"], "follows": [] }
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog",
+          "tresbuchet",
+          "third_feed"
+        ],
+        "follows": [],
+        "replies": null
+      }
     },
     {
       "name": "bio with colon inside value",
       "text": "tgsocial v1\nbio: Music: loud. Code: quiet.",
-      "expect": { "name": null, "bio": "Music: loud. Code: quiet.", "link": null, "public": true, "feeds": [], "follows": [] }
+      "expect": {
+        "name": null,
+        "bio": "Music: loud. Code: quiet.",
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      }
+    },
+    {
+      "name": "replies key",
+      "text": "tgsocial v1\nname: Elijah\nreplies: @tgs_elijah_r\nfeeds: @waveloop_devlog",
+      "expect": {
+        "name": "Elijah",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog"
+        ],
+        "follows": [],
+        "replies": "tgs_elijah_r"
+      }
+    },
+    {
+      "name": "invalid replies dropped",
+      "text": "tgsocial v1\nreplies: @bad-name",
+      "expect": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      }
     }
   ],
   "serialise": [
@@ -78,67 +194,229 @@
         "bio": "Staff product architect.",
         "link": "https://elijahlucian.ca",
         "public": true,
-        "feeds": ["waveloop_devlog", "tresbuchet"],
-        "follows": ["tgs_ana", "tgs_bob"]
+        "feeds": [
+          "waveloop_devlog",
+          "tresbuchet"
+        ],
+        "follows": [
+          "tgs_ana",
+          "tgs_bob"
+        ],
+        "replies": null
       },
       "expect": "tgsocial v1\nname: Elijah Lucian\nbio: Staff product architect.\nlink: https://elijahlucian.ca\npublic: yes\nfeeds: @waveloop_devlog @tresbuchet\nfollows: @tgs_ana @tgs_bob"
     },
     {
       "name": "empty optionals omitted, public no kept, empty lists omitted",
-      "card": { "name": "Bob", "bio": null, "link": "", "public": false, "feeds": [], "follows": [] },
+      "card": {
+        "name": "Bob",
+        "bio": null,
+        "link": "",
+        "public": false,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      },
       "expect": "tgsocial v1\nname: Bob\npublic: no"
     },
     {
       "name": "round trip preserves username casing",
-      "card": { "name": null, "bio": null, "link": null, "public": true, "feeds": ["Bob_Feed"], "follows": [] },
+      "card": {
+        "name": null,
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "Bob_Feed"
+        ],
+        "follows": [],
+        "replies": null
+      },
       "expect": "tgsocial v1\npublic: yes\nfeeds: @Bob_Feed"
+    },
+    {
+      "name": "replies serialised last",
+      "card": {
+        "name": "Elijah",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog"
+        ],
+        "follows": [
+          "tgs_ana"
+        ],
+        "replies": "tgs_elijah_r"
+      },
+      "expect": "tgsocial v1\nname: Elijah\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r"
     }
   ],
   "username": {
     "$comment": "normalise(input) → username without @ or null",
     "cases": [
-      { "in": "@tgs_elijah", "out": "tgs_elijah" },
-      { "in": "tgs_elijah", "out": "tgs_elijah" },
-      { "in": "https://t.me/tgs_elijah", "out": "tgs_elijah" },
-      { "in": "t.me/tgs_elijah/", "out": "tgs_elijah" },
-      { "in": "@abcd", "out": null },
-      { "in": "@1abcde", "out": null },
-      { "in": "@has-dash", "out": null },
-      { "in": "@this_username_is_far_too_long_for_tg", "out": null },
-      { "in": "  @Spaced  ", "out": "Spaced" }
+      {
+        "in": "@tgs_elijah",
+        "out": "tgs_elijah"
+      },
+      {
+        "in": "tgs_elijah",
+        "out": "tgs_elijah"
+      },
+      {
+        "in": "https://t.me/tgs_elijah",
+        "out": "tgs_elijah"
+      },
+      {
+        "in": "t.me/tgs_elijah/",
+        "out": "tgs_elijah"
+      },
+      {
+        "in": "@abcd",
+        "out": null
+      },
+      {
+        "in": "@1abcde",
+        "out": null
+      },
+      {
+        "in": "@has-dash",
+        "out": null
+      },
+      {
+        "in": "@this_username_is_far_too_long_for_tg",
+        "out": null
+      },
+      {
+        "in": "  @Spaced  ",
+        "out": "Spaced"
+      }
     ]
   },
   "deepLink": {
     "$comment": "t.me post link from TDLib message id: serverId = id >> 20",
     "cases": [
-      { "username": "waveloop_devlog", "messageId": 1048576, "out": "https://t.me/waveloop_devlog/1" },
-      { "username": "waveloop_devlog", "messageId": 150994944, "out": "https://t.me/waveloop_devlog/144" }
+      {
+        "username": "waveloop_devlog",
+        "messageId": 1048576,
+        "out": "https://t.me/waveloop_devlog/1"
+      },
+      {
+        "username": "waveloop_devlog",
+        "messageId": 150994944,
+        "out": "https://t.me/waveloop_devlog/144"
+      }
     ]
   },
   "backlink": {
     "$comment": "feed description contains `tgsocial: @node` → verified for that node (case-insensitive)",
     "cases": [
-      { "description": "Notes from the bench · tgsocial: @tgs_elijah", "node": "tgs_elijah", "out": true },
-      { "description": "tgsocial: @TGS_Elijah", "node": "tgs_elijah", "out": true },
-      { "description": "tgsocial: @tgs_elijah2", "node": "tgs_elijah", "out": false },
-      { "description": "no backlink here", "node": "tgs_elijah", "out": false }
+      {
+        "description": "Notes from the bench · tgsocial: @tgs_elijah",
+        "node": "tgs_elijah",
+        "out": true
+      },
+      {
+        "description": "tgsocial: @TGS_Elijah",
+        "node": "tgs_elijah",
+        "out": true
+      },
+      {
+        "description": "tgsocial: @tgs_elijah2",
+        "node": "tgs_elijah",
+        "out": false
+      },
+      {
+        "description": "no backlink here",
+        "node": "tgs_elijah",
+        "out": false
+      }
     ]
   },
   "timeFormat": {
     "$comment": "relative to now = 2026-08-23T14:30:00 local. HH:mm today, 'Mon d' this year, 'yyyy-MM-dd' otherwise",
     "cases": [
-      { "date": "2026-08-23T14:02:00", "out": "14:02" },
-      { "date": "2026-08-20T09:15:00", "out": "Aug 20" },
-      { "date": "2025-12-31T23:59:00", "out": "2025-12-31" }
+      {
+        "date": "2026-08-23T14:02:00",
+        "out": "14:02"
+      },
+      {
+        "date": "2026-08-20T09:15:00",
+        "out": "Aug 20"
+      },
+      {
+        "date": "2025-12-31T23:59:00",
+        "out": "2025-12-31"
+      }
     ]
   },
   "compactCount": {
     "cases": [
-      { "in": 0, "out": "0" },
-      { "in": 999, "out": "999" },
-      { "in": 1200, "out": "1.2k" },
-      { "in": 15000, "out": "15k" },
-      { "in": 2400000, "out": "2.4m" }
+      {
+        "in": 0,
+        "out": "0"
+      },
+      {
+        "in": 999,
+        "out": "999"
+      },
+      {
+        "in": 1200,
+        "out": "1.2k"
+      },
+      {
+        "in": 15000,
+        "out": "15k"
+      },
+      {
+        "in": 2400000,
+        "out": "2.4m"
+      }
+    ]
+  },
+  "comment": {
+    "$comment": "PROTOCOL §6.2 — parseComment(text) → {target, body} or null; serialiseComment(target, body) → text",
+    "parse": [
+      {
+        "in": "re: https://t.me/waveloop_devlog/144\nNice one. The bass is huge.",
+        "out": {
+          "target": "https://t.me/waveloop_devlog/144",
+          "body": "Nice one. The bass is huge."
+        }
+      },
+      {
+        "in": "re: https://t.me/tgs_ana_r/12\nAgreed.",
+        "out": {
+          "target": "https://t.me/tgs_ana_r/12",
+          "body": "Agreed."
+        }
+      },
+      {
+        "in": "re: https://t.me/waveloop_devlog/144",
+        "out": {
+          "target": "https://t.me/waveloop_devlog/144",
+          "body": ""
+        }
+      },
+      {
+        "in": "just a channel post",
+        "out": null
+      },
+      {
+        "in": "re:https://t.me/waveloop_devlog/144\nno space after colon",
+        "out": null
+      },
+      {
+        "in": "re: not-a-link\nbody",
+        "out": null
+      }
+    ],
+    "serialise": [
+      {
+        "target": "https://t.me/waveloop_devlog/144",
+        "body": "Nice one.",
+        "out": "re: https://t.me/waveloop_devlog/144\nNice one."
+      }
     ]
   }
 }

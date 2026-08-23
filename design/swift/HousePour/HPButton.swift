@@ -2,7 +2,9 @@
 
 import SwiftUI
 
-public enum HPButtonStyle: Equatable { case primary, accent, neutral, ghost, danger }
+/// `ghostOnInk` is the ghost variant for the two dark surfaces (toast, full-screen viewer):
+/// charcoalText, no fill, no border.
+public enum HPButtonStyle: Equatable { case primary, accent, neutral, ghost, danger, ghostOnInk }
 public enum HPButtonSize: Equatable { case regular, small }
 
 /// Pill button. Full width by default; `.small` hugs content. One `primary` per screen.
@@ -46,6 +48,7 @@ public struct HPButton: View {
         case .neutral: return HPTokens.Colors.ink
         case .ghost: return HPTokens.Colors.muted
         case .danger: return HPTokens.Colors.bad
+        case .ghostOnInk: return HPTokens.Colors.charcoalText
         }
     }
 
@@ -63,7 +66,7 @@ public struct HPButton: View {
                 .hpShadow(HPTokens.Shadow.charcoalButton, shape: shape, fill: HPTokens.Colors.charcoalGradientEnd)
         case .danger:
             shape.fill(HPTokens.Colors.bad.opacity(HPAlpha.dangerFill))
-        case .neutral, .ghost:
+        case .neutral, .ghost, .ghostOnInk:
             shape.fill(Color.clear)
         }
     }

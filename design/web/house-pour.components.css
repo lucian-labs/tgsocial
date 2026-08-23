@@ -166,3 +166,414 @@ h3 .mark-count {
   margin: 0;
   box-shadow: var(--shadow-contact), var(--shadow-cast-modal);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Media kit (PRODUCT §2.11): HPFloatingTabs, HPNowPlaying, HPPlayerRow,
+   HPScrubber, HPRing, HPViewer, HPMedia blur-up. Geometry constants below are
+   the PRODUCT.md numbers (12pt knob, 96% ink) — everything else is a token.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* PRODUCT §2.11: 12pt scrubber knob; waveform bar geometry */
+  --scrubber-knob: 12px;
+  --wave-bar: 2px;
+  /* blur radius for the minithumbnail underlay */
+  --media-blur: 16px;
+  /* the viewer is ink at 96% — the one other dark surface */
+  --viewer-bg: color-mix(in srgb, var(--ink) 96%, transparent);
+  /* text on the viewer: charcoal-button text when the app tokens are loaded, ivory otherwise */
+  --viewer-text: var(--hp-color-charcoal-text, var(--bg));
+}
+
+/* ── HPToast over the floating dock ──────────────────────────────────────── */
+
+/* The toast is not interactive and now shares the bottom edge with the
+   floating tab bar: it must never swallow taps meant for the dock under it
+   (it lingers invisible at opacity 0), so it rises above the pill. */
+.toast {
+  pointer-events: none;
+  bottom: calc(var(--space-card-gap) * 2 + var(--space-touch-min) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ── HPFloatingTabs: the .tabs pill floating over content ────────────────── */
+
+/* The dock is the fixed bottom layer: now-playing row stacked over the tabs
+   pill, centred, cardGap above the safe-area bottom. It swallows no taps of
+   its own (pointer-events pass through beside the pills). */
+.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--space-card-gap) + env(safe-area-inset-bottom, 0px));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--space-card-gap) / 2);
+  padding: 0 var(--space-column-side);
+  pointer-events: none;
+}
+.dock[hidden] { display: none; }
+.dock > * { pointer-events: auto; }
+
+/* Same .tabs component, floated: panel fill, 1pt line, pill radius, the one
+   card shadow; hugs its content with equal-width items. */
+.tabs.floating {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  margin: 0;
+  max-width: 100%;
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+.tabs.floating button {
+  padding-left: var(--space-row-pad);
+  padding-right: var(--space-row-pad);
+  white-space: nowrap;
+}
+
+/* ── HPNowPlaying ────────────────────────────────────────────────────────── */
+
+.now-playing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-row-pad);
+  max-width: 100%;
+  min-height: var(--space-touch-min);
+  padding: calc(var(--space-card-gap) / 4) calc(var(--space-card-gap) / 4) calc(var(--space-card-gap) / 4) var(--space-row-pad);
+  flex-direction: row-reverse;
+  border: var(--border-width) solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.now-playing .player-btn { order: -1; }
+.now-playing-title {
+  font: var(--type-small);
+  color: var(--ink);
+  min-width: 0;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* ── HPPlayerRow ─────────────────────────────────────────────────────────── */
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: var(--space-row-pad);
+  min-width: 0;
+}
+.player.busy .player-btn { opacity: 0.45; }
+.player-main { flex: 1; min-width: 0; }
+.player-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-row-pad);
+}
+.player-title {
+  font: var(--type-body);
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-sub {
+  font: var(--type-mono-small);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-times { flex: none; display: inline-flex; align-items: baseline; gap: calc(var(--space-card-gap) / 4); }
+
+/* Serif numerals: the one trick of the look (PRODUCT §2.11) */
+.player-time {
+  font: var(--type-totals);
+  letter-spacing: 0;
+  font-variant-numeric: lining-nums tabular-nums;
+  color: var(--ink);
+}
+.player-sep, .player-total { color: var(--muted); }
+
+/* The 40pt play/pause circle, stepper style */
+.player-btn {
+  appearance: none;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-touch-min);
+  height: var(--space-touch-min);
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: var(--border-width) solid var(--line-2);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--motion-color) ease, background var(--motion-color) ease;
+}
+.player-btn:active { background: var(--accent-soft); border-color: var(--accent); }
+.player-btn:disabled { opacity: 0.45; cursor: default; }
+.player-btn .icon { width: calc(var(--space-touch-min) / 2.5); height: calc(var(--space-touch-min) / 2.5); }
+
+/* ── HPScrubber: hairline track, gold played, 12pt panel knob ────────────── */
+
+/* The box is a full 40pt hit target; negative margins keep the visual rhythm
+   of a hairline (the overlap above is non-interactive text). */
+.scrubber {
+  position: relative;
+  width: 100%;
+  height: var(--space-touch-min);
+  margin: calc((var(--scrubber-knob) - var(--space-touch-min)) / 2) 0;
+  cursor: pointer;
+  touch-action: none;
+}
+.scrubber-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--border-width);
+  background: var(--line-2);
+}
+.scrubber-played {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+.scrubber-knob {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: var(--scrubber-knob);
+  height: var(--scrubber-knob);
+  margin: calc(var(--scrubber-knob) / -2) 0 0 calc(var(--scrubber-knob) / -2);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow-contact);
+}
+
+/* ── waveform (voice): ink bars, gold played ─────────────────────────────── */
+
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: var(--wave-bar);
+  height: calc(var(--space-touch-min) - var(--scrubber-knob));
+  margin-top: calc(var(--space-card-gap) / 4);
+  cursor: pointer;
+  touch-action: none;
+}
+.waveform i {
+  flex: 1;
+  min-width: var(--wave-bar);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+}
+.waveform i.played { background: var(--accent); }
+
+/* ── HPRing: determinate gold download progress, tap to cancel ───────────── */
+
+.ring {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+.ring svg {
+  width: var(--space-touch-min);
+  height: var(--space-touch-min);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  box-shadow: var(--shadow-contact);
+}
+.ring-track { fill: none; stroke: var(--line-2); stroke-width: calc(2 * var(--border-width)); }
+.ring-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: calc(2 * var(--border-width));
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+/* ── HPMedia blur-up + inline players ────────────────────────────────────── */
+
+.media-mini {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(var(--media-blur));
+  transform: scale(1.1); /* hide blur edge bleed */
+}
+.media > img:not(.media-mini) {
+  position: relative;
+  opacity: 0;
+  transition: opacity var(--motion-color) ease;
+}
+.media.loaded > img:not(.media-mini) { opacity: 1; }
+.media video {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Centred play affordance over a video poster */
+.media-play {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.media-play .disc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space-touch-min) + var(--space-card-gap));
+  height: calc(var(--space-touch-min) + var(--space-card-gap));
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  box-shadow: var(--shadow-contact);
+}
+.media-play .icon { width: calc(var(--space-touch-min) / 2); height: calc(var(--space-touch-min) / 2); }
+
+/* Minimal transport docked inside the media box (system chrome stays hidden) */
+.media-controls {
+  position: absolute;
+  left: var(--space-row-pad);
+  right: var(--space-row-pad);
+  bottom: var(--space-row-pad);
+  display: flex;
+  align-items: center;
+  gap: var(--space-row-pad);
+  padding: 0 var(--space-row-pad);
+  border-radius: var(--radius-pill);
+  border: var(--border-width) solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: var(--shadow-contact);
+}
+.media-controls .scrubber { flex: 1; margin: 0; }
+.media-controls .player-time { font-size: 1rem; }
+.media-controls .player-btn { border-color: transparent; background: transparent; width: var(--space-touch-min); }
+
+/* ── HPViewer: ink at 96%, the one other dark surface ────────────────────── */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--viewer-bg);
+  color: var(--viewer-text);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.viewer-chrome {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-row-pad);
+  padding: calc(env(safe-area-inset-top, 0px) + var(--space-card-gap) / 2) var(--space-column-side) calc(var(--space-card-gap) / 2);
+}
+.viewer .btn.ghost { color: var(--viewer-text); width: auto; }
+.viewer .btn.ghost:hover { color: var(--viewer-text); }
+.viewer-counter {
+  font: var(--type-totals);
+  letter-spacing: 0;
+  font-variant-numeric: lining-nums;
+  color: var(--viewer-text);
+}
+.viewer-counter:empty { visibility: hidden; }
+.viewer-actions { display: flex; align-items: center; gap: calc(var(--space-card-gap) / 4); }
+.viewer-stage {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
+.viewer-slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-column-side);
+}
+.viewer-slide img,
+.viewer-slide video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-media);
+}
+.viewer-slide iframe.viewer-doc {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius-media);
+  background: var(--panel);
+}
+.viewer-slide .viewer-textdoc {
+  width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-mono-small, 0.8rem);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: var(--radius-media);
+  padding: var(--space-card-pad);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.viewer-slide .player { width: 100%; }
+.viewer-slide .player .player-title,
+.viewer-slide .player .player-time { color: var(--viewer-text); }
+/* waveform bars paint with background, not color — ink bars would vanish on the ink viewer */
+.viewer-slide .player .waveform i:not(.played) { background: var(--viewer-text); }
+.viewer-caption {
+  flex: none;
+  max-height: 30vh;
+  overflow-y: auto;
+  padding: 0 var(--space-card-pad) calc(env(safe-area-inset-bottom, 0px) + var(--space-card-gap));
+  font: var(--type-body);
+  text-align: center;
+  color: var(--viewer-text);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.viewer-caption:empty { display: none; }
+.viewer .ring { position: static; }

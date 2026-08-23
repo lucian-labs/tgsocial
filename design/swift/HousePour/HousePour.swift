@@ -135,6 +135,20 @@ public enum HPMetric {
     public static let codeLength: Int = 5
     /// HPTabs label minimum scale before truncation (keeps four segments on one line at 1.4x Dynamic Type).
     public static let tabLabelMinScale: CGFloat = 0.8
+    /// HPScrubber knob (PRODUCT §2.11: "a 12pt panel knob with the contact shadow").
+    public static let scrubberKnob: CGFloat = 12
+    /// HPWaveform bar geometry and the idle bar height when no samples are known.
+    public static let waveformHeight: CGFloat = 28
+    public static let waveformBar: CGFloat = 2
+    public static let waveformGap: CGFloat = 1
+    public static let waveformIdle: Double = 0.12
+    /// HPPlayGlyph default size inside the 40pt circle.
+    public static let playGlyph: CGFloat = 14
+    /// HPProgressRing: gold ring inset from the circle edge and the stop glyph inside it.
+    public static let ringInset: CGFloat = 3
+    public static let stopGlyph: CGFloat = 10
+    /// HPMedia blur-up radius while the minithumbnail stands in.
+    public static let mediaBlur: CGFloat = 12
 }
 
 // MARK: - Opacity steps used by the kit (documented in COMPONENTS.md)
@@ -157,4 +171,6 @@ public enum HPAlpha {
     public static let modalCast: Double = 1.5
     /// Toast tone lines.
     public static let toastTone: Double = 0.6
+    /// Full-screen viewer backdrop (`ink` at 96%, PRODUCT §2.11).
+    public static let viewerBackdrop: Double = 0.96
 }
