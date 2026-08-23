@@ -250,9 +250,35 @@ screen with no Follow button.
 
 ### 2.6 Feed channel
 
-`‹ Back`, then the channel header (avatar, title h2, `@username` mono,
-description muted, `Open in Telegram` ghost sm, pill `Verified` if backlinked),
-then that channel's posts chronologically using the same post card.
+```
+‹ Back                                          [Synced]
+
+(avatar 72pt)                        [Verified]  ⋮      ← pill top right, then the menu
+WaveLoop devlog                                  (h2)
+@waveloop_devlog                                 (mono muted)
+Notes from the bench.                            (muted)
+─────────────────────────────────────────────
+posts, newest first (§2.3 post cards)
+```
+
+Header layout: the avatar and title block sit left; the top-right corner
+carries the `Verified` gold pill (present only when backlinked, `PROTOCOL
+§3`) and, to its right, a **kebab menu** — a vertical three-dot button,
+40pt target, ghost styling, `faint` dots.
+
+Tapping it opens a House Pour menu: a `panel` card with the card radius, one
+shadow, anchored under the button (a modal sheet on small screens), holding
+one `HPListItem` per action, body text, ink, 40pt rows:
+
+- `Open in Telegram`
+- `Copy Link` (public routes and signed-in alike — copies the
+  `tgsocial.lucianlabs.ca/f/<channel>` URL, toast `Link copied.`)
+
+`Open in Telegram` appears nowhere else in this header. Dismiss by tapping
+outside or pressing Escape (web) / swiping down (native sheet).
+
+Then that channel's posts chronologically (newest first) using the same
+post card as §2.3.
 
 ### 2.7 Graph
 
