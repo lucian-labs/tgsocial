@@ -1,0 +1,144 @@
+{
+  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text.",
+  "parse": [
+    {
+      "name": "full card",
+      "text": "tgsocial v1\nname: Elijah Lucian\nbio: Staff product architect. Software, music, voice.\nlink: https://elijahlucian.ca\npublic: yes\nfeeds: @waveloop_devlog @tresbuchet\nfollows: @tgs_ana @tgs_bob @tgs_carol",
+      "expect": {
+        "name": "Elijah Lucian",
+        "bio": "Staff product architect. Software, music, voice.",
+        "link": "https://elijahlucian.ca",
+        "public": true,
+        "feeds": ["waveloop_devlog", "tresbuchet"],
+        "follows": ["tgs_ana", "tgs_bob", "tgs_carol"]
+      }
+    },
+    {
+      "name": "minimal card",
+      "text": "tgsocial v1",
+      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": [] }
+    },
+    {
+      "name": "not a card — wrong marker",
+      "text": "tgsocial v1 welcome\nname: x",
+      "expect": null
+    },
+    {
+      "name": "not a card — plain message",
+      "text": "Hello everyone, welcome to my channel",
+      "expect": null
+    },
+    {
+      "name": "newer version is recognised as newer, not parsed",
+      "text": "tgsocial v2\nname: Future",
+      "expect": null,
+      "newerVersion": true
+    },
+    {
+      "name": "whitespace around colon, CRLF endings, trailing spaces",
+      "text": "tgsocial v1\r\nname :  Ana Iliovic  \r\nfeeds:@ana_notes   @thevii_dev \r\n",
+      "expect": { "name": "Ana Iliovic", "bio": null, "link": null, "public": true, "feeds": ["ana_notes", "thevii_dev"], "follows": [] }
+    },
+    {
+      "name": "repeated key concatenates",
+      "text": "tgsocial v1\nfollows: @tgs_a @tgs_b\nfollows: @tgs_c",
+      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": ["tgs_a", "tgs_b", "tgs_c"] }
+    },
+    {
+      "name": "unknown keys ignored, keys are case-insensitive, values keep case",
+      "text": "tgsocial v1\nName: Bob\ncolour: blue\nFEEDS: @Bob_Feed",
+      "expect": { "name": "Bob", "bio": null, "link": null, "public": true, "feeds": ["Bob_Feed"], "follows": [] }
+    },
+    {
+      "name": "public no",
+      "text": "tgsocial v1\npublic: no",
+      "expect": { "name": null, "bio": null, "link": null, "public": false, "feeds": [], "follows": [] }
+    },
+    {
+      "name": "invalid usernames dropped (too short, leading digit, bad chars, missing @), duplicates removed",
+      "text": "tgsocial v1\nfollows: @abcd @1abcde @tgs_ok @tgs_ok @bad-name tgs_noat @tgs_ok2",
+      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": [], "follows": ["tgs_ok", "tgs_ok2"] }
+    },
+    {
+      "name": "telegram link form accepted as username",
+      "text": "tgsocial v1\nfeeds: https://t.me/waveloop_devlog t.me/tresbuchet @third_feed",
+      "expect": { "name": null, "bio": null, "link": null, "public": true, "feeds": ["waveloop_devlog", "tresbuchet", "third_feed"], "follows": [] }
+    },
+    {
+      "name": "bio with colon inside value",
+      "text": "tgsocial v1\nbio: Music: loud. Code: quiet.",
+      "expect": { "name": null, "bio": "Music: loud. Code: quiet.", "link": null, "public": true, "feeds": [], "follows": [] }
+    }
+  ],
+  "serialise": [
+    {
+      "name": "full",
+      "card": {
+        "name": "Elijah Lucian",
+        "bio": "Staff product architect.",
+        "link": "https://elijahlucian.ca",
+        "public": true,
+        "feeds": ["waveloop_devlog", "tresbuchet"],
+        "follows": ["tgs_ana", "tgs_bob"]
+      },
+      "expect": "tgsocial v1\nname: Elijah Lucian\nbio: Staff product architect.\nlink: https://elijahlucian.ca\npublic: yes\nfeeds: @waveloop_devlog @tresbuchet\nfollows: @tgs_ana @tgs_bob"
+    },
+    {
+      "name": "empty optionals omitted, public no kept, empty lists omitted",
+      "card": { "name": "Bob", "bio": null, "link": "", "public": false, "feeds": [], "follows": [] },
+      "expect": "tgsocial v1\nname: Bob\npublic: no"
+    },
+    {
+      "name": "round trip preserves username casing",
+      "card": { "name": null, "bio": null, "link": null, "public": true, "feeds": ["Bob_Feed"], "follows": [] },
+      "expect": "tgsocial v1\npublic: yes\nfeeds: @Bob_Feed"
+    }
+  ],
+  "username": {
+    "$comment": "normalise(input) → username without @ or null",
+    "cases": [
+      { "in": "@tgs_elijah", "out": "tgs_elijah" },
+      { "in": "tgs_elijah", "out": "tgs_elijah" },
+      { "in": "https://t.me/tgs_elijah", "out": "tgs_elijah" },
+      { "in": "t.me/tgs_elijah/", "out": "tgs_elijah" },
+      { "in": "@abcd", "out": null },
+      { "in": "@1abcde", "out": null },
+      { "in": "@has-dash", "out": null },
+      { "in": "@this_username_is_far_too_long_for_tg", "out": null },
+      { "in": "  @Spaced  ", "out": "Spaced" }
+    ]
+  },
+  "deepLink": {
+    "$comment": "t.me post link from TDLib message id: serverId = id >> 20",
+    "cases": [
+      { "username": "waveloop_devlog", "messageId": 1048576, "out": "https://t.me/waveloop_devlog/1" },
+      { "username": "waveloop_devlog", "messageId": 150994944, "out": "https://t.me/waveloop_devlog/144" }
+    ]
+  },
+  "backlink": {
+    "$comment": "feed description contains `tgsocial: @node` → verified for that node (case-insensitive)",
+    "cases": [
+      { "description": "Notes from the bench · tgsocial: @tgs_elijah", "node": "tgs_elijah", "out": true },
+      { "description": "tgsocial: @TGS_Elijah", "node": "tgs_elijah", "out": true },
+      { "description": "tgsocial: @tgs_elijah2", "node": "tgs_elijah", "out": false },
+      { "description": "no backlink here", "node": "tgs_elijah", "out": false }
+    ]
+  },
+  "timeFormat": {
+    "$comment": "relative to now = 2026-08-23T14:30:00 local. HH:mm today, 'Mon d' this year, 'yyyy-MM-dd' otherwise",
+    "cases": [
+      { "date": "2026-08-23T14:02:00", "out": "14:02" },
+      { "date": "2026-08-20T09:15:00", "out": "Aug 20" },
+      { "date": "2025-12-31T23:59:00", "out": "2025-12-31" }
+    ]
+  },
+  "compactCount": {
+    "cases": [
+      { "in": 0, "out": "0" },
+      { "in": 999, "out": "999" },
+      { "in": 1200, "out": "1.2k" },
+      { "in": 15000, "out": "15k" },
+      { "in": 2400000, "out": "2.4m" }
+    ]
+  }
+}

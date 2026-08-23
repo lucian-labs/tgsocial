@@ -1,0 +1,26 @@
+# secrets — never commit Telegram api credentials
+ios/Secrets.xcconfig
+android/local.properties
+android/secrets.properties
+web/config.json
+.env
+
+# build output
+ios/build/
+ios/*.xcodeproj/xcuserdata/
+ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+ios/.swiftpm/
+android/.gradle/
+android/build/
+android/app/build/
+android/**/build/
+android/.idea/
+android/*.iml
+android/.kotlin/
+web/node_modules/
+design/node_modules/
+.DS_Store
+*.ipa
+*.xcarchive
+*.apk
+*.aab
