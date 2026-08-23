@@ -6,7 +6,7 @@
  *
  *   swift/HousePour/HousePourTokens.swift   SwiftUI  (Color, Font names, metrics, type ramp)
  *   kotlin/housepour/HousePourTokens.kt     Compose  (Color, metrics, type ramp)
- *   web/house-pour.css                      CSS      (@font-face for vendored fonts + upstream stylesheet)
+ *   web/house-pour.css                      CSS      (@font-face for vendored fonts + upstream stylesheet + house-pour.components.css)
  *
  * Components are NOT generated — each platform keeps a hand-written component
  * library next to its tokens file (see COMPONENTS.md for the shared list and
@@ -130,7 +130,7 @@ ${shadow}
     public enum FontName {
 ${fontNames}
     }
-    public enum Type {
+    public enum \`Type\` {
 ${type}
     }
     public enum Motion {
@@ -254,8 +254,16 @@ function fontFaces(fontDir) {
   return rows.join('\n');
 }
 
+/** rgba() with the alpha multiplied — HPModal's "cast opacity ×1.5". */
+function scaleAlpha(color, k) {
+  const c = parseColor(color);
+  return `rgba(${c.r}, ${c.g}, ${c.b}, ${f3(Math.min(1, c.a * k))})`;
+}
+const shadowCss = (s, color = s.color) => `${s.x}px ${s.y}px ${s.blur}px ${s.spread ?? 0}px ${color}`;
+
 async function css() {
   const base = await readFile(join(root, 'web', 'house-pour.base.css'), 'utf8');
+  const components = await readFile(join(root, 'web', 'house-pour.components.css'), 'utf8');
   const typeVars = Object.entries(T.type)
     .filter(([k]) => !k.startsWith('$'))
     .map(([k, s]) => `  --type-${kebab(k)}: ${s.weight} ${s.size / 16}rem/${s.lineHeight} var(--font-${s.face});`)
@@ -267,21 +275,32 @@ ${fontFaces('fonts')}
 
 /* Type ramp as shorthand vars (weight size/line-height face) — the upstream
    stylesheet sets these on elements; the vars exist so app CSS can reuse a
-   role without restating numbers. */
+   role without restating numbers. The space/shadow vars below are the tokens
+   the kit's own components (house-pour.components.css) need beyond upstream. */
 :root {
 ${typeVars}
   --space-card-pad: ${T.space.cardPad}px;
   --space-card-gap: ${T.space.cardGap}px;
   --space-column-max: ${T.space.columnMax}px;
   --space-column-side: ${T.space.columnSide}px;
+  --space-row-pad: ${T.space.rowPad}px;
+  --space-touch-min: ${T.space.touchMin}px;
+  --space-avatar-row: ${T.space.avatarRow}px;
+  --space-avatar-profile: ${T.space.avatarProfile}px;
   --radius-input: ${T.radius.input}px;
   --radius-media: ${T.radius.media}px;
+  --border-width: ${T.border.width}px;
+  --shadow-contact: ${shadowCss(T.shadow.contact)};
+  --shadow-cast: ${shadowCss(T.shadow.cast)};
+  --shadow-cast-modal: ${shadowCss(T.shadow.cast, scaleAlpha(T.shadow.cast.color, 1.5))};
   --scrim: ${T.color.scrim};
   --motion-color: ${T.motion.colorMs}ms;
   --motion-toast: ${T.motion.toastMs}ms;
 }
 
-${base}`;
+${base}
+
+${components}`;
 }
 function kebab(s) { return s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase(); }
 

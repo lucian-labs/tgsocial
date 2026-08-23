@@ -55,7 +55,8 @@
 
 /* Type ramp as shorthand vars (weight size/line-height face) — the upstream
    stylesheet sets these on elements; the vars exist so app CSS can reuse a
-   role without restating numbers. */
+   role without restating numbers. The space/shadow vars below are the tokens
+   the kit's own components (house-pour.components.css) need beyond upstream. */
 :root {
   --type-wordmark: 400 3rem/1.05 var(--font-brand);
   --type-brand: 400 1.7rem/1 var(--font-brand);
@@ -81,8 +82,16 @@
   --space-card-gap: 16px;
   --space-column-max: 540px;
   --space-column-side: 14px;
+  --space-row-pad: 14px;
+  --space-touch-min: 40px;
+  --space-avatar-row: 36px;
+  --space-avatar-profile: 72px;
   --radius-input: 12px;
   --radius-media: 12px;
+  --border-width: 1px;
+  --shadow-contact: 0px 1px 2px 0px rgba(38, 35, 25, 0.04);
+  --shadow-cast: 0px 14px 34px -18px rgba(38, 35, 25, 0.18);
+  --shadow-cast-modal: 0px 14px 34px -18px rgba(38, 35, 25, 0.27);
   --scrim: rgba(38, 35, 25, 0.4);
   --motion-color: 150ms;
   --motion-toast: 200ms;
@@ -516,4 +525,174 @@ label.field {
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HOUSE POUR — kit components beyond the upstream stylesheet (COMPONENTS.md)
+   Hand-written; concatenated after house-pour.base.css by ../build.mjs.
+   Every value is a var(--token) from the upstream :root or the generated
+   :root above it. The only literals are the HPToggle geometry COMPONENTS.md
+   specifies outside tokens.json.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* COMPONENTS.md HPToggle: 44×26 track, 22 knob */
+  --toggle-w: 44px;
+  --toggle-h: 26px;
+  --toggle-knob: 22px;
+}
+
+/* ── rule 6: 40pt minimum hit target on every interactive element ────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--space-touch-min);
+}
+.tabs button { min-height: var(--space-touch-min); }
+.topbar .brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+  text-decoration: none;
+}
+
+/* ── HPButton ghost: transparent, muted, no border (neutral is the outline) ─ */
+
+.btn.ghost { border-color: transparent; }
+
+/* ── rule 5: no system chrome on kit inputs (search cancel, iOS inset) ─────── */
+
+input:not([type='checkbox']):not([type='radio']),
+textarea {
+  appearance: none;
+  -webkit-appearance: none;
+}
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-decoration,
+input[type='search']::-webkit-search-results-button,
+input[type='search']::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  display: none;
+}
+textarea { resize: none; }
+
+/* ── HPTextField wrapper (house-pour.js field()) ─────────────────────────── */
+
+.field-wrap { display: block; }
+
+/* ── HPSmall / HPMono small ──────────────────────────────────────────────── */
+
+.small { font: var(--type-small); color: var(--muted); }
+.mono-small { font: var(--type-mono-small); color: var(--muted); }
+
+/* ── HPSectionMark count: the figure in the serif ────────────────────────── */
+
+h3 .mark-count {
+  font: var(--type-totals);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  font-variant-numeric: lining-nums;
+}
+
+/* ── HPAvatar ────────────────────────────────────────────────────────────── */
+
+.avatar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--bg-2);
+  border: var(--border-width) solid var(--line);
+  color: var(--muted);
+  overflow: hidden;
+  user-select: none;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar.row { width: var(--space-avatar-row); height: var(--space-avatar-row); font: var(--type-h2); }
+.avatar.profile { width: var(--space-avatar-profile); height: var(--space-avatar-profile); font: var(--type-h1); }
+
+/* ── HPMedia ─────────────────────────────────────────────────────────────── */
+
+.media {
+  display: block;
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-media);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.media img { display: block; width: 100%; height: auto; }
+
+/* ── HPToggle ────────────────────────────────────────────────────────────── */
+
+/* The button is the 44×40 hit box (rule 6); the 44×26 track and 22 knob are
+   drawn inside it, so nothing but the switch is painted. */
+.toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  position: relative;
+  width: var(--toggle-w);
+  height: var(--space-touch-min);
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.toggle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc((var(--space-touch-min) - var(--toggle-h)) / 2);
+  width: var(--toggle-w);
+  height: var(--toggle-h);
+  border-radius: var(--radius-pill);
+  border: var(--border-width) solid var(--line-2);
+  background: var(--bg-2);
+  transition: background var(--motion-color) ease, border-color var(--motion-color) ease, box-shadow var(--motion-color) ease;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: calc((var(--space-touch-min) - var(--toggle-knob)) / 2);
+  left: calc(2 * var(--border-width));
+  width: var(--toggle-knob);
+  height: var(--toggle-knob);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow-contact);
+  transition: left var(--motion-color) ease;
+}
+.toggle[aria-checked='true']::before { background: var(--accent-soft); border-color: var(--accent); }
+.toggle[aria-checked='true']::after { left: calc(var(--toggle-w) - var(--toggle-knob) - 2 * var(--border-width)); }
+.toggle:disabled { opacity: 0.45; cursor: default; }
+
+/* ── HPModal ─────────────────────────────────────────────────────────────── */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-column-side);
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--motion-toast) ease;
+}
+.modal-scrim.show { opacity: 1; }
+.modal-card {
+  width: 100%;
+  max-width: calc(var(--space-column-max) - 2 * var(--space-column-side));
+  max-height: calc(100vh - 2 * var(--space-column-side));
+  overflow-y: auto;
+  margin: 0;
+  box-shadow: var(--shadow-contact), var(--shadow-cast-modal);
 }

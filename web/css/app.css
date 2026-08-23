@@ -1,0 +1,311 @@
+/* tgsocial — product-level composites on top of House Pour.
+ *
+ * Only var(--token) values (upstream vars from vendor/house-pour.css and the
+ * --hp-* supplement in css/tokens.css). Kit components (avatar, toggle,
+ * modal, media, section-mark count …) are styled by the kit itself; this
+ * file holds product composites only. The :root block below holds the few
+ * product constants PRODUCT.md / COMPONENTS.md specify outside the brand
+ * tokens (graph dot sizes, the topbar blur); everything else is a brand token.
+ */
+
+:root {
+  /* COMPONENTS.md HPTopbar: backdrop blur 14 */
+  --app-topbar-blur: 14px;
+  /* PRODUCT.md §2.7 graph: you 10, follows 8, +1 6 */
+  --app-graph-dot-you: 10px;
+  --app-graph-dot-follow: 8px;
+  --app-graph-dot-plus: 6px;
+  /* upstream input focus ring is 3px accent-soft; buttons/links share it */
+  --app-focus-ring: 3px;
+  /* PRODUCT.md §2.9 compose textarea rows */
+  --app-compose-rows: 6;
+  /* chevron glyph size in list rows — uses the h2 step of the ramp */
+  --app-chevron-size: var(--hp-type-h2-size);
+}
+
+/* ── focus (visible on web, per PRODUCT §4) ──────────────────────────────── */
+
+:focus-visible {
+  outline: var(--hp-border-width) solid var(--accent);
+  outline-offset: var(--hp-border-width);
+  box-shadow: 0 0 0 var(--app-focus-ring) var(--accent-soft);
+}
+.btn:focus-visible,
+.tabs button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--app-focus-ring) var(--accent-soft), inset 0 0 0 var(--hp-border-width) var(--accent);
+}
+/* cards keep their one shadow (COMPONENTS rule 3); the outline alone marks focus */
+.card:focus-visible { box-shadow: var(--shadow); }
+/* the toggle's hit box is transparent — ring the drawn track instead */
+.toggle:focus-visible { outline: none; box-shadow: none; }
+.toggle:focus-visible::before { border-color: var(--accent); box-shadow: 0 0 0 var(--app-focus-ring) var(--accent-soft); }
+
+/* ── shell ───────────────────────────────────────────────────────────────── */
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 calc(-1 * var(--space-column-side)) var(--hp-space-topbar-bottom);
+  background: var(--hp-color-topbar-bg);
+  backdrop-filter: blur(var(--app-topbar-blur));
+  -webkit-backdrop-filter: blur(var(--app-topbar-blur));
+  border-bottom: var(--hp-border-width) solid var(--line);
+}
+.head .topbar {
+  position: static;
+  margin: 0;
+  border-bottom: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  min-height: calc(var(--hp-space-touch-min) + 2 * var(--hp-space-topbar-y));
+}
+.head .tabs {
+  margin: 0 var(--space-column-side) var(--hp-space-topbar-y);
+}
+.head[data-tabs='off'] .tabs { display: none; }
+
+.topbar-lead { display: flex; align-items: center; min-height: var(--hp-space-touch-min); }
+
+.status { white-space: nowrap; }
+
+/* rows of small controls under the tabs (Refresh) */
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--hp-space-btn-row-gap);
+  margin: 0 0 var(--hp-space-card-gap);
+}
+
+.view { min-height: 50vh; }
+/* buttons that sit directly in the column stack with the card gap */
+.view > .btn, .view > div > .btn { margin-bottom: var(--hp-space-card-gap); }
+/* section mark with a trailing small button (You → Manage) */
+.mark-row { display: flex; align-items: center; gap: var(--hp-space-row-gap); margin: 0 0 var(--hp-space-row-pad); }
+.mark-row h3 { flex: 1; margin: 0; }
+
+/* ── type helpers ────────────────────────────────────────────────────────── */
+
+.strong { font-weight: var(--hp-type-body-strong-weight); }
+p { margin: 0 0 var(--hp-space-input-bottom); }
+.card > h2:last-child, .card > p:last-child { margin-bottom: 0; }
+.stack > * + * { margin-top: var(--hp-space-row-gap); }
+.card .btn + .btn, .card .btn-row + .btn, .card .btn + .btn-row { margin-top: var(--hp-space-btn-row-gap); }
+.card > .btn:first-child { margin-top: 0; }
+.pre {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  line-height: var(--hp-type-mono-small-line);
+  color: var(--muted);
+  background: var(--bg-2);
+  border: var(--hp-border-width) solid var(--line);
+  border-radius: var(--radius-input);
+  padding: var(--hp-space-input-y) var(--hp-space-input-x);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  margin: 0 0 var(--hp-space-input-bottom);
+}
+
+/* ── post card (PRODUCT §2.3) ────────────────────────────────────────────── */
+
+.post { cursor: pointer; }
+.post-head { display: flex; align-items: flex-start; gap: var(--hp-space-row-gap); }
+.post-head-text { flex: 1; min-width: 0; }
+.post-title {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: var(--type-body-strong);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  min-height: var(--hp-space-touch-min);
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-title:hover { color: var(--accent); }
+.post-user {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--muted);
+  line-height: var(--hp-type-mono-small-line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--faint);
+  line-height: var(--hp-space-touch-min);
+}
+.post-fwd { color: var(--muted); font-size: var(--hp-type-small-size); margin: var(--hp-space-row-gap) 0 0; }
+.post-body {
+  margin: var(--hp-space-row-gap) 0 0;
+  font: var(--type-body);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.post-body b { font-weight: var(--hp-type-body-strong-weight); }
+.post-body code { font-family: var(--font-mono); font-size: var(--hp-type-mono-size); color: var(--muted); }
+.post-body a { overflow-wrap: anywhere; }
+/* kit .media (HPMedia) with the post's top gap */
+.post-media { margin: var(--hp-space-row-gap) 0 0; }
+.post-media-tag {
+  position: absolute;
+  right: var(--hp-space-pill-x);
+  bottom: var(--hp-space-pill-x);
+}
+.post-file {
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-row-gap);
+  margin: var(--hp-space-row-gap) 0 0;
+  padding: var(--hp-space-input-y) var(--hp-space-input-x);
+  border: var(--hp-border-width) solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-size);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.post-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--hp-space-row-gap);
+  margin-top: var(--hp-space-row-gap);
+}
+.post-counts {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--faint);
+  line-height: var(--hp-type-mono-small-line);
+  min-width: 0;
+}
+.post-foot .btn { flex: none; }
+
+.loading-row, .end-row {
+  text-align: center;
+  color: var(--muted);
+  padding: var(--hp-space-row-pad) 0 var(--hp-space-card-pad);
+}
+
+/* ── node row / feed row (COMPONENTS composites) ─────────────────────────── */
+
+.node-row, .feed-row { cursor: pointer; min-height: calc(var(--hp-space-touch-min) + 2 * var(--hp-space-row-pad)); }
+.node-row:hover .row-name, .feed-row:hover .row-name { color: var(--accent); }
+.row-main { display: flex; align-items: center; gap: var(--hp-space-row-gap); flex: 1; min-width: 0; }
+.row-text { flex: 1; min-width: 0; }
+.row-name {
+  font: var(--type-body-strong);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--motion-color) ease;
+}
+.feed-row .row-name { font: var(--type-body); }
+.row-sub {
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  line-height: var(--hp-type-mono-small-line);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-sub .pill { margin-left: var(--hp-space-tabs-gap); vertical-align: middle; }
+.row-via { font-size: var(--hp-type-small-size); color: var(--muted); line-height: var(--hp-type-small-line); }
+.row-trail { flex: none; display: flex; align-items: center; gap: var(--hp-space-row-gap); }
+.chevron {
+  color: var(--faint);
+  font-family: var(--font-display);
+  font-size: var(--app-chevron-size);
+  line-height: 1;
+  padding: 0 var(--hp-space-tabs-pad);
+}
+.list-item.disabled { opacity: 0.45; cursor: default; }
+.list-item.disabled:hover .row-name { color: var(--ink); }
+
+/* feed picker rows + inline verify prompt (PRODUCT §2.2) */
+.feed-pick { border-bottom: var(--hp-border-width) solid var(--line); }
+.feed-pick:last-child { border-bottom: none; }
+.feed-pick .list-item { border-bottom: none; }
+.verify-hint {
+  padding: 0 0 var(--hp-space-row-pad);
+  color: var(--muted);
+  font-size: var(--hp-type-small-size);
+  line-height: var(--hp-type-small-line);
+}
+.verify-hint:empty { display: none; }
+.verify-hint .btn-row { margin-top: var(--hp-space-row-gap); }
+.verify-hint .btn-row .btn { flex: none; }
+
+/* ── profile head (PRODUCT §2.5) ─────────────────────────────────────────── */
+
+.profile-head { text-align: center; }
+.profile-head .avatar { margin: 0 auto var(--hp-space-row-gap); }
+.profile-head h1, .profile-head h2 { margin-bottom: var(--hp-space-tabs-pad); }
+.profile-head .mono { display: block; margin-bottom: var(--hp-space-row-gap); }
+.profile-head .muted { margin-bottom: var(--hp-space-row-gap); }
+.profile-head .btn { margin-top: var(--hp-space-row-pad); }
+.you-head { display: flex; align-items: center; gap: var(--hp-space-row-pad); }
+.you-head .row-text h2 { margin: 0 0 var(--hp-space-tabs-pad); }
+.you-head .btn.sm { flex: none; }
+
+.listing-row { display: flex; align-items: center; justify-content: space-between; gap: var(--hp-space-row-gap); padding: var(--hp-space-row-pad) 0; }
+
+/* ── graph (PRODUCT §2.7) ────────────────────────────────────────────────── */
+
+.graph-card { padding: var(--hp-space-tabs-pad); }
+.graph-canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-media);
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+.graph-canvas.dragging { cursor: grabbing; }
+
+/* ── sign in ─────────────────────────────────────────────────────────────── */
+
+.signin .wordmark { text-align: left; }
+.signin h1 { margin-top: var(--hp-space-row-gap); }
+.signin form { margin-top: var(--hp-space-row-pad); }
+.inline-status { display: flex; align-items: center; gap: var(--hp-space-row-gap); margin: calc(-1 * var(--hp-space-tabs-pad)) 0 var(--hp-space-input-bottom); min-height: var(--hp-space-card-pad); }
+
+/* ── compose ─────────────────────────────────────────────────────────────── */
+
+/* fixed 6 rows (PRODUCT §2.9); the kit removes the resize grip */
+.compose textarea { min-height: calc(var(--app-compose-rows) * var(--hp-type-input-size) * var(--hp-type-input-line) + 2 * var(--hp-space-input-y)); }
+
+/* ── footer meta (You) ───────────────────────────────────────────────────── */
+
+.footer-meta {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-small-size);
+  color: var(--faint);
+  padding: var(--hp-space-card-pad) 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* ── prose page (privacy) ────────────────────────────────────────────────── */
+
+.prose h2 { margin-top: var(--hp-space-card-pad); }
+.prose p { margin-bottom: var(--hp-space-row-pad); }
+.prose .wordmark { margin-top: var(--hp-space-card-pad); }

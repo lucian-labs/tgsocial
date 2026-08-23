@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>tgsocial — privacy policy</title>
+  <meta name="color-scheme" content="light">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png">
+  <link rel="stylesheet" href="/vendor/house-pour.css">
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div class="app prose">
+    <header class="topbar">
+      <a class="brand" href="/">tgsocial</a>
+      <span class="pill">Privacy</span>
+    </header>
+
+    <h1>Privacy policy</h1>
+    <p class="muted">Effective 2026-08-23.</p>
+    <p>tgsocial is a third-party Telegram client. It has no server of its own.</p>
+
+    <div class="card">
+      <h3>What it stores</h3>
+      <p>Telegram's client library (TDLib) keeps an encrypted local database on your device containing your session, the chats you've loaded, and cached media. tgsocial adds a pointer to your node channel, a cache of the cards it has read, and interface preferences. All of it stays on the device. Signing out deletes all of it.</p>
+    </div>
+
+    <div class="card">
+      <h3>What it sends</h3>
+      <p>Everything tgsocial does is an ordinary Telegram API call made directly from your device to Telegram's servers, authenticated as you. There is no analytics, no crash reporting, no telemetry, and no third-party SDK. The web build makes no request to any host other than Telegram and the page that served it.</p>
+    </div>
+
+    <div class="card">
+      <h3>What it publishes</h3>
+      <p>Your node is a public Telegram channel. Its card — your display name, bio, link, the feeds you list, and the nodes you follow — is readable by anyone on Telegram, by design. You choose what goes on it, and you can edit or delete the channel from any Telegram client.</p>
+    </div>
+
+    <div class="card">
+      <h3>What it does not do</h3>
+      <p>It does not read your private chats, contacts, or messages beyond the channels you open. It does not create Telegram accounts. It does not sell or share anything, because it never has anything.</p>
+    </div>
+
+    <div class="card">
+      <h3>Telegram</h3>
+      <p>Your use of Telegram is governed by Telegram's own privacy policy at <a href="https://telegram.org/privacy" rel="noopener noreferrer" target="_blank">telegram.org/privacy</a>.</p>
+    </div>
+
+    <p class="muted">Questions: <a href="mailto:elijah@lucianlabs.ca">elijah@lucianlabs.ca</a>. Source: <a href="https://github.com/lucian-labs/tgsocial" rel="noopener noreferrer" target="_blank">github.com/lucian-labs/tgsocial</a>.</p>
+  </div>
+</body>
+</html>

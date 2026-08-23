@@ -1,0 +1,4 @@
+# signing — never commit the release key
+release.keystore
+*.jks
+*.keystore

@@ -28,7 +28,9 @@ bottom padding `bottomSafe`. Everything lives inside one.
 **HPTopbar(leading, trailing)** — sticky, translucent `topbarBg` with a
 backdrop blur (14), hairline `line` underneath, padding `topbarY/topbarX`.
 Leading is the wordmark (`HPWordmark`) or a `‹ Back` ghost button; trailing
-is a status pill. Web: `.topbar`.
+is a status pill. Web: `.topbar`. Android platform exception: the bar overlays
+the scroll container (content passes under `topbarBg`) but carries no backdrop
+blur — Compose has no cross-version backdrop blur.
 
 **HPCard** — `panel` fill, 1pt `line` border, `Radius.card`, `cardPad`
 padding, `cardGap` below, `Shadow.contact` + `Shadow.cast`. The only raised

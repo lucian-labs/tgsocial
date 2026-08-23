@@ -1,0 +1,1 @@
+{"name":"tgsocial-web","private":true,"type":"module","scripts":{"test":"node test/protocol.test.mjs && node test/smoke.mjs"}}

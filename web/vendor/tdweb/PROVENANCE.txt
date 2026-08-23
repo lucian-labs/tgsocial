@@ -1,0 +1,5 @@
+tdweb dist installed 2026-08-23T19:09:01Z
+source: /private/tmp/claude-501/-Users-elijahlucian-repos-lucian-utils/d42e88ce-553c-45ae-a74a-f6a283530195/scratchpad/tdweb-dist
+package version: 1.8.66
+td commit: 022d60202e446ad1287b9fb68e687c8a0760788b
+publicPath: /vendor/tdweb/

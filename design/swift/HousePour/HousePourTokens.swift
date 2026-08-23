@@ -150,7 +150,7 @@ public enum HPTokens {
     /// Every bundled file, for UIAppFonts / registration checks.
     public static let bundledFiles = ["CormorantGaramond-Medium.ttf", "CormorantGaramond-SemiBold.ttf", "CormorantGaramond-Bold.ttf", "CormorantGaramond-MediumItalic.ttf", "KaushanScript-Regular.ttf", "Inconsolata-Regular.ttf", "Inconsolata-SemiBold.ttf"]
     }
-    public enum Type {
+    public enum `Type` {
     public static let wordmark = HPTextStyle(face: .brand, size: 48, weight: 400, lineHeight: 1.05, tracking: 0, uppercase: false)
     public static let brand = HPTextStyle(face: .brand, size: 27.2, weight: 400, lineHeight: 1, tracking: 0, uppercase: false)
     public static let h1 = HPTextStyle(face: .display, size: 33.6, weight: 600, lineHeight: 1.12, tracking: 0.01, uppercase: false)

@@ -7,6 +7,9 @@ web/config.json
 
 # build output
 ios/build/
+# xcodegen products (`make gen` regenerates them from ios/project.yml)
+ios/tgsocial.xcodeproj/
+ios/Info.plist
 ios/*.xcodeproj/xcuserdata/
 ios/*.xcodeproj/project.xcworkspace/xcuserdata/
 ios/.swiftpm/

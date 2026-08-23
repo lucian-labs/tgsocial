@@ -1,0 +1,44 @@
+package ca.lucianlabs.tgsocial.ui.screens
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.Modifier
+import ca.lucianlabs.tgsocial.model.NodeSnapshot
+import ca.lucianlabs.tgsocial.ui.AppViewModel
+import ca.lucianlabs.tgsocial.ui.FeedUi
+import ca.lucianlabs.tgsocial.ui.Screen
+import ca.lucianlabs.tgsocial.ui.Tab
+import ca.lucianlabs.tgsocial.ui.columnItem
+import ca.lucianlabs.tgsocial.ui.components.EmptyCard
+import ca.lucianlabs.tgsocial.ui.components.FooterNote
+import ca.lucianlabs.tgsocial.ui.components.PostCard
+
+/** PRODUCT §2.3 — the main feed. Strictly chronological (PROTOCOL §4.8). */
+fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
+    if (feed.ready && feed.posts.isEmpty() && !feed.loading) {
+        item(key = "feed-empty") {
+            Box(Modifier.columnItem()) {
+                if (me == null) {
+                    EmptyCard("Nothing here yet.", "Make your node to pick feeds and follow people.", "Make your node") { vm.push(Screen.Setup) }
+                } else {
+                    EmptyCard("Nothing here yet.", "Follow a node and their feeds show up here, newest first.", "Explore") { vm.selectTab(Tab.EXPLORE) }
+                }
+            }
+        }
+        return
+    }
+    items(feed.posts, key = { it.key }) { post ->
+        Box(Modifier.columnItem()) {
+            PostCard(post, onOpenChannel = { vm.push(Screen.FeedChannel(it)) })
+        }
+    }
+    item(key = "feed-footer") {
+        Box(Modifier.columnItem()) {
+            when {
+                feed.loading || !feed.ready -> FooterNote("Loading…")
+                feed.exhausted && feed.posts.isNotEmpty() -> FooterNote("That's everything.")
+            }
+        }
+    }
+}
