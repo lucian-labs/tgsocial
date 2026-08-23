@@ -20,28 +20,39 @@ side padding (native). The shell is:
 
 ```
 ┌──────────────────────────────────────────┐
-│ tgsocial                       [Synced]  │  topbar: wordmark left, status pill right
-├──────────────────────────────────────────┤
-│ [ Feed ] [ Explore ] [ Graph ] [ You ]   │  .tabs segmented control (not a native tab bar)
+│ tgsocial                       [Synced]  │  topbar: wordmark left, status pill right (tap → Status sheet)
 ├──────────────────────────────────────────┤
 │                                          │
 │  cards …                                 │
 │                                          │
+│                                          │
+│      ╭──────────────────────────╮        │  floating tab bar, bottom, House Pour `.tabs` pill:
+│      │ Feed  Explore  Graph  You │        │  panel fill, 1pt line, pill radius, one card shadow,
+│      ╰──────────────────────────╯        │  16pt above the home indicator / viewport bottom
 └──────────────────────────────────────────┘
 ```
 
 - The topbar is sticky and translucent (House Pour `.topbar`). The status pill
   reads `Synced`, `Syncing`, `Offline`, or `Signed out`; gold only when
-  `Synced`.
-- The `.tabs` control sits directly under the topbar and scrolls away with
-  content on native; on web it is sticky with the topbar.
-- No native tab bars, no navigation bars with system titles, no system
-  segmented controls. Pushes (profile, feed detail, compose) open as full
-  screens with a `‹ Back` ghost button top-left in the same topbar slot where
-  the wordmark was; the status pill stays.
-- Sheets (compose, confirm) are House Pour modals: a card over a
+  `Synced`. **The pill is a button**: tapping it opens the Status sheet (§2.10).
+- The **tab bar floats at the bottom**: the House Pour `.tabs` segmented
+  control (same component, same four items `Feed · Explore · Graph · You`)
+  placed `position: fixed` / overlay at the bottom of the column, centred,
+  hugging its content (not full width), `cardGap` (16pt) above the safe-area
+  bottom, with `panel` fill and the single card shadow so it reads as a raised
+  pill over scrolling content. Content scrolls under it; every scroll view
+  pads its bottom by the bar height + `cardGap` so the last card clears it.
+  It is hidden on Sign in, Setup, and inside full-screen viewers; it stays
+  on pushed screens (profile, feed channel). No native tab bar.
+- No native navigation bars with system titles, no system segmented controls.
+  Pushes (profile, feed detail, compose) open as full screens with a
+  `‹ Back` ghost button top-left in the same topbar slot where the wordmark
+  was; the status pill stays.
+- Sheets (compose, confirm, status) are House Pour modals: a card over a
   `rgba(38,35,25,0.4)` scrim. Never a dark sheet.
-- Toasts are the one dark surface. They fade; they do not slide.
+- Toasts are the one dark surface. They fade; they do not slide. Full-screen
+  media viewers (§2.11) are the one other dark surface — `ink` at 96% — because
+  photos and video need it.
 
 ## 2. Screens
 
@@ -120,7 +131,9 @@ The main feed (`PROTOCOL §4.8`). A vertical list of **post cards**:
 │          @waveloop_devlog                  │  mono muted
 │                                            │
 │ Post text with *bold* and links…           │  body 1rem/1.5
-│ [ media, 12pt radius, full width ]         │
+│ [ media, 12pt radius, full width ]         │  photo / video (inline player) / GIF (autoplay, muted, looped)
+│ [ ▶ 0:00 ───────── 3:42  Track title ]     │  audio + voice: inline House Pour player row (§2.11)
+│ [ ▤ file name · 2.4 MB          Open ]     │  document row; Open → in-app viewer when viewable
 │                                            │
 │ 1.2k views · 14 reactions     Open in Telegram │  footer: mono faint left, ghost sm right
 └────────────────────────────────────────────┘
@@ -131,8 +144,13 @@ The main feed (`PROTOCOL §4.8`). A vertical list of **post cards**:
 - Forwarded posts show a muted line `Forwarded from <origin>` above the text.
 - Reactions render as the reaction emoji followed by the count (that emoji is
   Telegram's data, not our chrome). Views use the figure-compact rule: `1.2k`.
-- Tapping the title opens the feed's channel screen (2.6). Tapping the card
-  body opens the post on Telegram (`t.me` link, `PROTOCOL §4.8`).
+- **Order is strictly newest first** (reverse chronological): the most recent
+  post is at the top, "Load more" appends older posts at the bottom. New posts
+  arriving live are inserted at the top. Never oldest-first, on any screen
+  that lists posts (Feed, Feed channel).
+- Tapping the title opens the feed's channel screen (2.6). Tapping the text
+  opens the post on Telegram (`t.me` link, `PROTOCOL §4.8`). Tapping media
+  opens it **in the app** (§2.11) — never the browser, never Telegram.
 - Pull-to-refresh (native) / `Refresh` ghost button under the tabs (web).
 - Infinite scroll: load more when the last card is within two screens of the
   bottom. A muted `Loading…` row at the end; `That's everything.` when all
@@ -254,6 +272,71 @@ POST TO
 Photo attach is a `( Add Photo )` ghost sm above the row on native; web v1
 is text only. Success toast `Posted.`; the feed refreshes.
 
+### 2.10 Status sheet
+
+Opened by tapping the status pill. A House Pour modal card:
+
+```
+STATUS                                       (section mark)
+Connection        Connected                  (list-item rows; value in mono)
+Telegram          Signed in · +1 604 ••• 0199
+Node              @tgs_elijah · card 2 min ago
+Feed              12 sources · 340 posts · refreshed 14:02
+Pending           Reading 3 cards…            (what is in flight right now, or `Nothing`)
+Last error        FLOOD_WAIT 23 s at 13:58    (or `None`)
+TDLib             1.8.66
+( Refresh Now )                              (btn accent)
+( Close )                                    (btn ghost)
+```
+
+- `Connection` mirrors TDLib `updateConnectionState`: `Connected`,
+  `Connecting`, `Updating`, `Waiting for network`, `Connecting to proxy`.
+- `Pending` is a live list of the operations the app is running
+  (`Reading card @tgs_ana`, `Loading @waveloop_devlog`, `Downloading photo`,
+  `Writing your card`); the pill says `Syncing` exactly while this list is
+  non-empty, `Synced` when it is empty and the connection is `Connected`,
+  `Offline` when TDLib reports waiting for network. A `Syncing` pill that
+  never resolves is a bug: every in-flight operation must remove itself on
+  success, failure, or timeout (30 s).
+- The sheet updates live while open. `Refresh Now` re-runs the feed refresh
+  and re-reads my card.
+
+### 2.11 Media viewers and players
+
+Everything a post can carry opens or plays **inside the app**. Nothing hands
+off to Telegram or the browser except the explicit `Open in Telegram` button.
+
+| Content | Inline in the post card | On tap |
+| --- | --- | --- |
+| Photo | `HPMedia` at the post width, minithumbnail blur until loaded | Full-screen viewer: ink 96% background, pinch-zoom + double-tap zoom, swipe down or `Close` to dismiss, `Save` (native) / `Download` (web) ghost buttons, caption below in `charcoalText` |
+| Video | Poster (thumbnail) with a centred play glyph and duration pill; tap plays inline, muted off, with a minimal House Pour scrubber | Full-screen player (same viewer chrome), native playback (`AVPlayer` / `ExoPlayer`-free `VideoView`/`MediaPlayer` / `<video>`), landscape allowed |
+| Animation (GIF / mp4 loop) | Autoplays muted and looped inline once downloaded | Full-screen viewer, loop continues |
+| Audio (`messageAudio`) | **Player row**: play/pause circle 40pt (`stepper` style), title + performer in body/mono, serif elapsed / total time, a hairline progress bar in `line2` with a gold played segment | Same row; no full-screen |
+| Voice / video note | Same player row with a waveform drawn from TDLib's waveform bytes (ink bars, gold played) | Video notes: circular inline player |
+| Document | Row: file glyph, name in body, size + type in mono | PDF, images, text, audio/video documents open in the in-app viewer; other types download then offer `Share` (native) / `Download` (web) |
+| Sticker | Rendered static (webp/png); animated stickers show their thumbnail | — |
+| Link preview | `linkPreview` title/description/thumbnail as a bordered row | Opens the link in the system browser (links are the one exception) |
+| Poll, location, contact, other | A muted one-line summary (`Poll · 3 options`, `Location`) | `Open in Telegram` |
+
+Player rules (all platforms):
+
+- One audio item plays at a time; starting another pauses the first. Playback
+  continues while scrolling and across tabs; a slim **now-playing row** docks
+  above the floating tab bar (title, play/pause, elapsed) while audio plays.
+- Videos pause when scrolled off-screen and when another video starts.
+- Progress and time use the serif for the numerals; the scrubber is a
+  hairline (1pt `line2`) with a gold played segment and a 12pt `panel` knob
+  with the contact shadow. No system transport controls visible.
+- Downloads show a determinate hairline ring/bar (gold) over the placeholder;
+  tapping cancels. Media files are fetched with `downloadFile` priority 1 when
+  visible, 32 when tapped; the viewer streams video as soon as the
+  downloaded prefix allows (native: local file URL; web: `readFilePart`
+  blobs / `MediaSource` when supported, otherwise wait for full download
+  with the ring).
+- The full-screen viewer hides the topbar and the floating tab bar, supports
+  swipe between the media items of one post (albums), and restores scroll
+  position on dismiss.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -290,7 +373,7 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`. Never
   photo library access only when `Add Photo` is tapped.
 - **Android**: Kotlin + Jetpack Compose, minSdk 26, targetSdk 35. Edge-to-edge,
   light status bar icons on the ivory background. Predictive back supported.
-- **Web**: static files, no bundler, no framework. `tdweb` (TDLib wasm) loaded
+- **Web**: static files, no bundler, no framework. Media via `<img>`, `<video>`, `<audio>` on object URLs from tdweb `readFile`/`readFilePart`. `tdweb` (TDLib wasm) loaded
   from `vendor/`. Must work from a plain nginx host over https. Installable
   PWA manifest with the ivory theme colour.
 
