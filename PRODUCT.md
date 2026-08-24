@@ -495,6 +495,71 @@ is a bad username, never an error screen.
 as universal/app links so a tapped link opens the installed app on that
 screen, signing in first when there is no session.
 
+### 2.14 Connector (Mac only)
+
+The Mac build hosts a local bridge that lets an AI assistant read your
+tgsocial graph — and, if you allow it, post as you. The wire contract is
+[`CONNECTOR.md`](./CONNECTOR.md); this is the screen that governs it. It is a
+fifth tab, `Connector`, present only on macOS.
+
+```
+CONNECTOR                                     (section mark)
+Let an assistant read your feeds.             (muted)
+
+Bridge              [ toggle ]  Off           (list rows)
+Port                8477                      (mono; editable when off)
+Token               ••••••••  ( Copy ) ( Rotate )
+
+SCOPE
+[ Graph ] [ Mine ] [ Custom ]                 (.tabs)
+14 sources — your feeds and the feeds of the
+nodes you follow. Private chats are never
+included.                                     (muted)
+( Review Sources )                            (btn ghost sm → list of usernames)
+
+WRITES
+Post to my feeds     [ toggle ]  Off
+Comment as me        [ toggle ]  Off
+Edit my card         [ toggle ]  Off
+Writes are off until you turn them on. Each
+one is separate.                              (muted)
+
+ACTIVITY
+┌ card ─────────────────────────────────────┐
+│ 14:02  Feed              30 posts          │  mono; newest first, last 100
+│ 14:02  Node @tgs_ana     cached            │
+│ 14:03  Post              Refused, read-only│  refusals in `bad`
+└───────────────────────────────────────────┘
+( Clear Activity )                            (btn ghost sm)
+
+Connected assistants read through tgsocial;
+they never see your Telegram sign-in.         (muted, footer)
+```
+
+Behaviour:
+
+- The bridge is **off** until the toggle is on, and turning it off stops
+  listening immediately and drops in-flight requests.
+- `Port` is editable only while the bridge is off. A port already in use
+  shows `That port is taken.` and the toggle stays off.
+- `Copy` puts the token on the clipboard, toast `Token copied.`; `Rotate`
+  asks first (modal: `Rotate the token? Connected assistants stop working
+  until you give them the new one.`) then writes a new one.
+- Switching scope preset repaints the source count immediately; `Review
+  Sources` pushes a plain list of the usernames currently exposed, so the
+  answer to "what can it see" is always one tap away.
+- `Custom` scope pushes an editable list of usernames with the same
+  availability check as feeds elsewhere.
+- Each write toggle is independent; enabling one shows a one-line confirm
+  (`Let an assistant post to your feeds?`) because it is a grant, not a
+  preference.
+- Activity streams live while the screen is open, newest first, refusals
+  in `bad`. `Clear Activity` clears the on-screen ring, not the log file.
+- Signing out turns the bridge off and wipes the token.
+
+On iOS and Android the Connector tab does not exist and the bridge is not
+compiled in — a phone is not a host for a local service an assistant dials.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -532,6 +597,7 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
   photo library access only when `Add Photo` is tapped.
 - **Android**: Kotlin + Jetpack Compose, minSdk 26, targetSdk 35. Edge-to-edge,
   light status bar icons on the ivory background. Predictive back supported.
+- **Mac**: the same SwiftUI app built for Mac Catalyst, plus the Connector tab (§2.14) and the bridge. Same TDLib session, same House Pour look.
 - **Web**: static files, no bundler, no framework. Media via `<img>`, `<video>`, `<audio>` on object URLs from tdweb `readFile`/`readFilePart`. `tdweb` (TDLib wasm) loaded
   from `vendor/`. Must work from a plain nginx host over https. Installable
   PWA manifest with the ivory theme colour.
