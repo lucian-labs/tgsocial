@@ -152,6 +152,21 @@ class PlaybackHub(private val context: Context, private val tg: TelegramClient) 
         _now.value = current.copy(playing = p.isPlaying, positionMs = p.currentPosition.coerceAtLeast(0), durationMs = duration)
     }
 
+    /**
+     * Memory pressure (`TgApp.onTrimMemory`): an ExoPlayer that is loaded but not playing is pure retained
+     * cost — codecs, buffers, a renderer thread — so release it. A player that is actually playing is the
+     * product (PRODUCT §2.11 keeps audio going across tabs), so it survives.
+     */
+    fun trimMemory() {
+        val p = audio ?: return
+        if (p.isPlaying) return
+        ticker?.cancel()
+        ticker = null
+        p.release()
+        audio = null
+        _now.value = null
+    }
+
     /** Sign-out / process teardown. */
     fun release() {
         ticker?.cancel()

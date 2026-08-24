@@ -6,6 +6,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ca.lucianlabs.housepour.HPButton
+import ca.lucianlabs.housepour.HPButtonStyle
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.FeedUi
@@ -30,6 +32,16 @@ fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
             }
         }
         return
+    }
+    // PRODUCT §2.3 — the window is anchored at the pagination cursor, so once it is full a live post newer than
+    // the head cannot be inserted without punching a hole in the feed (FeedOrder.window). Deep in a paginated
+    // session this is the way back to the top: refresh rebuilds from the newest post down.
+    if (feed.newerAvailable) {
+        item(key = "feed-newer") {
+            Box(Modifier.columnItem()) {
+                HPButton("Newer posts", { vm.refreshFeed() }, style = HPButtonStyle.ACCENT, contentDescription = "Jump to newest posts")
+            }
+        }
     }
     items(feed.posts, key = { it.key }) { post ->
         val index by vm.commentIndex.collectAsStateWithLifecycle()

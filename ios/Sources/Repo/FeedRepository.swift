@@ -17,6 +17,8 @@ final class FeedRepository {
 
     private(set) var merger = FeedMerger<Post>(sourceKeys: [])
     private(set) var sources: [String: FeedInfo] = [:]
+    /// Newest-first, and its head is never evicted while the reader is inside it — see `FeedWindow`
+    /// for the cap, where it may be applied, and why paging must not apply it.
     private(set) var posts: [Post] = []
     private(set) var isExhausted = false
     private var forwardNames: [String: String] = [:]
@@ -31,13 +33,19 @@ final class FeedRepository {
         // loads is defensively re-sorted so a cached page can never paint in old order.
         posts = store.loadVersioned([Post].self, LocalStore.postCache) ?? []
         FeedOrder.sortNewestFirst(&posts)
+        posts = FeedWindow.trimmed(posts)
     }
 
     private var api: TDLibClient { td.api }
 
-    func clear() { posts = []; sources = [:]; merger = FeedMerger(sourceKeys: []); isExhausted = false }
+    func clear() {
+        posts = []; sources = [:]; merger = FeedMerger(sourceKeys: []); isExhausted = false
+    }
 
-    private func persist() { store.saveVersioned(Array(posts.prefix(60)), LocalStore.postCache) }
+    /// What goes to disk: the newest `FeedWindow.cacheSize` posts. `posts` is newest-first and
+    /// nothing ever evicts its head, so its front *is* the newest — a cold start opens at the top
+    /// of the feed rather than mid-history.
+    private func persist() { store.saveVersioned(Array(posts.prefix(FeedWindow.cacheSize)), LocalStore.postCache) }
 
     // MARK: Sources
 
@@ -177,7 +185,10 @@ final class FeedRepository {
         // With a partial result, the sources that failed are treated as exhausted for this merge so the
         // ones that did fetch can be shown; the next refresh retries them.
         for k in keys where !(merger.sources[k]?.fetchedOnce ?? true) { merger.add([], to: k, exhausted: true) }
-        posts = merger.drain(Self.drainSize)
+        // Committing: the window is rebuilt from the top. This is one of the two points where the
+        // `FeedWindow` cap may be applied at all (the other is the cold-start load in `init`) —
+        // nothing is scrolled into a list that is being replaced wholesale.
+        posts = FeedWindow.trimmed(merger.drain(Self.drainSize))
         isExhausted = merger.isExhausted
         if posts.isEmpty, !isExhausted { try await loadMore() }
         persist()
@@ -200,6 +211,12 @@ final class FeedRepository {
         // Keeps the list strictly newest-first when a page lands on top of posts served from cache.
         FeedOrder.sortNewestFirst(&posts)
         coalesceAlbums()
+        // The window is deliberately *not* bounded here. "Load more" only ever runs with the
+        // viewport near the tail, and dropping entries above it shifts the content under an offset
+        // the app cannot re-anchor: the reader is thrown forward by the number of cards dropped,
+        // which lands them at the tail again and re-triggers this very call — paging that never
+        // stops. See `FeedWindow`; the cap belongs to refresh and cold start, and the post structs
+        // were never the memory term that mattered.
         isExhausted = merger.isExhausted
         persist()
     }
@@ -282,6 +299,8 @@ final class FeedRepository {
             if gone.contains(p.messageId) { changed = true; return nil }
             return p
         }
+        // `posts` is the only source the disk cache is written from, so removing the post here is
+        // enough for it not to come back on the next cold start.
         if changed { persist() }
     }
 

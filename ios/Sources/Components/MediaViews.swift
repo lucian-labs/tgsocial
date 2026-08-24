@@ -86,9 +86,10 @@ struct PhotoMediaView: View {
     }
 
     private func load() async {
-        if let hit = model.media.cached(preview) { image = hit; blurred = false; return }
+        // A card is full-column width: one screen width of pixels is the most it can ever show.
+        if let hit = model.media.cached(preview, .card) { image = hit; blurred = false; return }
         image = model.media.minithumbnail(preview); blurred = image != nil
-        if let loaded = await model.media.image(for: preview) { image = loaded; blurred = false }
+        if let loaded = await model.media.image(for: preview, rendition: .card) { image = loaded; blurred = false }
     }
 }
 
@@ -112,6 +113,12 @@ struct PlayerLayerView: UIViewRepresentable {
 
     func updateUIView(_ view: LayerView, context: Context) {
         view.playerLayer.player = player
+    }
+
+    /// AVPlayerLayer holds a strong reference to its player. Clearing it when SwiftUI drops the
+    /// view releases the player (and its render buffers) now rather than at some later autorelease.
+    static func dismantleUIView(_ view: LayerView, coordinator: ()) {
+        view.playerLayer.player = nil
     }
 }
 
@@ -153,9 +160,16 @@ struct InlineVideoView: View {
             if mode != .animation, active != id, player.isPlaying { player.pause() }
         }
         .onDisappear {
-            // Videos pause when scrolled off-screen (PRODUCT §2.11).
+            // Videos pause when scrolled off-screen (PRODUCT §2.11) — and are torn down, not just
+            // paused. A paused AVPlayer still holds its item, its decode ring and its render
+            // buffers; in a LazyVStack this view is being destroyed anyway, so a pause left the
+            // player alive with nothing to release it. Teardown also removes the periodic time
+            // observer and the didPlayToEnd token, which AVPlayer and NotificationCenter keep
+            // alive independently of this view.
             startTask?.cancel()
-            if player.isPlaying { player.pause() }
+            startTask = nil
+            player.teardown()
+            started = false
             model.video.stopped(id)
         }
     }
@@ -319,9 +333,9 @@ struct InlineVideoView: View {
 
     private func loadPoster() async {
         guard let thumbnail else { return }
-        if let hit = model.media.cached(thumbnail) { poster = hit; posterBlurred = false; return }
+        if let hit = model.media.cached(thumbnail, .card) { poster = hit; posterBlurred = false; return }
         poster = model.media.minithumbnail(thumbnail); posterBlurred = poster != nil
-        if let loaded = await model.media.image(for: thumbnail) { poster = loaded; posterBlurred = false }
+        if let loaded = await model.media.image(for: thumbnail, rendition: .card) { poster = loaded; posterBlurred = false }
     }
 }
 
@@ -503,14 +517,20 @@ struct StickerView: View {
     }
 
     private func load() async {
+        // A sticker tile is at most a third of the column; it never needs more than that in pixels.
+        let rendition = ImageRendition.points(HPTokens.Space.columnMax / 3)
         if animated {
-            if let thumbnail { image = await model.media.image(for: thumbnail, label: "Downloading sticker") }
+            if let thumbnail {
+                image = await model.media.image(for: thumbnail, rendition: rendition, label: "Downloading sticker")
+            }
             return
         }
-        if let path = await model.media.download(file.fileId, priority: MediaLoader.visiblePriority, label: "Downloading sticker") {
-            image = UIImage(contentsOfFile: path)
+        // Was `UIImage(contentsOfFile:)`: full-resolution, uncached, and re-decoded every time the
+        // sticker scrolled back into view.
+        if let loaded = await model.media.image(for: file, rendition: rendition, label: "Downloading sticker") {
+            image = loaded
         } else if let thumbnail {
-            image = await model.media.image(for: thumbnail, label: "Downloading sticker")
+            image = await model.media.image(for: thumbnail, rendition: rendition, label: "Downloading sticker")
         }
     }
 }
@@ -532,7 +552,10 @@ struct LinkPreviewRow: View {
                 if let thumbnail {
                     HPMedia(image: image, aspect: 1)
                         .frame(width: HPTokens.Space.avatarProfile)
-                        .task(id: thumbnail.uniqueId) { image = await model.media.image(for: thumbnail) }
+                        .task(id: thumbnail.uniqueId) {
+                            image = await model.media.image(for: thumbnail,
+                                                            rendition: .points(HPTokens.Space.avatarProfile))
+                        }
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     if !siteName.isEmpty { HPMonoSmall(siteName).lineLimit(1) }
@@ -642,7 +665,9 @@ struct ViewerOverlay: View {
         switch current {
         case .photo(_, let full):
             Task {
-                guard let image = await model.media.image(for: full, priority: MediaLoader.tappedPriority) else {
+                // Saving to the library is the one place that genuinely wants every pixel, so it
+                // decodes the original — uncached, released as soon as the save finishes.
+                guard let image = await model.media.originalImage(for: full) else {
                     model.showToast("Couldn't load the photo.", tone: .bad); return
                 }
                 saver.save(image: image) { error in
@@ -699,7 +724,7 @@ private struct ViewerPhotoPage: View {
     var body: some View {
         ZStack {
             ZoomableImageView(image: image)
-            if loading, image == nil || model.media.cached(full) == nil {
+            if loading, image == nil || model.media.cached(full, .fullScreen) == nil {
                 HPProgressRing(progress: model.media.state(full.fileId).progress) {
                     model.media.cancel(full.fileId)
                 }
@@ -709,9 +734,13 @@ private struct ViewerPhotoPage: View {
     }
 
     private func load() async {
-        if let hit = model.media.cached(full) { image = hit; loading = false; return }
-        image = model.media.cached(preview) ?? model.media.minithumbnail(preview)
-        if let loaded = await model.media.image(for: full, priority: MediaLoader.tappedPriority) { image = loaded }
+        // The viewer is the one surface that earns a larger rendition — the screen's longest edge,
+        // which is still a fraction of a 12 MP original and leaves plenty of pixels to zoom into.
+        // Its own cache key means opening the viewer never evicts the card's cheaper copy.
+        if let hit = model.media.cached(full, .fullScreen) { image = hit; loading = false; return }
+        image = model.media.cached(preview, .card) ?? model.media.minithumbnail(preview)
+        if let loaded = await model.media.image(for: full, rendition: .fullScreen,
+                                                priority: MediaLoader.tappedPriority) { image = loaded }
         loading = false
     }
 }
@@ -764,7 +793,7 @@ private struct ViewerVideoPage: View {
 
     private func start() async {
         if let thumbnail {
-            poster = model.media.cached(thumbnail) ?? model.media.minithumbnail(thumbnail)
+            poster = model.media.cached(thumbnail, .card) ?? model.media.minithumbnail(thumbnail)
         }
         guard let url = await model.media.readyToPlayURL(file, label: "Downloading video") else { return }
         player.muted = muted
@@ -782,6 +811,9 @@ private struct ViewerDocumentPage: View {
     let kind: DocumentKind
     let thumbnail: PhotoRef?
     @State private var path: String?
+    /// Decoded once, at screen size. Held here rather than rebuilt in `content(path:)`, where a
+    /// full-resolution `UIImage(contentsOfFile:)` ran on the main thread on every body evaluation.
+    @State private var documentImage: UIImage?
 
     var body: some View {
         ZStack {
@@ -796,7 +828,11 @@ private struct ViewerDocumentPage: View {
         .task(id: file.uniqueId) {
             let name = file.fileName.isEmpty ? "Document" : file.fileName
             path = await model.media.download(file.fileId, priority: MediaLoader.tappedPriority, label: "Downloading \(name)")
+            guard kind == .image else { return }
+            documentImage = await model.media.image(for: file, rendition: .fullScreen,
+                                                    priority: MediaLoader.tappedPriority, label: "Downloading \(name)")
         }
+        .onDisappear { documentImage = nil }
     }
 
     @ViewBuilder private func content(path: String) -> some View {
@@ -804,7 +840,7 @@ private struct ViewerDocumentPage: View {
         case .pdf:
             PDFKitView(url: URL(fileURLWithPath: path))
         case .image:
-            ZoomableImageView(image: UIImage(contentsOfFile: path))
+            ZoomableImageView(image: documentImage)
         case .text:
             ScrollView(.vertical, showsIndicators: false) {
                 Text((try? String(contentsOfFile: path, encoding: .utf8)) ?? "Couldn't read this file.")

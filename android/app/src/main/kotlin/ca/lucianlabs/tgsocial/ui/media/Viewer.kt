@@ -43,7 +43,7 @@ import ca.lucianlabs.tgsocial.model.PostMedia
 import ca.lucianlabs.tgsocial.repo.MediaRepo
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.ViewerUi
-import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
+import ca.lucianlabs.tgsocial.ui.components.rememberTdImagePx
 import ca.lucianlabs.housepour.HPToastTone
 import kotlinx.coroutines.launch
 
@@ -144,12 +144,12 @@ private fun SaveActions(vm: AppViewModel, media: PostMedia) {
 /** Photo page: blur-up mini under the full pixels, pinch/double-tap zoom, downward drag hands off to dismiss. */
 @Composable
 private fun ViewerImage(file: FileRef, mini: String?, dismiss: HPViewerDismissState) {
-    val width = LocalConfiguration.current.screenWidthDp.dp
-    // The viewer is a tapped context: fetch at priority 32, not the visible-in-feed 1 (PRODUCT §2.11).
-    val image = rememberTdImage(file, width * 2, MediaRepo.PRIORITY_TAPPED)
+    val app = rememberTgApp()
+    // The viewer is a tapped context: fetch at priority 32, not the visible-in-feed 1 (PRODUCT §2.11), and at
+    // the one-step-up zoom rendition — a real pixel count with a hard ceiling, not a doubled Dp.
+    val image = rememberTdImagePx(file, app.media.zoomWidthPx, MediaRepo.PRIORITY_TAPPED)
     val miniImage = rememberMini(mini)
     val state = rememberFileState(file)
-    val app = rememberTgApp()
     HPZoomable(dismiss) {
         when {
             image != null -> Image(bitmap = image, contentDescription = "Photo", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)

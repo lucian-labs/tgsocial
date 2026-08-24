@@ -3,6 +3,10 @@
 // determinate gold progress rings; cancelDownloadFile aborts; priority 1 while visible, 32 on tap;
 // `streamableURL` allows playback from the downloaded prefix when TDLib says the file streams.
 // Downloads register in the ActivityRegistry so the Status sheet lists them.
+//
+// Decoded images live in an ImageMemoryCache: bounded by bytes (see ImageCache.swift for the
+// budget derivation), decoded through ImageIO at the size the caller will actually draw, and
+// dropped wholesale on a memory warning.
 
 import Foundation
 import TDLibKit
@@ -26,18 +30,29 @@ final class MediaLoader {
     static let streamMinPrefix: Int64 = 1 << 20
 
     private(set) var states: [Int: FileState] = [:]
+    /// How many times the decoded-image cache has been dropped under memory pressure. Observable
+    /// so the Status sheet can show it; also the hook a test or a debug build reads to prove the
+    /// warning actually arrived.
+    private(set) var imagePurges = 0
 
     @ObservationIgnored private let td: TDClient
     @ObservationIgnored private let activity: ActivityRegistry
-    @ObservationIgnored private let cache = NSCache<NSString, UIImage>()
+    /// Byte-bounded (ImageCache.swift). The old `countLimit = 300` with no cost was not a memory
+    /// bound at all — 300 full-resolution decodes is multiple gigabytes.
+    @ObservationIgnored private let images: ImageMemoryCache
     @ObservationIgnored private var waiters: [Int: [CheckedContinuation<String?, Never>]] = [:]
     @ObservationIgnored private var inflight: [String: Task<UIImage?, Never>] = [:]
+    @ObservationIgnored private var memoryWarning: MemoryPressureWatch?
 
-    init(td: TDClient, activity: ActivityRegistry) {
+    init(td: TDClient, activity: ActivityRegistry, images: ImageMemoryCache = ImageMemoryCache()) {
         self.td = td
         self.activity = activity
-        cache.countLimit = 300
+        self.images = images
+        memoryWarning = MemoryPressureWatch { [weak self] in self?.purgeImages() }
     }
+
+    /// Bytes of decoded pixels the cache is allowed to hold — surfaced for the Status sheet.
+    var imageCacheByteLimit: Int { images.byteLimit }
 
     func state(_ fileId: Int) -> FileState { states[fileId] ?? FileState() }
 
@@ -150,28 +165,79 @@ final class MediaLoader {
 
     // MARK: Images
 
-    func cached(_ ref: PhotoRef) -> UIImage? { cache.object(forKey: ref.uniqueId as NSString) }
+    /// Drops every decoded pixel we are only holding speculatively.
+    ///
+    /// Called from `UIApplication.didReceiveMemoryWarningNotification` (wired in `init`). Views on
+    /// screen keep their own `@State` `UIImage`, so nothing on screen goes blank: the feed repaints
+    /// from what it already holds, and cards scrolled back into view re-decode lazily from the
+    /// local file, which is still on disk. In-flight downloads are deliberately left alone —
+    /// cancelling them would strand a progress ring mid-spin for no memory saving.
+    func purgeImages() {
+        images.removeAll()
+        imagePurges += 1
+    }
 
-    /// The blurred minithumbnail, for instant placeholders.
+    func cached(_ ref: PhotoRef, _ rendition: ImageRendition) -> UIImage? {
+        images.image(ImageMemoryCache.key(ref.uniqueId, rendition))
+    }
+
+    /// The blurred minithumbnail, for instant placeholders. TDLib ships these inline at ~40 px, so
+    /// they are a few KB decoded and are not worth a cache entry.
     func minithumbnail(_ ref: PhotoRef) -> UIImage? {
         guard let data = ref.minithumbnail else { return nil }
         return UIImage(data: data)
     }
 
-    func image(for ref: PhotoRef, priority: Int = MediaLoader.visiblePriority,
+    func image(for ref: PhotoRef, rendition: ImageRendition,
+               priority: Int = MediaLoader.visiblePriority,
                label: String = "Downloading photo") async -> UIImage? {
-        if let hit = cached(ref) { return hit }
-        if let running = inflight[ref.uniqueId] { return await running.value }
+        await decoded(fileId: ref.fileId, uniqueId: ref.uniqueId, rendition: rendition,
+                      priority: priority, label: label)
+    }
+
+    /// Stickers and other non-photo files that still render as a still image.
+    func image(for file: FileRef, rendition: ImageRendition,
+               priority: Int = MediaLoader.visiblePriority,
+               label: String = "Downloading image") async -> UIImage? {
+        await decoded(fileId: file.fileId, uniqueId: file.uniqueId, rendition: rendition,
+                      priority: priority, label: label)
+    }
+
+    /// The original pixels, for saving to the photo library. Deliberately **not** cached: a
+    /// full-resolution decode is precisely the allocation the cache exists to avoid retaining, and
+    /// it is released the moment the save completes.
+    func originalImage(for ref: PhotoRef, priority: Int = MediaLoader.tappedPriority,
+                       label: String = "Downloading photo") async -> UIImage? {
+        guard let path = await download(ref.fileId, priority: priority, label: label) else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            ImageDecoder.decode(path: path, maxPixelSize: ImageRendition.original.maxPixelSize)
+        }.value
+    }
+
+    /// Download → downsampled decode → cache, coalescing concurrent callers on the same rendition.
+    private func decoded(fileId: Int, uniqueId: String, rendition: ImageRendition,
+                         priority: Int, label: String) async -> UIImage? {
+        let key = ImageMemoryCache.key(uniqueId, rendition)
+        if let hit = images.image(key) { return hit }
+        if let running = inflight[key] { return await running.value }
+        let maxPixelSize = rendition.maxPixelSize
         let task = Task<UIImage?, Never> { [weak self] in
             guard let self else { return nil }
-            guard let path = await self.download(ref.fileId, priority: priority, label: label),
-                  let img = UIImage(contentsOfFile: path) else { return nil }
-            self.cache.setObject(img, forKey: ref.uniqueId as NSString)
-            return img
+            // The entry is cleared from inside the task, not after `await task.value`: a caller
+            // whose `.task(id:)` is cancelled mid-await never reaches its own cleanup, and the
+            // finished Task — holding a decoded UIImage — would sit in `inflight` for ever.
+            defer { self.inflight[key] = nil }
+            guard let path = await self.download(fileId, priority: priority, label: label) else { return nil }
+            // Off the main actor: a multi-megapixel decode is tens of milliseconds and would drop
+            // frames mid-scroll.
+            let decodedImage = await Task.detached(priority: .userInitiated) {
+                ImageDecoder.decode(path: path, maxPixelSize: maxPixelSize)
+            }.value
+            guard let decodedImage else { return nil }
+            self.images.insert(decodedImage, key: key)
+            return decodedImage
         }
-        inflight[ref.uniqueId] = task
-        let result = await task.value
-        inflight[ref.uniqueId] = nil
-        return result
+        inflight[key] = task
+        return await task.value
     }
 }

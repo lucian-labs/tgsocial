@@ -277,7 +277,13 @@ private fun Home(vm: AppViewModel, tab: Tab) {
         Tab.YOU -> false
     }
     val state = remember(tab) { LazyListState() }
-    if (tab == Tab.FEED) LoadMoreWhenNear(state) { vm.loadMoreFeed() }
+    if (tab == Tab.FEED) {
+        LoadMoreWhenNear(state) { vm.loadMoreFeed() }
+        // A completed refresh replaces the window with the newest page, so the reader has to land on it. From
+        // pull-to-refresh that is a no-op (already at the top); from the `Newer posts` jump, after pages of
+        // load-more have slid the window's head down, it is the whole point.
+        LaunchedEffect(feed.refreshedAt) { if (feed.refreshedAt > 0L) state.scrollToItem(0) }
+    }
     PullToRefresh(
         refreshing = refreshing,
         topInset = LocalTopInset.current,

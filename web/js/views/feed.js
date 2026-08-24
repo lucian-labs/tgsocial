@@ -1,11 +1,24 @@
 /* PRODUCT §2.3 Feed — the chronological main feed (PROTOCOL §4.8). */
 import { h, button, replace } from '../../vendor/house-pour.js';
-import { isPost, insertIndex, albumId } from '../protocol.js';
+import { isPost, insertIndex, albumId, trimFeedWindow } from '../protocol.js';
+import { releaseMedia } from '../media.js';
 import { postCard, emptyCard } from './shared.js';
 
 const PAGE = 20;
 /** How long a live album message waits for its siblings before painting. */
 const ALBUM_MS = 250;
+/**
+ * The most posts the feed keeps live at once — models and cards both.
+ *
+ * Twelve pages of twenty is far more scrollback than anyone reaches for
+ * without pulling to refresh, and it is the term that stops an infinite scroll
+ * from being an unbounded allocation: past this, loading a page drops one off
+ * the head (protocol.js trimFeedWindow), and the pictures that went with it
+ * are released with their cards.
+ */
+const FEED_WINDOW = 240;
+/** What the cold-start cache holds; matches repo.js FEED_CACHE_MAX. */
+const CACHE_HEAD = 40;
 
 export function render(app, { cacheOnly = false } = {}) {
   const root = h('div');
@@ -22,11 +35,56 @@ export function render(app, { cacheOnly = false } = {}) {
   let loading = false;
   let done = false;
   let gen = 0;
+  /**
+   * The newest posts, kept separately from the live window: once the window
+   * has trimmed its head, `posts[0]` is no longer the newest thing we have
+   * seen, and the cold-start cache must not be rewritten with mid-history.
+   */
+  let cacheHead = [];
+
+  const writeCache = () => {
+    cacheHead = cacheHead.slice(0, CACHE_HEAD);
+    app.repo.cacheFeed(cacheHead);
+  };
+
+  /**
+   * Hold the window at FEED_WINDOW, dropping cards from the end the reader is
+   * not at: the head after a load-more (the reader is at the bottom), the tail
+   * after a live insert (the reader is at the top, and the post that just
+   * arrived must not be the one that goes). The cards' media is released with
+   * them, and a head trim scrolls back by exactly the height that went away so
+   * the reader keeps their place.
+   */
+  const trim = (from = 'head') => {
+    const { posts: kept, dropped } = trimFeedWindow(posts, app.feedWindow ?? FEED_WINDOW, { from });
+    if (!dropped) return;
+    if (from === 'tail') {
+      for (let i = 0; i < dropped; i += 1) {
+        const card = list.lastElementChild;
+        if (!card) break;
+        releaseMedia(card);
+        card.remove();
+      }
+      posts = kept;
+      return;
+    }
+    const anchor = list.children[dropped] ?? null;
+    const before = anchor ? anchor.getBoundingClientRect().top : 0;
+    for (let i = 0; i < dropped; i += 1) {
+      const card = list.firstElementChild;
+      if (!card) break;
+      releaseMedia(card);
+      card.remove();
+    }
+    posts = kept;
+    if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+  };
 
   // cold start: paint the cache first (PRODUCT §4)
   const cached = app.repo.cachedFeed();
   if (cached.length && app.repo.myNode) {
     posts = cached;
+    cacheHead = cached.slice(0, CACHE_HEAD);
     paint();
   }
   if (cacheOnly) {
@@ -51,6 +109,7 @@ export function render(app, { cacheOnly = false } = {}) {
       if (mine !== gen) return;
       if (!sources.length) {
         posts = [];
+        cacheHead = [];
         app.repo.cacheFeed([]);
         replace(list, emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
         replace(tail);
@@ -61,7 +120,8 @@ export function render(app, { cacheOnly = false } = {}) {
       const first = await app.busy(session.loadMore(PAGE));
       if (mine !== gen) return;
       posts = first;
-      app.repo.cacheFeed(posts);
+      cacheHead = posts.slice(0, CACHE_HEAD);
+      writeCache();
       app.feedStats = { sources: sources.length, posts: posts.length, at: Date.now() };
       if (!posts.length) {
         replace(list, emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
@@ -92,6 +152,7 @@ export function render(app, { cacheOnly = false } = {}) {
         posts.push(p);
         list.append(postCard(app, p));
       }
+      trim();
       if (app.feedStats) app.feedStats = { ...app.feedStats, posts: posts.length };
       done = session.exhausted || next.length === 0;
       paintTail();
@@ -103,6 +164,11 @@ export function render(app, { cacheOnly = false } = {}) {
   }
 
   function paint() {
+    // a wholesale repaint discards cards the same way a trim does, so it has to
+    // release them the same way: replace() only clears the children, and a card
+    // dropped without releaseMedia leaves its players, its picture bindings and
+    // its audio player row behind, detached and still holding their blobs
+    for (const card of [...list.children]) releaseMedia(card);
     replace(list, posts.map((p) => postCard(app, p)));
   }
 
@@ -122,6 +188,9 @@ export function render(app, { cacheOnly = false } = {}) {
   };
   window.addEventListener('scroll', onScroll, { passive: true });
   app.onLeave(() => window.removeEventListener('scroll', onScroll));
+  // leaving the feed releases every player and picture binding it built;
+  // without this a screen full of videos keeps its buffers after navigation
+  app.onLeave(() => releaseMedia(root));
 
   refresh.addEventListener('click', () => start({ refreshCards: true }));
   app.onLeave(app.repo.subscribe((what) => {
@@ -139,7 +208,9 @@ export function render(app, { cacheOnly = false } = {}) {
     // repaint instead of inserting above it, so the card list replaces it
     if (posts.length === 1) paint();
     else list.insertBefore(postCard(app, post), list.children[i] ?? null);
-    app.repo.cacheFeed(posts);
+    cacheHead.splice(insertIndex(cacheHead, post.date, post.id), 0, post);
+    writeCache();
+    trim('tail');
     if (app.feedStats) app.feedStats = { ...app.feedStats, posts: posts.length };
   };
   app.onLeave(app.td.on('updateNewMessage', async (u) => {

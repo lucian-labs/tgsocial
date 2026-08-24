@@ -40,7 +40,11 @@ import {
   parsePublicPath,
   publicFeedUrl,
   publicNodeUrl,
+  trimFeedWindow,
 } from '../js/protocol.js';
+import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
+import { readImageHeader } from '../js/decode.js';
+import { Td } from '../js/td.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(await readFile(join(here, '..', '..', 'docs', 'card-vectors.json'), 'utf8'));
@@ -371,4 +375,307 @@ test('albums: takeAlbumRest drains the rest of an album from its source', () => 
   assert.equal(albumId({ media_album_id: '0' }), null);
   assert.equal(albumId({}), null);
   assert.equal(albumId({ media_album_id: '42' }), '42');
+});
+
+// ── media memory: the byte-bounded blob cache (js/blobcache.js) ─────────────
+//
+// The cache is DOM-free by design, so the accounting and the eviction order
+// are checked here rather than in a browser: a fake blob is anything with a
+// `size`, and create/revoke are counters.
+
+function fakeUrls() {
+  const state = { created: [], revoked: [], n: 0 };
+  state.create = () => {
+    state.n += 1;
+    const url = `blob:fake/${state.n}`;
+    state.created.push(url);
+    return url;
+  };
+  state.revoke = (url) => state.revoked.push(url);
+  return state;
+}
+
+const blob = (size, type = 'image/jpeg') => ({ size, type });
+
+test('media cache: cost is the decoded surface, or the buffer when unknown', () => {
+  // 100 × 100 RGBA is 40 000 bytes of surface even though the JPEG is 1 000
+  assert.equal(costOf(blob(1000), 100, 100), 40000);
+  // …and a buffer bigger than its own surface (a video, an animation) is charged in full
+  assert.equal(costOf(blob(90000), 100, 100), 90000);
+  assert.equal(costOf(blob(1234)), 1234);
+  assert.equal(costOf(null), 0);
+});
+
+test('media cache: every insert reports its real cost and the total tracks it', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 10 * MB, maxEntries: 10, create: u.create, revoke: u.revoke });
+  c.put('a', blob(1000), { width: 100, height: 50 }); // 100*50*4 = 20 000
+  c.put('b', blob(5000));
+  assert.equal(c.bytes, 20000 + 5000);
+  assert.equal(c.size, 2);
+  c.drop('a');
+  assert.equal(c.bytes, 5000);
+  c.put('b', blob(7000));
+  assert.equal(c.bytes, 7000, 'replacing an entry refunds the old cost');
+});
+
+test('media cache: bytes are the binding constraint and eviction is least-recently-used', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 300, maxEntries: 100, create: u.create, revoke: u.revoke });
+  c.put('a', blob(100));
+  c.put('b', blob(100));
+  c.put('c', blob(100));
+  const aUrl = c.url('a'); // 'a' is now the most recently used
+  assert.equal(c.size, 3);
+  c.put('d', blob(100));
+  assert.ok(c.bytes <= c.maxBytes, `bytes ${c.bytes} within ${c.maxBytes}`);
+  assert.equal(c.has('b'), false, 'the least recently used entry went first');
+  assert.equal(c.has('a'), true, 'the touched entry survived');
+  assert.deepEqual(u.revoked, [], 'an entry with no URL minted has nothing to revoke');
+  c.put('e', blob(100));
+  assert.equal(c.has('c'), false);
+  assert.equal(u.revoked.includes(aUrl), false, "the surviving entry's URL is still live");
+});
+
+test('media cache: an evicted URL is revoked once and never handed out again', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 200, maxEntries: 100, create: u.create, revoke: u.revoke });
+  c.put('a', blob(100));
+  const first = c.url('a');
+  assert.equal(c.url('a'), first, 'the same entry keeps one URL');
+  c.put('b', blob(100));
+  c.put('c', blob(100)); // pushes 'a' out
+  assert.equal(c.has('a'), false);
+  assert.deepEqual(u.revoked, [first], 'revoked exactly once');
+  assert.equal(c.wasRevoked(first), true);
+  assert.equal(c.url('a'), null, 'a dropped key resolves to nothing, not to a dead URL');
+  c.put('a', blob(100));
+  const second = c.url('a');
+  assert.notEqual(second, first, 'the refetched entry gets a fresh URL');
+  assert.equal(c.wasRevoked(second), false);
+});
+
+test('media cache: the entry cap is the backstop when the blobs are tiny', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 10 * MB, maxEntries: 4, create: u.create, revoke: u.revoke });
+  for (let i = 0; i < 50; i += 1) c.put(`k${i}`, blob(8));
+  assert.equal(c.size, 4);
+  assert.ok(c.bytes <= 4 * 8);
+  assert.equal(c.has('k49'), true, 'the newest insert is never its own victim');
+});
+
+test('media cache: a pinned entry is not evicted, and clear leaves it alone', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 200, maxEntries: 100, create: u.create, revoke: u.revoke });
+  c.put('open', blob(100));
+  const openUrl = c.url('open');
+  c.pin('open');
+  for (let i = 0; i < 20; i += 1) c.put(`k${i}`, blob(100));
+  assert.equal(c.has('open'), true, 'the picture on screen survived the sweep');
+  assert.equal(u.revoked.includes(openUrl), false);
+  c.clear();
+  assert.equal(c.has('open'), true);
+  c.unpin('open');
+  assert.equal(c.clear(), 1);
+  assert.equal(c.size, 0);
+  assert.equal(c.bytes, 0);
+  assert.equal(u.revoked.includes(openUrl), true, 'unpinned and cleared, the URL is revoked');
+});
+
+test('media cache: a blob stored again under the same key keeps its live URL', () => {
+  const u = fakeUrls();
+  const c = new MediaCache({ maxBytes: 10 * MB, create: u.create, revoke: u.revoke });
+  const b = blob(100);
+  c.put('a', b);
+  const url = c.url('a');
+  c.put('a', b);
+  assert.equal(c.url('a'), url);
+  assert.deepEqual(u.revoked, []);
+  assert.equal(c.bytes, 100, 'and it is charged once');
+});
+
+test('media budget: derived from the runtime, clamped into the tens of MB', () => {
+  const at = (deviceMemory, heap = 0) => mediaBudgetBytes({
+    navigator: deviceMemory ? { deviceMemory } : {},
+    performance: heap ? { memory: { jsHeapSizeLimit: heap } } : {},
+  });
+  assert.equal(at(0), 48 * MB, 'no signal at all → the page ceiling, one eighth of it, capped');
+  assert.equal(at(8), 48 * MB, 'a big machine is still a browser tab');
+  assert.equal(at(0.5), 16 * MB, 'a 512 MB device gets 128 MB / 8');
+  assert.equal(at(0.25), 12 * MB, 'and the floor holds under that');
+  assert.equal(at(8, 64 * MB), 12 * MB, "a small heap ceiling wins over the estimate");
+  for (const g of [0.25, 0.5, 1, 2, 4, 8]) {
+    const b = at(g);
+    assert.ok(b >= 12 * MB && b <= 48 * MB, `${g} GiB → ${b} inside the clamp`);
+  }
+});
+
+test('rendition keys separate the feed card from the full-screen viewing', () => {
+  assert.equal(renditionKey('u123', 780), 'u123@780');
+  assert.equal(renditionKey('u123', 96), 'u123@96');
+  assert.equal(renditionKey('u123', null), 'u123@full');
+  assert.notEqual(renditionKey('u123', 780), renditionKey('u123', 1170));
+});
+
+/**
+ * A Td whose TDLib calls are stubbed and whose cache is DOM-free, so the key
+ * derivation can be exercised end to end under node.
+ */
+function stubTd(bytes = 'video-bytes') {
+  const td = new Td();
+  const revoked = [];
+  let n = 0;
+  td.media = new MediaCache({
+    maxBytes: 10000,
+    maxEntries: 8,
+    create: () => `blob:stub/${(n += 1)}`,
+    revoke: (u) => revoked.push(u),
+  });
+  td.download = async (f) => f;
+  td.send = async () => ({ data: new Blob([bytes]) });
+  return { td, revoked };
+}
+
+test('pin: a player pins the key its bytes are actually cached under', async () => {
+  // pinImage used to derive `<key>@full` while fileBlobOrThrow stored the bare
+  // `<key>`, so every video and every voice note pinned an entry that did not
+  // exist: pin() returned false and the blob a <video> was playing was an
+  // ordinary eviction victim.
+  const { td } = stubTd();
+  const file = { id: 7, size: 11, remote: { unique_id: 'vid7' }, local: {} };
+  await td.fileBlobOrThrow(file);
+  assert.equal(td.media.has(td.fileKey(file)), true, 'the blob is cached under the bare file key');
+
+  const key = td.pinImage(file, null);
+  assert.equal(key, td.fileKey(file), 'and that is the key the pin names');
+  assert.equal(td.media.entries.get(key).pins, 1, 'the pin landed on the entry');
+
+  td.media.clear();
+  assert.equal(td.media.has(key), true, 'a memory-pressure flush spares what is playing');
+  assert.equal(td.media.url(key).startsWith('blob:'), true, 'and its URL is still live');
+
+  td.unpinKey(key);
+  assert.equal(td.media.entries.get(key).pins, 0);
+  td.media.clear();
+  assert.equal(td.media.has(key), false, 'once playback lets go, the flush takes it');
+});
+
+test('pin: an image rendition still pins the width it was fetched at', () => {
+  const { td } = stubTd();
+  const file = { id: 9, remote: { unique_id: 'ph9' }, local: {} };
+  td.media.put(renditionKey('ph9', 780), new Blob(['x']));
+  assert.equal(td.pinImage(file, 780), 'ph9@780');
+  assert.equal(td.pinImage(file, 96), null, 'a width nothing was cached at pins nothing');
+  assert.equal(td.mediaKey(file, 780), 'ph9@780');
+  assert.equal(td.mediaKey(file, null), 'ph9', 'no width means the stored file itself');
+});
+
+// ── the header probe that keeps a decode off the already-small (js/decode.js) ─
+
+function jpegBytes(width, height, orientation = 0) {
+  const out = [0xff, 0xd8];
+  if (orientation) {
+    const tiff = [
+      0x49, 0x49, 0x2a, 0x00, // 'II', 42
+      0x08, 0x00, 0x00, 0x00, // IFD0 at +8
+      0x01, 0x00, // one entry
+      0x12, 0x01, 0x03, 0x00, // tag 0x0112, type SHORT
+      0x01, 0x00, 0x00, 0x00, // count 1
+      orientation & 0xff, 0x00, 0x00, 0x00, // value
+      0x00, 0x00, 0x00, 0x00, // no next IFD
+    ];
+    const payload = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00, ...tiff];
+    const len = payload.length + 2;
+    out.push(0xff, 0xe1, (len >> 8) & 0xff, len & 0xff, ...payload);
+  }
+  out.push(0xff, 0xc0, 0x00, 0x11, 0x08,
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01);
+  while (out.length < 32) out.push(0x00);
+  return new Uint8Array(out);
+}
+
+function pngBytes(width, height) {
+  const out = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52];
+  for (const v of [width, height]) out.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff);
+  while (out.length < 40) out.push(0x00);
+  return new Uint8Array(out);
+}
+
+test('image header: size comes off the header, so an already-small picture never decodes', () => {
+  assert.deepEqual(readImageHeader(jpegBytes(2000, 1500)), { width: 2000, height: 1500, orientation: 1 });
+  assert.deepEqual(readImageHeader(jpegBytes(96, 96, 1)), { width: 96, height: 96, orientation: 1 });
+  assert.deepEqual(readImageHeader(pngBytes(1280, 720)), { width: 1280, height: 720, orientation: 1 });
+});
+
+test('image header: an EXIF rotation is reported, never assumed away', () => {
+  // orientations 5–8 swap the painted axes, so the stored width is the painted
+  // HEIGHT: resizing to it would squash the photo. downscale() takes the full
+  // decode for these rather than trusting the header.
+  for (const o of [2, 3, 4, 5, 6, 7, 8]) {
+    assert.equal(readImageHeader(jpegBytes(2000, 1500, o)).orientation, o, `orientation ${o} survives the probe`);
+  }
+});
+
+test('image header: an unreadable header is null, not a throw', () => {
+  assert.equal(readImageHeader(null), null);
+  assert.equal(readImageHeader(new Uint8Array(8)), null, 'too short to say anything');
+  assert.equal(readImageHeader(new Uint8Array(64)), null, 'no signature we know');
+  assert.equal(readImageHeader(new Uint8Array([0xff, 0xd8, ...new Array(62).fill(0)])), null, 'SOI with no frame header');
+});
+
+// ── the in-memory feed window (PRODUCT §2.3) ───────────────────────────────
+
+test('feed window: trims off the head and keeps the survivors newest-first', () => {
+  const posts = [];
+  for (let i = 0; i < 10; i += 1) posts.push({ key: `k${i}`, date: 100 - i, id: 100 - i });
+  const { posts: kept, dropped } = trimFeedWindow(posts, 4);
+  assert.equal(dropped, 6);
+  assert.equal(kept.length, 4);
+  assert.deepEqual(kept.map((p) => p.key), ['k6', 'k7', 'k8', 'k9'], 'the oldest-held page goes, the reader keeps their place');
+  assert.equal(isNewestFirst(kept), true);
+  assert.deepEqual(trimFeedWindow(posts, 20), { posts, dropped: 0 }, 'under the cap it is a no-op');
+  assert.deepEqual(trimFeedWindow([], 4), { posts: [], dropped: 0 });
+  assert.equal(trimFeedWindow(posts, 0).dropped, 0, 'a nonsense cap never empties the feed');
+});
+
+test('feed window: a live insert trims the far end, never the post that just arrived', () => {
+  const posts = [];
+  for (let i = 0; i < 10; i += 1) posts.push({ key: `k${i}`, date: 100 - i, id: 100 - i });
+  const live = { key: 'live', date: 200, id: 200 };
+  posts.splice(insertIndex(posts, live.date, live.id), 0, live);
+  const { posts: kept, dropped } = trimFeedWindow(posts, 4, { from: 'tail' });
+  assert.equal(dropped, 7);
+  assert.equal(kept[0].key, 'live', 'the new post is at the top and stays there');
+  assert.deepEqual(kept.map((p) => p.key), ['live', 'k0', 'k1', 'k2']);
+  assert.equal(isNewestFirst(kept), true);
+});
+
+test('feed window: pagination survives the trim', () => {
+  // the merge cursor lives outside the window, so trimming must not change
+  // which post comes next — page after page, the window is the newest `max`
+  const merge = createMerge(['a']);
+  const id = (n) => n * 1048576;
+  const all = [];
+  for (let i = 0; i < 90; i += 1) all.push({ id: id(200 - i), date: 5000 - i });
+  pushMessages(merge, 'a', all);
+  markExhausted(merge, 'a');
+  const MAX = 25;
+  let window = [];
+  let pages = 0;
+  for (;;) {
+    const page = takeNext(merge, 10).items;
+    if (!page.length) break;
+    pages += 1;
+    window.push(...page.map((m) => ({ key: `a:${m.id}`, id: m.id, date: m.date })));
+    const trimmed = trimFeedWindow(window, MAX);
+    window = trimmed.posts;
+    assert.ok(window.length <= MAX, `window ${window.length} <= ${MAX}`);
+    assert.equal(isNewestFirst(window), true, 'still strictly newest-first after the trim');
+  }
+  assert.equal(pages, 9, 'every page was still delivered after trims');
+  assert.equal(window.length, MAX);
+  assert.equal(window[window.length - 1].id, id(111), 'the last post loaded is still in the window');
+  assert.equal(new Set(window.map((p) => p.key)).size, MAX, 'no duplicates re-enter on a trim');
 });

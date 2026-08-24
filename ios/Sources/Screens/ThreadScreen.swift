@@ -259,11 +259,15 @@ struct CommentComposerModal: View {
             Task {
                 guard let data = try? await item.loadTransferable(type: Data.self) else { return }
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent("tgsocial-\(UUID().uuidString).jpg")
-                if let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.85) {
-                    try? jpeg.write(to: url)
-                } else {
-                    try? data.write(to: url)
-                }
+                // Off the main actor: a picked photo is full sensor resolution, so decoding it and
+                // re-encoding to JPEG is tens of MB and hundreds of milliseconds of main-thread stall.
+                await Task.detached(priority: .userInitiated) {
+                    if let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.85) {
+                        try? jpeg.write(to: url)
+                    } else {
+                        try? data.write(to: url)
+                    }
+                }.value
                 photoPath = url.path
             }
         }

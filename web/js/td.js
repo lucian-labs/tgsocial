@@ -8,6 +8,8 @@
  * setTdlibParameters, no encryption-key step.
  */
 import { floodWaitSeconds } from './protocol.js';
+import { MediaCache, mediaBudgetBytes, renditionKey } from './blobcache.js';
+import { downscale } from './decode.js';
 
 export const APP_VERSION = '1.0.0';
 export const APP_BUILD = '1';
@@ -61,6 +63,13 @@ const DOWNLOAD_STALL_MS = 60000;
 /** A connection that stays Connecting/Updating this long gets a nudge (setNetworkType) so TDLib re-checks its socket. */
 const CONNECTION_STALL_MS = 30000;
 
+/** How often the heap is sampled where the browser reports one (Chrome only). */
+const MEMORY_POLL_MS = 10000;
+/** Fraction of the renderer's heap ceiling that counts as pressure. */
+const HEAP_PRESSURE = 0.8;
+/** What a backgrounded tab keeps of its media budget — enough to repaint on return, not enough to be worth killing. */
+const HIDDEN_KEEP = 0.25;
+
 export class Td {
   constructor() {
     this.client = null;
@@ -69,8 +78,18 @@ export class Td {
     this.tdlibVersion = null;
     this.listeners = new Map();
     this.downloads = new Map();
-    this.blobUrls = new Map();
-    this.fileBlobs = new Map();
+    /**
+     * Every decoded rendition and every blob: URL the app is holding, bounded
+     * by bytes first and entries second (js/blobcache.js). Nothing else in the
+     * app may call URL.createObjectURL: an URL minted outside this cache has
+     * nobody to revoke it.
+     */
+    this.media = new MediaCache({ maxBytes: mediaBudgetBytes() });
+    /** key → in-flight read promise; not charged to the budget until it settles. */
+    this.filePending = new Map();
+    /** rendition key → in-flight decode, so a screen full of one avatar decodes it once. */
+    this.renditionPending = new Map();
+    this.memoryTimer = null;
     this.floodUntil = 0;
     this.onFloodWait = null;
     /** Set by the app: an Activity registry every request-bound operation reports into. */
@@ -158,6 +177,7 @@ export class Td {
       useDatabase: true,
     });
     this.startWatchdog();
+    this.startMemoryWatch();
     const ready = this.waitAuth((s) => s && s['@type'] !== 'authorizationStateWaitTdlibParameters', 30000);
     const params = {
       '@type': 'setTdlibParameters',
@@ -303,6 +323,12 @@ export class Td {
       await closed;
     } catch (e) {
       console.warn('[td] logOut', e.message);
+    } finally {
+      // nothing decoded from this account may outlive it, and every blob: URL
+      // it minted is revoked here rather than left to the reload
+      this.flushMedia('logout');
+      if (this.memoryTimer) clearInterval(this.memoryTimer);
+      this.memoryTimer = null;
     }
   }
 
@@ -414,30 +440,105 @@ export class Td {
   async fileUrl(file, opts = {}) {
     if (!file || !file.id) return null;
     const key = this.fileKey(file);
-    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
+    const hit = this.media.url(key);
+    if (hit) return hit;
     const blob = await this.fileBlob(file, opts);
     if (!blob) return null;
-    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
-    const url = URL.createObjectURL(blob);
-    this.blobUrls.set(key, url);
-    return url;
+    return this.media.url(key) ?? null;
   }
 
   /** Cached blob: URL when the file has already been read, else null (no download). */
   cachedUrl(file) {
-    return this.blobUrls.get(this.fileKey(file)) ?? null;
+    return this.media.url(this.fileKey(file));
+  }
+
+  /**
+   * The media-cache key for one rendition of a file.
+   *
+   * A width means a decoded rendition and gets a rendition suffix. NO width
+   * means "the bytes Telegram sent", and those are already cached under the
+   * bare file key by fileBlobOrThrow — a video being played, a voice note,
+   * a document. Deriving a separate `@full` key for that case would name an
+   * entry nothing ever writes, which is exactly how pinImage came to be a
+   * silent no-op for every player in the app.
+   */
+  mediaKey(file, width = null) {
+    const base = this.fileKey(file);
+    return width ? renditionKey(base, width) : base;
+  }
+
+  /** Cached URL for one rendition of a file (see imageUrl), else null. */
+  cachedImageUrl(file, width = null) {
+    if (!file?.id) return null;
+    return this.media.url(this.mediaKey(file, width));
   }
 
   /** Like fileUrl but rejects instead of swallowing (so a viewer can tell cancel from failure). */
   async fileUrlOrThrow(file, opts = {}) {
     if (!file || !file.id) throw new Error('No file.');
     const key = this.fileKey(file);
-    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
-    const blob = await this.fileBlobOrThrow(file, opts);
-    if (this.blobUrls.has(key)) return this.blobUrls.get(key);
-    const url = URL.createObjectURL(blob);
-    this.blobUrls.set(key, url);
+    const hit = this.media.url(key);
+    if (hit) return hit;
+    await this.fileBlobOrThrow(file, opts);
+    const url = this.media.url(key);
+    if (!url) throw new Error('File is empty.');
     return url;
+  }
+
+  /**
+   * A blob: URL for an IMAGE, decoded at no more than `width` device pixels.
+   *
+   * This is the path every photo, avatar and thumbnail takes. The raw bytes
+   * Telegram sent are read once, downsampled to what the card will actually
+   * paint (js/decode.js), cached under a rendition key, and the full-size
+   * source is dropped — TDLib still has the file locally, so the full-screen
+   * viewer asking for a bigger rendition costs one readFile, not a permanent
+   * copy of every original in the feed.
+   */
+  async imageUrl(file, { width = null, priority = 1, label = 'Downloading photo', mime = null, onProgress = null } = {}) {
+    if (!file?.id) return null;
+    const base = this.fileKey(file);
+    const key = this.mediaKey(file, width);
+    const hit = this.media.url(key);
+    if (hit) return hit;
+    // one decode per rendition: a feed screen asks for the same avatar a dozen
+    // times at once, and two decodes racing would replace (and revoke) a URL
+    // the first one had already handed to an <img>
+    const inflight = this.renditionPending.get(key);
+    if (inflight) return inflight;
+    const job = (async () => {
+      const blob = await this.fileBlobOrThrow(file, { priority, label, mime, onProgress });
+      const raced = this.media.url(key);
+      if (raced) return raced;
+      const shrunk = width ? await downscale(blob, width) : { blob, width: 0, height: 0 };
+      this.media.put(key, shrunk.blob, { width: shrunk.width, height: shrunk.height });
+      // the original is re-readable from TDLib; holding it as well would double
+      // the cost of every photo in the feed for a rendition nobody is painting
+      if (key !== base && shrunk.blob !== blob) this.media.drop(base);
+      return this.media.url(key);
+    })();
+    this.renditionPending.set(key, job);
+    try {
+      return await job;
+    } finally {
+      this.renditionPending.delete(key);
+    }
+  }
+
+  /**
+   * Hold/release a cached file against eviction while it is on screen or
+   * playing. Returns the key that was pinned, or null when there was nothing
+   * cached under it — the caller must treat null as "not pinned" rather than
+   * assuming the bytes are safe.
+   */
+  pinImage(file, width = null) {
+    if (!file?.id) return null;
+    const key = this.mediaKey(file, width);
+    return this.media.pin(key) ? key : null;
+  }
+
+  unpinKey(key) {
+    if (key) this.media.unpin(key);
   }
 
   async fileBlob(file, opts = {}) {
@@ -451,12 +552,13 @@ export class Td {
 
   async fileBlobOrThrow(file, { priority = 1, onProgress = null, label = 'Downloading file', mime = null } = {}) {
     const key = this.fileKey(file);
-    const cached = this.fileBlobs.get(key);
-    if (cached instanceof Blob) return cached;
-    if (cached) {
+    const cached = this.media.blobOf(key);
+    if (cached) return cached;
+    const inflight = this.filePending.get(key);
+    if (inflight) {
       // an in-flight read: join it, and bump its priority if this caller is more urgent
       if (this.downloads.has(file.id)) this.download(file, { priority, onProgress, label });
-      return cached;
+      return inflight;
     }
     const pending = (async () => {
       const f = await this.download(file, { priority, onProgress, label });
@@ -465,15 +567,60 @@ export class Td {
       if (!(data instanceof Blob)) throw new Error('File is empty.');
       return mime && !data.type ? new Blob([data], { type: mime }) : data;
     })();
-    this.fileBlobs.set(key, pending);
+    this.filePending.set(key, pending);
     try {
       const blob = await pending;
-      this.fileBlobs.set(key, blob);
+      this.media.put(key, blob);
       return blob;
-    } catch (e) {
-      this.fileBlobs.delete(key);
-      throw e;
+    } finally {
+      this.filePending.delete(key);
     }
+  }
+
+  // ── memory pressure ──────────────────────────────────────────────────────
+
+  /**
+   * The web has no `didReceiveMemoryWarning`, so this listens to every signal
+   * that stands in for one:
+   *
+   *   freeze / pagehide — the tab is about to be frozen or put in the back/
+   *     forward cache. On iOS this is the last moment before the OS may
+   *     reclaim the whole page: release everything droppable.
+   *   visibilitychange (hidden) — a backgrounded tab is the first thing an OS
+   *     under pressure kills, so it keeps a quarter of its budget, not all.
+   *   performance.memory (Chrome) — an actual measurement: past 80 % of the
+   *     renderer's heap ceiling, flush.
+   *
+   * Every flush emits 'mediaFlush' so the views can repaint what is on screen
+   * (js/media.js) instead of leaving holes where the pictures were.
+   */
+  startMemoryWatch() {
+    if (typeof window === 'undefined' || this.memoryTimer) return;
+    const flush = (reason) => this.flushMedia(reason);
+    window.addEventListener('pagehide', () => flush('pagehide'));
+    document.addEventListener('freeze', () => flush('freeze'));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.media.trimTo(HIDDEN_KEEP);
+    });
+    this.memoryTimer = setInterval(() => {
+      const m = typeof performance !== 'undefined' ? performance.memory : null;
+      if (!m?.jsHeapSizeLimit) return;
+      if (m.usedJSHeapSize / m.jsHeapSizeLimit > HEAP_PRESSURE) flush('heap');
+    }, MEMORY_POLL_MS);
+  }
+
+  /** Drop every decoded rendition and revoke its URL. Returns how many went. */
+  flushMedia(reason = 'manual') {
+    const released = this.media.clear();
+    this.filePending.clear();
+    this.renditionPending.clear();
+    this.emit('mediaFlush', { reason, released });
+    return released;
+  }
+
+  /** Everything the Status sheet and the flow test need to see about media memory. */
+  mediaStats() {
+    return this.media.stats();
   }
 }
 

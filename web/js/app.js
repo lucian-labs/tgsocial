@@ -14,7 +14,7 @@ import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
 import { normaliseUsername, parsePublicPath, usernameKey } from './protocol.js';
-import { closeViewer, currentAudio } from './media.js';
+import { audioRowStats, closeViewer, currentAudio, watchMedia } from './media.js';
 import { openStatusSheet } from './views/status.js';
 import * as signin from './views/signin.js';
 import * as setup from './views/setup.js';
@@ -52,6 +52,8 @@ class App {
     this.nodeLookupDone = false;
     /** Written by the feed view for the Status sheet (PRODUCT §2.10). */
     this.feedStats = null;
+    /** Override for the feed's in-memory window (diagnostics and test/flows.mjs); null uses the default. */
+    this.feedWindow = null;
     this.feedRefresh = null;
     this.lastError = null;
     /** The public link this visit arrived on, until it is spent (§2.13). */
@@ -416,6 +418,9 @@ class App {
     // sign-in screen names it.
     this.pendingDest = parsePublicPath(location.pathname);
     this.repo = new Repo(this.td, this.config);
+    // a memory-pressure flush revokes every decoded picture the app is
+    // holding; this is what paints them back afterwards (js/media.js)
+    watchMedia(this);
     this.td.onFloodWait = (s) => this.toast(`Telegram asked us to wait ${s} s.`);
     this.td.on('auth', (state) => {
       const t = state?.['@type'];
@@ -440,7 +445,21 @@ class App {
 }
 
 const app = new App();
-window.__tgsocial = { app, td: app.td, get repo() { return app.repo; }, currentAudio };
+window.__tgsocial = {
+  app,
+  td: app.td,
+  get repo() { return app.repo; },
+  currentAudio,
+  /** Player rows the audio dock is tracking vs. still in the document (test/flows.mjs). */
+  audioRows: () => audioRowStats(),
+  /** Media-memory introspection for the Status sheet and test/flows.mjs. */
+  media: {
+    stats: () => app.td.mediaStats(),
+    flush: (reason = 'test') => app.td.flushMedia(reason),
+    configure: (opts) => app.td.media.configure(opts),
+    wasRevoked: (url) => app.td.media.wasRevoked(url),
+  },
+};
 // boot() paints every failure it knows about; anything it does not know about
 // still has to become a card, never a blank page.
 app.boot().catch((e) => {

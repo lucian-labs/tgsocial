@@ -7,7 +7,7 @@ import { h, button, field, modal, confirm, pill, replace, sectionMark } from '..
 import { normaliseUsername, sameUsername, isFollowing, formatTime, serverMessageId } from '../protocol.js';
 import { userMessage } from '../repo.js';
 import { postCard, avatarFor, renderEntities, emptyCard, openExternal } from './shared.js';
-import { mediaBlocks } from '../media.js';
+import { mediaBlocks, releaseMedia } from '../media.js';
 
 const MAX_DEPTH = 5;
 
@@ -34,6 +34,8 @@ export function render(app, { username, serverId, compose = false }) {
   let alive = true;
   app.onLeave(() => {
     alive = false;
+    // players and picture bindings go with the screen (js/media.js)
+    releaseMedia(root);
   });
 
   const seed = app.threadSeed;

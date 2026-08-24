@@ -176,8 +176,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             tg.newMessages.collect { m ->
                 if (!bootstrapped || m.isOutgoing && m.sendingState != null) return@collect
                 val post = runCatching { feedRepo.liveToPost(m) }.getOrNull() ?: return@collect
-                // Live inserts land at the top — the list stays strictly newest first (PRODUCT §2.3).
-                _feed.update { f -> f.copy(posts = FeedOrder.insertLive(f.posts, post)) }
+                // Live inserts land at the top — the list stays strictly newest first (PRODUCT §2.3). Deep into
+                // a paginated session the window is full and anchored at its tail (the merge cursor), so a post
+                // newer than the head has no room: flag it for the `Newer posts` jump instead of letting the
+                // trim swallow it or punching a hole in the pagination (FeedOrder.window).
+                _feed.update { f ->
+                    if (FeedOrder.isAboveFullWindow(f.posts, post)) f.copy(newerAvailable = true)
+                    else f.copy(posts = FeedOrder.insertLive(f.posts, post))
+                }
             }
         }
         viewModelScope.launch {
@@ -413,7 +419,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val sources = feedRepo.resolveSources(_myNode.value?.username, myCard, fresh = resetCursors)
                 if (resetCursors) feedRepo.reset()
                 val posts = FeedOrder.sort(feedRepo.loadMore(20))
-                _feed.update { it.copy(posts = posts, exhausted = feedRepo.exhausted, sourceCount = sources.size, ready = true, refreshedAt = System.currentTimeMillis()) }
+                // A completed refresh rebuilds the window from the newest post down, so whatever was waiting
+                // above the old window is now in the list — the `Newer posts` jump has done its job.
+                _feed.update {
+                    it.copy(
+                        posts = posts,
+                        exhausted = feedRepo.exhausted,
+                        sourceCount = sources.size,
+                        ready = true,
+                        refreshedAt = System.currentTimeMillis(),
+                        newerAvailable = false,
+                    )
+                }
                 if (posts.isNotEmpty()) feedRepo.cacheFeed(posts)
                 nodes.persist()
             }.onFailure { e ->

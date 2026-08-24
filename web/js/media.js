@@ -9,10 +9,18 @@
  *
  * Nothing here hands off to Telegram or the browser; only link previews and
  * the explicit Open in Telegram button do (shared.js).
+ *
+ * Memory: every picture on this screen goes through td.imageUrl(), which
+ * decodes at the size the card paints and caches the result under a byte
+ * bound (js/blobcache.js). Nothing here calls URL.createObjectURL, nothing
+ * here keeps a decoded copy of its own, and everything that binds a picture to
+ * an element registers itself so a memory-pressure flush can repaint it
+ * instead of leaving a hole (watchMedia / releaseMedia below).
  */
 import { h, replace, button, media, pill, icon, ring, scrubber, playerRow, nowPlaying, viewer } from '../vendor/house-pour.js';
 import { formatDuration } from './protocol.js';
 import { pickPhotoSize } from './repo.js';
+import { cardWidthPx, viewerWidthPx } from './decode.js';
 
 // ── file plumbing ──────────────────────────────────────────────────────────
 
@@ -51,6 +59,19 @@ export function formatSize(bytes) {
 const pendingVisible = new Map();
 let visObserver = null;
 
+/**
+ * Elements that were watched but never became visible — a card trimmed out of
+ * the feed window, a screen replaced mid-scroll — would otherwise sit in this
+ * map (and in the observer) for the life of the tab, holding their subtree.
+ */
+function pruneVisible() {
+  for (const el of [...pendingVisible.keys()]) {
+    if (el.isConnected) continue;
+    pendingVisible.delete(el);
+    visObserver?.unobserve(el);
+  }
+}
+
 function whenVisible(el, fn) {
   if (typeof IntersectionObserver === 'undefined') {
     fn();
@@ -65,10 +86,138 @@ function whenVisible(el, fn) {
         visObserver.unobserve(e.target);
         if (cb) cb();
       }
+      pruneVisible();
     }, { rootMargin: '100% 0px' });
   }
   pendingVisible.set(el, fn);
   visObserver.observe(el);
+}
+
+function unwatchVisible(el) {
+  if (!pendingVisible.has(el)) return;
+  pendingVisible.delete(el);
+  visObserver?.unobserve(el);
+}
+
+// ── picture bindings (memory-pressure repaint) ─────────────────────────────
+
+/**
+ * Every element currently showing a picture that came out of the media cache,
+ * with the callback that can fetch it again. A flush revokes the URLs those
+ * elements are pointing at; without this the feed would keep painting the last
+ * frame it decoded and show nothing at all for anything scrolled past.
+ */
+const bindings = new Set();
+
+function bind(el, reload) {
+  for (const b of bindings) {
+    if (b.el !== el) continue;
+    b.reload = reload;
+    return b;
+  }
+  const entry = { el, reload };
+  bindings.add(entry);
+  return entry;
+}
+
+function pruneBindings() {
+  for (const b of [...bindings]) if (!b.el.isConnected) bindings.delete(b);
+}
+
+/**
+ * Repaint after a memory-pressure flush: anything within a screen of the
+ * viewport is fetched again now, anything further away is re-armed on the
+ * visibility observer so it comes back when it is scrolled to — refilling the
+ * whole feed at once would just trip the byte bound again.
+ */
+function repaintAfterFlush() {
+  pruneBindings();
+  for (const b of [...bindings]) {
+    const r = b.el.getBoundingClientRect();
+    const near = r.bottom > -window.innerHeight && r.top < window.innerHeight * 2;
+    try {
+      if (near) b.reload();
+      else whenVisible(b.el, b.reload);
+    } catch (e) {
+      console.warn('[media] repaint', e);
+    }
+  }
+}
+
+/**
+ * Register an element that is painting a picture from the media cache, with
+ * the callback that fetches it again. Used by anything outside this module
+ * that binds a cached URL to an element (avatars, in views/shared.js).
+ */
+export function bindPicture(el, reload) {
+  bind(el, reload);
+}
+
+/** Subscribe the media layer to the app's memory-pressure flushes. Called once, from boot. */
+export function watchMedia(app) {
+  return app.td.on('mediaFlush', () => repaintAfterFlush());
+}
+
+/**
+ * Release the players and picture bindings inside a subtree that is going
+ * away — a trimmed feed card, a closed viewer, a screen being replaced. A
+ * <video> that keeps its src keeps its decoded frames and its blob alive long
+ * after the element leaves the DOM, which is exactly what the phone runs out
+ * of memory on.
+ */
+export function releaseMedia(root) {
+  if (!root) return;
+  const players = root.querySelectorAll ? [...root.querySelectorAll('video, audio')] : [];
+  if (root.tagName === 'VIDEO' || root.tagName === 'AUDIO') players.push(root);
+  for (const el of players) releasePlayer(el);
+  for (const b of [...bindings]) if (b.el === root || root.contains?.(b.el)) bindings.delete(b);
+  pruneAudioRows(root);
+  if (root.querySelectorAll) for (const el of root.querySelectorAll('*')) unwatchVisible(el);
+  unwatchVisible(root);
+  pruneVisible();
+}
+
+/**
+ * Hold a player's bytes against eviction for exactly as long as it is playing.
+ * A video whose URL is revoked mid-playback stalls; a video that is merely
+ * mounted has no claim on the budget, so the pin follows play/pause rather
+ * than the element's lifetime.
+ */
+function pinWhilePlaying(app, el, slim) {
+  if (!slim?.id) return;
+  const file = fullFile(slim);
+  let key = null;
+  const grab = () => {
+    if (!key) key = app.td.pinImage(file, null);
+  };
+  const drop = () => {
+    if (!key) return;
+    app.td.unpinKey(key);
+    key = null;
+  };
+  el.addEventListener('play', grab);
+  el.addEventListener('pause', drop);
+  el.addEventListener('ended', drop);
+  el.tgsRelease = drop;
+}
+
+/** Stop a player and let go of its buffer. Never touches the detached audio element. */
+function releasePlayer(el) {
+  if (!el || el === detachedAudio.el) return;
+  el.tgsRelease?.();
+  liveMedia.delete(el);
+  offscreenObserver?.unobserve(el);
+  try {
+    el.pause();
+  } catch {
+    // a player that never started cannot be paused; nothing to do
+  }
+  el.removeAttribute('src');
+  try {
+    el.load();
+  } catch {
+    // load() throws on a detached element in some browsers — the src is gone either way
+  }
 }
 
 /**
@@ -78,14 +227,15 @@ function whenVisible(el, fn) {
  * download leaves a resume affordance. onUrl(url) fires with the blob URL.
  * Returns { start(priority) } so a tap can begin/bump the download.
  */
-export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto = true, showRing = true }) {
+export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto = true, showRing = true, decodeWidth = null }) {
   if (!slim?.id) return { start: () => {} };
   const file = fullFile(slim);
-  const cached = app.td.cachedUrl(file);
-  if (cached) {
-    onUrl(cached);
-    return { start: () => {} };
-  }
+  // a picture goes through the downsampling decode path and is cached at the
+  // size this card paints; anything else (video, audio, a document) keeps its
+  // bytes as they came
+  const fetchUrl = (priority, onProgress) => (decodeWidth
+    ? app.td.imageUrl(file, { width: decodeWidth, priority, label: labelFor(kind), mime, onProgress })
+    : app.td.fileUrlOrThrow(file, { priority, label: labelFor(kind), mime, onProgress }));
   let ringEl = null;
   let resumeEl = null;
   let state = 'idle';
@@ -117,20 +267,39 @@ export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto 
       ringEl = ring({ onCancel: () => app.td.cancel(slim.id) });
       container.append(ringEl);
     }
-    app.td
-      .fileUrlOrThrow(file, { priority, label: labelFor(kind), mime, onProgress: (f) => ringEl?.set(f) })
+    fetchUrl(priority, (f) => ringEl?.set(f))
       .then((url) => {
         state = 'done';
         clearChrome();
+        if (!url) throw new Error('File is empty.');
         onUrl(url);
+        // the URL just handed over can be revoked under memory pressure; this
+        // is what puts the picture back afterwards
+        if (decodeWidth) bind(container, reload);
       })
       .catch(() => {
         state = 'idle';
         showResume();
       });
   };
+  /** Fetch again after a flush revoked what we were showing. */
+  const reload = () => {
+    if (state === 'loading') return;
+    state = 'idle';
+    start(1);
+  };
+  // already decoded at this size: paint it now, and keep the binding so a
+  // flush can fetch it again (the declarations above have to exist first —
+  // the reload closure is live from here on)
+  const cached = decodeWidth ? app.td.cachedImageUrl(file, decodeWidth) : app.td.cachedUrl(file);
+  if (cached) {
+    state = 'done';
+    onUrl(cached);
+    if (decodeWidth) bind(container, reload);
+    return { start, reload };
+  }
   if (auto) whenVisible(container, () => start(1));
-  return { start };
+  return { start, reload };
 }
 
 /** Resolve a slim file to a blob URL at tap priority; rejects on cancel/failure. */
@@ -147,9 +316,14 @@ function exclusive(el) {
   liveMedia.add(el);
   el.addEventListener('play', () => {
     for (const other of [...liveMedia]) {
-      // in-DOM videos that were re-rendered away are pruned; detached Audio objects persist
-      if (other.tagName === 'VIDEO' && !other.isConnected) liveMedia.delete(other);
-      else if (other !== el && !other.paused) other.pause();
+      // anything that was rendered away is pruned and released here: only the
+      // detached now-playing audio survives without a parent (it is deliberately
+      // kept alive across re-renders), everything else is a leak if it stays
+      if (other !== detachedAudio.el && !other.isConnected) {
+        releasePlayer(other);
+        continue;
+      }
+      if (other !== el && !other.paused) other.pause();
     }
   });
 }
@@ -162,6 +336,12 @@ function pauseOffscreen(video) {
   if (!offscreenObserver) {
     offscreenObserver = new IntersectionObserver((entries) => {
       for (const e of entries) {
+        // a video whose card was trimmed or re-rendered away is released, not
+        // just paused — otherwise the observer holds it and it holds its buffer
+        if (!e.target.isConnected) {
+          releasePlayer(e.target);
+          continue;
+        }
         if (!e.isIntersecting && !e.target.paused && !e.target.muted) e.target.pause();
       }
     }, { threshold: 0 });
@@ -178,6 +358,7 @@ const detachedAudio = {
   loading: false,
   np: null, // now-playing row in the dock
   rows: new Set(), // { row, key } player rows currently bound
+  pinned: null, // media-cache key held against eviction while this plays
 };
 
 function audioRowsFor(key) {
@@ -187,6 +368,28 @@ function audioRowsFor(key) {
     else if (ref.key === key) out.push(ref.row);
   }
   return out;
+}
+
+/**
+ * Forget the player rows inside a subtree that is going away, and any row that
+ * has already left the document.
+ *
+ * `audioRowsFor` only prunes while something is playing, so without this a
+ * feed of voice notes nobody pressed play on kept one entry per post for the
+ * life of the tab — and each entry holds its row, which holds its parent chain,
+ * which is the whole trimmed post card and every picture in it. Called from
+ * releaseMedia, so the registry is pruned by exactly the same sweep that
+ * releases the players and the picture bindings.
+ *
+ * `root` is still in the document when releaseMedia runs (the caller removes it
+ * afterwards), so containment is what identifies the doomed rows, not
+ * isConnected.
+ */
+function pruneAudioRows(root = null) {
+  for (const ref of [...detachedAudio.rows]) {
+    const doomed = !ref.row.isConnected || (root && (ref.row === root || root.contains?.(ref.row)));
+    if (doomed) detachedAudio.rows.delete(ref);
+  }
 }
 
 function paintAudio(app) {
@@ -202,6 +405,7 @@ function paintAudio(app) {
     row.setBusy(a.loading);
   }
   if (a.el.ended) {
+    stopAudio(app);
     dockNowPlaying(app, null);
   } else if (a.np) {
     a.np.setPlaying(playing);
@@ -209,6 +413,27 @@ function paintAudio(app) {
   } else {
     dockNowPlaying(app, nowPlaying({ title: a.meta.title, onToggle: () => toggleAudio(app, a.meta) }));
     a.np.setPlaying(playing);
+  }
+}
+
+/** Playback is over: unpin the file, let the element go, forget the item. */
+function stopAudio(app) {
+  const a = detachedAudio;
+  const gone = a.el;
+  a.el = null;
+  a.key = null;
+  a.meta = null;
+  if (a.pinned) {
+    app.td.unpinKey(a.pinned);
+    a.pinned = null;
+  }
+  if (!gone) return;
+  liveMedia.delete(gone);
+  gone.removeAttribute('src');
+  try {
+    gone.load();
+  } catch {
+    // detached element; the src is already gone
   }
 }
 
@@ -228,6 +453,17 @@ export function currentAudio() {
 }
 
 /**
+ * The player rows the audio dock is tracking: how many are registered, and how
+ * many of those are still in the document. The two must stay equal — a gap is
+ * the registry retaining trimmed cards (state introspection / test/flows.mjs).
+ */
+export function audioRowStats() {
+  let connected = 0;
+  for (const ref of detachedAudio.rows) if (ref.row.isConnected) connected += 1;
+  return { rows: detachedAudio.rows.size, connected };
+}
+
+/**
  * Play/pause an audio item. meta: { key, kind, title, sub, duration, file,
  * mime, waveform }. Starting a different item stops the current one.
  */
@@ -240,9 +476,22 @@ async function toggleAudio(app, meta) {
     return;
   }
   if (a.el) {
-    a.el.pause();
-    liveMedia.delete(a.el);
+    // the element goes: pausing it is not enough, it holds its buffer (and the
+    // blob behind it) until the src is gone
+    const gone = a.el;
     a.el = null;
+    gone.pause();
+    liveMedia.delete(gone);
+    gone.removeAttribute('src');
+    try {
+      gone.load();
+    } catch {
+      // detached element; the src is already gone
+    }
+  }
+  if (a.pinned) {
+    app.td.unpinKey(a.pinned);
+    a.pinned = null;
   }
   a.key = meta.key;
   a.meta = meta;
@@ -261,6 +510,8 @@ async function toggleAudio(app, meta) {
   a.loading = false;
   const el = new Audio(url);
   a.el = el;
+  // the URL this element is playing must survive an eviction sweep
+  a.pinned = app.td.pinImage(fullFile(meta.file), null);
   exclusive(el);
   for (const ev of ['play', 'pause', 'ended', 'timeupdate', 'durationchange']) {
     el.addEventListener(ev, () => paintAudio(app));
@@ -310,9 +561,18 @@ export function decodeWaveform(b64, bars = 40) {
 
 // ── inline blocks ──────────────────────────────────────────────────────────
 
+/**
+ * Device pixels a full-width card paints — which is also the size we ask
+ * Telegram for and the size we decode to. devicePixelRatio is capped at 2 in
+ * cardWidthPx(): a 3× decode is 2.25× the memory for a difference nobody sees
+ * in a scrolling feed.
+ */
 function targetWidth() {
-  return Math.round(Math.min(window.innerWidth, 540) * (window.devicePixelRatio || 1));
+  return cardWidthPx(window);
 }
+
+/** Device pixels a link-preview / video thumbnail paints. */
+const THUMB_PX = 288;
 
 function stop(e) {
   e.stopPropagation();
@@ -328,7 +588,7 @@ function photoBlock(app, post, item, index) {
   const size = pickPhotoSize(item.sizes, targetWidth());
   if (!size) return null;
   const box = mediaBox(`${size.w} / ${size.h}`, item.mini);
-  const load = autoLoad(app, box, size.file, { kind: 'photo', onUrl: (url) => box.setImage(url) });
+  const load = autoLoad(app, box, size.file, { kind: 'photo', decodeWidth: targetWidth(), onUrl: (url) => box.setImage(url) });
   box.setAttribute('role', 'button');
   box.setAttribute('tabindex', '0');
   box.setAttribute('aria-label', 'View photo');
@@ -350,7 +610,7 @@ function photoBlock(app, post, item, index) {
 function videoBlock(app, post, item, index) {
   const aspect = item.w && item.h ? `${item.w} / ${item.h}` : '4 / 3';
   const box = mediaBox(aspect, item.mini);
-  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, onUrl: (url) => box.setImage(url) });
+  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, decodeWidth: targetWidth(), onUrl: (url) => box.setImage(url) });
   const tag = pill(formatDuration(item.duration));
   tag.classList.add('post-media-tag');
   const play = h('button.media-play', { type: 'button', 'aria-label': `Play video, ${formatDuration(item.duration)}` }, h('span.disc', icon('play')));
@@ -386,6 +646,7 @@ function mountInlineVideo(app, box, post, item, index, url) {
   replace(box, video, controls);
   box.classList.add('loaded');
   exclusive(video);
+  pinWhilePlaying(app, video, item.file);
   pauseOffscreen(video);
   playBtn.addEventListener('click', (e) => {
     stop(e);
@@ -421,7 +682,7 @@ function videoScrubber(video) {
 function animationBlock(app, post, item, index) {
   const aspect = item.w && item.h ? `${item.w} / ${item.h}` : '4 / 3';
   const box = mediaBox(aspect, item.mini);
-  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, onUrl: (url) => box.setImage(url) });
+  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, decodeWidth: targetWidth(), onUrl: (url) => box.setImage(url) });
   const tag = pill('GIF');
   tag.classList.add('post-media-tag');
   box.append(tag);
@@ -434,6 +695,10 @@ function animationBlock(app, post, item, index) {
     video.autoplay = true;
     replace(box, video, tag);
     box.classList.add('loaded');
+    // a muted loop never joins the one-at-a-time set (it must not pause the
+    // audio someone is listening to), but it is still observed so that a GIF
+    // whose card is trimmed away is released rather than left decoding
+    pauseOffscreen(video);
     video.play().catch(() => null);
     video.addEventListener('click', (e) => {
       stop(e);
@@ -479,7 +744,7 @@ function audioBlock(app, post, item, kind) {
 function videoNoteBlock(app, post, item) {
   const box = mediaBox('1 / 1', item.mini);
   box.classList.add('video-note');
-  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, onUrl: (url) => box.setImage(url) });
+  if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, decodeWidth: THUMB_PX, onUrl: (url) => box.setImage(url) });
   const play = h('button.media-play', { type: 'button', 'aria-label': 'Play video note' }, h('span.disc', icon('play')));
   box.append(play);
   play.addEventListener('click', async (e) => {
@@ -499,6 +764,7 @@ function videoNoteBlock(app, post, item) {
     replace(box, video);
     box.classList.add('loaded');
     exclusive(video);
+    pinWhilePlaying(app, video, item.file);
     pauseOffscreen(video);
     video.addEventListener('click', (ev) => {
       stop(ev);
@@ -565,7 +831,7 @@ function stickerBlock(app, item) {
   box.classList.add('sticker');
   // animated stickers show their thumbnail; static ones render the webp itself
   const file = item.animated ? item.thumb?.file : item.file;
-  if (file?.id) autoLoad(app, box, file, { kind: 'sticker', showRing: false, onUrl: (url) => box.setImage(url) });
+  if (file?.id) autoLoad(app, box, file, { kind: 'sticker', showRing: false, decodeWidth: THUMB_PX, onUrl: (url) => box.setImage(url) });
   box.addEventListener('click', stop);
   return box;
 }
@@ -586,7 +852,7 @@ function previewBlock(app, preview, openExternal) {
     const size = pickPhotoSize(preview.thumb, 144);
     if (size?.file?.id) {
       const thumbBox = media(null, '1 / 1', { mini: preview.mini });
-      autoLoad(app, thumbBox, size.file, { kind: 'photo', showRing: false, onUrl: (url) => thumbBox.setImage(url) });
+      autoLoad(app, thumbBox, size.file, { kind: 'photo', showRing: false, decodeWidth: THUMB_PX, onUrl: (url) => thumbBox.setImage(url) });
       parts.push(thumbBox);
     }
   }
@@ -656,10 +922,13 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
       document.body.style.top = '';
       document.body.style.width = '';
       window.scrollTo(0, scrollY);
-      for (const s of slides.values()) {
-        const video = s.querySelector('video');
-        if (video) video.pause();
-      }
+      // full-screen renditions are the biggest things the app decodes: they go
+      // the moment the viewer does, along with every player it built
+      for (const s of slides.values()) releaseMedia(s);
+      slides.clear();
+      for (const key of pinnedKeys) app.td.unpinKey(key);
+      pinnedKeys.clear();
+      if (offKeys) offKeys();
       if (!poppedByHistory && history.state?.tgsViewer) history.back();
     },
   });
@@ -672,6 +941,9 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
   window.addEventListener('popstate', onPop);
 
   const slides = new Map();
+  /** Media-cache keys held while this viewer paints them; released on close. */
+  const pinnedKeys = new Set();
+  let offKeys = null;
   const downloadBtn = button('Download', { style: 'ghost', size: 'sm', ariaLabel: 'Download' });
   v.actions.append(downloadBtn);
   downloadBtn.addEventListener('click', async () => {
@@ -706,17 +978,23 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
     const slide = h('div.viewer-slide');
     slides.set(i, slide);
     if (doc) buildDocSlide(app, slide, item);
-    else if (item.kind === 'photo') buildPhotoSlide(app, slide, item);
+    else if (item.kind === 'photo') buildPhotoSlide(app, slide, item, pinnedKeys);
     else buildVideoSlide(app, slide, item, item.kind === 'animation', i === idx ? resumeAt : 0);
     return slide;
   }
 
   function show(i, { autoplayVideo = false } = {}) {
     idx = i;
-    const current = slides.get(i);
-    for (const [k, s] of slides) {
-      if (k !== i) {
-        s.remove();
+    for (const [k, s] of [...slides]) {
+      if (k === i) continue;
+      s.remove();
+      // the neighbours stay built (a swipe back is instant); anything further
+      // away is released — a 40-item album would otherwise hold 40 decoded
+      // full-screen renditions and 40 players at once
+      if (Math.abs(k - i) > 1) {
+        releaseMedia(s);
+        slides.delete(k);
+      } else {
         const video = s.querySelector('video');
         if (video && !video.muted) video.pause();
       }
@@ -730,7 +1008,7 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
     if (i > 0) buildSlide(i - 1);
   }
 
-  wireGestures(v, {
+  offKeys = wireGestures(v, {
     count: () => items.length,
     index: () => idx,
     goTo: (i) => show(i, { autoplayVideo: false }),
@@ -743,8 +1021,15 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
   show(idx, { autoplayVideo: false });
 }
 
-function buildPhotoSlide(app, slide, item) {
-  const size = pickPhotoSize(item.sizes, Math.round(window.innerWidth * (window.devicePixelRatio || 1)));
+/**
+ * The full-screen photo — the one place a bigger rendition is genuinely
+ * needed. It asks for the screen's own width (dpr capped at 2), which is a
+ * different cache key from the feed card's rendition, and pins it so the
+ * picture cannot be evicted out from under an open viewer.
+ */
+function buildPhotoSlide(app, slide, item, pinnedKeys = null) {
+  const want = viewerWidthPx(window);
+  const size = pickPhotoSize(item.sizes, want);
   const img = h('img', { alt: '' });
   if (item.mini) {
     img.src = item.mini;
@@ -753,14 +1038,23 @@ function buildPhotoSlide(app, slide, item) {
   const wrap = h('div.viewer-zoom', img);
   slide.append(wrap);
   if (!size?.file?.id) return;
+  const file = fullFile(size.file);
   const prog = ring({ onCancel: () => app.td.cancel(size.file.id) });
   slide.append(prog);
+  const paint = (url) => {
+    if (!url) return;
+    prog.remove();
+    img.src = url;
+    img.style.filter = '';
+    const key = app.td.pinImage(file, want);
+    if (key && pinnedKeys) pinnedKeys.add(key);
+  };
   app.td
-    .fileUrlOrThrow(fullFile(size.file), { priority: 32, label: labelFor('photo'), onProgress: (f) => prog.set(f) })
+    .imageUrl(file, { width: want, priority: 32, label: labelFor('photo'), onProgress: (f) => prog.set(f) })
     .then((url) => {
-      prog.remove();
-      img.src = url;
-      img.style.filter = '';
+      paint(url);
+      // a flush while the viewer is open must put the picture back, not leave black
+      bind(img, () => app.td.imageUrl(file, { width: want, priority: 32, label: labelFor('photo') }).then(paint).catch(() => null));
     })
     .catch(() => prog.remove());
 }
@@ -787,6 +1081,7 @@ function buildVideoSlide(app, slide, item, loop, resumeAt = 0) {
       }
       slide.append(video);
       exclusive(video);
+      pinWhilePlaying(app, video, item.file);
       if (!loop) {
         const playBtn = h('button.player-btn', { type: 'button', 'aria-label': 'Play' }, icon('play'));
         const time = h('span.player-time', '0:00');
@@ -831,7 +1126,13 @@ function buildDocSlide(app, slide, item) {
       } else if (kind === 'audio') {
         const row = playerRow({ title: item.fileName, duration: '0:00', label: `Play ${item.fileName}` });
         const audio = new Audio(url);
+        // parked in the slide (not merely referenced by the closure) so closing
+        // the viewer releases it with everything else — a detached Audio kept
+        // playing its blob for the life of the tab before this
+        audio.style.display = 'none';
+        slide.append(audio);
         exclusive(audio);
+        pinWhilePlaying(app, audio, item.file);
         row.querySelector('.player-btn').addEventListener('click', () => {
           if (audio.paused) audio.play().catch(() => null);
           else audio.pause();
@@ -850,6 +1151,7 @@ function buildDocSlide(app, slide, item) {
         video.setAttribute('playsinline', '');
         exclusive(video);
         slide.append(video);
+        pinWhilePlaying(app, video, item.file);
         video.addEventListener('click', () => {
           if (video.paused) video.play().catch(() => null);
           else video.pause();
@@ -976,7 +1278,9 @@ function wireGestures(v, api) {
     if (el && scale === 1) el.style.transform = '';
   });
 
-  document.addEventListener('keydown', function onKey(e) {
+  // returned so the viewer's onClose can take the listener off document even
+  // when no key was ever pressed after it closed
+  const onKey = (e) => {
     if (!v.root.isConnected) {
       document.removeEventListener('keydown', onKey);
       return;
@@ -988,7 +1292,9 @@ function wireGestures(v, api) {
       reset();
       api.goTo(api.index() - 1);
     }
-  });
+  };
+  document.addEventListener('keydown', onKey);
+  return () => document.removeEventListener('keydown', onKey);
 }
 
 /** True while the full-screen viewer is open (the app hides its chrome then). */

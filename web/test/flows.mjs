@@ -768,6 +768,181 @@ try {
   ok(total >= 40, `feed: ${total} posts after exhausting sources`);
   const linkOk = await page.evaluate(() => window.__tgsocial.repo.cachedFeed()[0].link);
   ok(/^https:\/\/t\.me\/[a-z_]+\/\d+$/.test(linkOk), `feed: deep link ${linkOk}`);
+
+  // ── media memory: the object-URL registry is bounded (js/blobcache.js) ────
+  // Every picture the feed paints used to mint a blob: URL that was never
+  // revoked and lived in an unbounded Map. It is now an LRU bounded by bytes
+  // first and entries second. The real budget is tens of MB and the mock's
+  // pictures are a few hundred bytes each, so the bounds are shrunk here to
+  // something this feed can actually overflow — the mechanism is the same one
+  // that runs on a phone.
+  const mediaDefaults = await page.evaluate(() => window.__tgsocial.media.stats());
+  ok(mediaDefaults.maxBytes >= 12 * 1024 * 1024 && mediaDefaults.maxBytes <= 48 * 1024 * 1024,
+    `media: derived budget ${Math.round(mediaDefaults.maxBytes / 1048576)} MB, in the tens of MB`);
+  // the downsampling decode path, on a real photo rather than the mock's SVGs:
+  // a 2000 px JPEG must come back at the width the card paints, and smaller
+  const decoded = await page.evaluate(async () => {
+    const { downscale, cardWidthPx } = await import('/js/decode.js');
+    const c = document.createElement('canvas');
+    c.width = 2000;
+    c.height = 1500;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 2000, 1500);
+    grad.addColorStop(0, '#8a6a2f');
+    grad.addColorStop(1, '#101014');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 2000, 1500);
+    const big = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92));
+    const target = cardWidthPx(window);
+    const out = await downscale(big, target);
+    return { target, srcBytes: big.size, outBytes: out.blob.size, w: out.width, h: out.height, downsampled: out.downsampled };
+  });
+  ok(decoded.downsampled && decoded.w === decoded.target && decoded.h === Math.round((1500 * decoded.target) / 2000),
+    `media: a 2000 px photo decodes to ${decoded.w}×${decoded.h}, the size the card paints`);
+  ok(decoded.outBytes < decoded.srcBytes,
+    `media: the cached rendition is smaller than the original (${decoded.outBytes} B vs ${decoded.srcBytes} B)`);
+
+  // the transient cost of decoding is bounded too: the visibility observer arms
+  // every card within ~3 screens at once, and each decode holds a surface the
+  // byte budget cannot see (nothing is charged until the decode has finished)
+  const decodeCap = await page.evaluate(async () => {
+    const { downscale, decodeLoad } = await import('/js/decode.js');
+    const c = document.createElement('canvas');
+    c.width = 1400;
+    c.height = 1050;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#8a6a2f';
+    ctx.fillRect(0, 0, 1400, 1050);
+    const big = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+    let peak = 0;
+    let sampling = true;
+    const sample = () => {
+      peak = Math.max(peak, decodeLoad().running);
+      if (sampling) requestAnimationFrame(sample);
+    };
+    sample();
+    const outs = await Promise.all(Array.from({ length: 8 }, () => downscale(big, 320)));
+    sampling = false;
+    const after = decodeLoad();
+    // the slot has to come back, or the next photo the feed wants waits forever
+    const oneMore = await downscale(big, 320);
+    return { peak, max: after.max, running: after.running, waiting: after.waiting, done: outs.every((o) => o.width === 320), oneMore: oneMore.width === 320 };
+  });
+  ok(decodeCap.peak <= decodeCap.max,
+    `media: eight decodes at once never exceed ${decodeCap.max} in flight (peak ${decodeCap.peak})`);
+  ok(decodeCap.running === 0 && decodeCap.waiting === 0 && decodeCap.done && decodeCap.oneMore,
+    'media: every decode slot is handed back, and the queue drains');
+
+  await page.evaluate(() => window.__tgsocial.media.configure({ maxBytes: 1200, maxEntries: 6 }));
+  const walkFeed = async (passes) => {
+    for (let i = 0; i < passes; i += 1) {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(220);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForTimeout(220);
+    }
+    return page.evaluate(() => window.__tgsocial.media.stats());
+  };
+  const oneWalk = await walkFeed(2);
+  const twoWalks = await walkFeed(3);
+  ok(twoWalks.entries <= 6 && twoWalks.bytes <= 1200,
+    `media: scrolling a long feed stays inside the bound (${twoWalks.entries} files, ${twoWalks.bytes} B of 1200)`);
+  ok(twoWalks.entries <= 6 && twoWalks.entries <= oneWalk.entries + 0,
+    `media: the registry does not grow with the number of scrolls (${oneWalk.entries} → ${twoWalks.entries})`);
+  ok(oneWalk.revoked > 0 && twoWalks.revoked >= oneWalk.revoked,
+    `media: eviction revokes what it drops (${twoWalks.revoked} revoked)`);
+  await page.evaluate((d) => window.__tgsocial.media.configure({ maxBytes: d.maxBytes, maxEntries: d.maxEntries }), mediaDefaults);
+
+  // a revoked URL is never handed out again, and the picture comes back
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForSelector('#view .post-media img[src^="blob:"]', { timeout: 10000 });
+  const before = await page.evaluate(() => document.querySelector('#view .post-media img[src^="blob:"]').src);
+  await page.evaluate(() => window.__tgsocial.media.flush('test'));
+  ok(await page.evaluate((u) => window.__tgsocial.media.wasRevoked(u), before), 'media: a flush revokes the URLs it was holding');
+  await page.waitForFunction((u) => {
+    const img = document.querySelector('#view .post-media img[src^="blob:"]');
+    return !!img && img.src !== u;
+  }, before, { timeout: 10000 });
+  const repainted = await page.evaluate((u) => {
+    const img = document.querySelector('#view .post-media img[src^="blob:"]');
+    return { src: img.src, reused: window.__tgsocial.media.wasRevoked(img.src), painted: img.complete && img.naturalWidth > 0, same: img.src === u };
+  }, before);
+  ok(!repainted.same && !repainted.reused, 'media: the repaint uses a fresh URL, never a revoked one');
+  ok(repainted.painted, 'media: the feed repaints after a memory-pressure flush instead of showing blanks');
+
+  // the in-memory feed window and the persisted cache are both capped, and the
+  // cards on screen still match the posts held in memory one for one
+  const windowState = await page.evaluate(() => ({
+    cards: document.querySelectorAll('#view article.post').length,
+    posts: window.__tgsocial.app.feedStats.posts,
+    cached: window.__tgsocial.repo.cachedFeed().length,
+  }));
+  ok(windowState.cards === windowState.posts && windowState.posts <= 240 && windowState.cached <= 40,
+    `feed: window capped (${windowState.posts} posts, ${windowState.cards} cards, ${windowState.cached} cached)`);
+
+  // ── the window trims, and loading more still works after it has ──────────
+  // The shipped window is 240 posts — more scrollback than this mock has — so
+  // it is lowered here to exercise the trim itself: the head comes off, the
+  // cards go with the models, and the pages keep coming.
+  const newest = await page.evaluate(() => window.__tgsocial.repo.cachedFeed()[0].key);
+  await page.evaluate(() => {
+    window.__tgsocial.app.feedWindow = 12;
+  });
+  await page.click('.tabs button:has-text("Explore")');
+  await waitText(/NEARBY/);
+  await page.click('.tabs button:has-text("Feed")');
+  await page.waitForSelector('#view article.post', { timeout: 15000 });
+  for (let i = 0; i < 14 && !/That's everything\./.test(await text()); i += 1) {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(400);
+  }
+  const trimmed = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('#view article.post')];
+    const times = cards.map((c) => c.querySelector('.post-time')?.textContent ?? '');
+    return {
+      cards: cards.length,
+      posts: window.__tgsocial.app.feedStats.posts,
+      end: /That's everything\./.test(document.getElementById('view').innerText),
+      cachedFirst: window.__tgsocial.repo.cachedFeed()[0]?.key,
+      cached: window.__tgsocial.repo.cachedFeed().length,
+      times,
+    };
+  });
+  const trimmedCards = trimmed.cards;
+  ok(trimmed.cards <= 12 && trimmed.posts <= 12 && trimmed.cards === trimmed.posts,
+    `feed: the window holds at 12 while scrolling (${trimmed.posts} posts, ${trimmed.cards} cards)`);
+  ok(trimmed.end, 'feed: pagination still reaches the end after the window has trimmed');
+  // the audio dock's row registry is pruned by the same trim. It used to be
+  // swept only while something was playing, so a scroll through a feed of voice
+  // notes retained one detached card — and every picture in it — per audio post.
+  const audioRows = await page.evaluate(() => window.__tgsocial.audioRows());
+  ok(audioRows.rows === audioRows.connected && audioRows.rows <= trimmedCards,
+    `media: the audio row registry holds only rows still on screen (${audioRows.rows} tracked, ${audioRows.connected} connected)`);
+  ok(trimmed.cachedFirst === newest && trimmed.cached <= 40,
+    'feed: the cold-start cache still holds the newest post the trim dropped');
+  ok(await page.evaluate(() => window.__tgsocial.repo.cachedFeed().every((p, i, a) => i === 0 || a[i - 1].date >= p.date)),
+    'feed: still newest-first after trimming');
+  // a live post arriving at a full window trims the far end, not itself
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.evaluate(() => {
+    const msg = {
+      '@type': 'message',
+      id: 901 << 20,
+      chat_id: -1002,
+      date: Math.floor(Date.now() / 1000) + 9,
+      content: { '@type': 'messageText', text: { '@type': 'formattedText', text: 'Live insert into a full window.', entities: [] } },
+      interaction_info: null,
+      forward_info: null,
+    };
+    window.__mock.history[-1002].unshift(msg);
+    window.__mock.client.emit({ '@type': 'updateNewMessage', message: msg });
+  });
+  await page.waitForFunction(() => /Live insert into a full window\./.test(document.querySelector('#view article.post')?.innerText ?? ''), null, { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelectorAll('#view article.post').length <= 12),
+    'feed: a live insert at a full window keeps the window bounded and keeps itself');
+  await page.evaluate(() => {
+    window.__tgsocial.app.feedWindow = null;
+  });
   await page.goto(`${base}/?mock=node&mockslow=1`, { waitUntil: 'load' });
   await page.waitForFunction(() => document.querySelectorAll('#view article.post').length > 0 && document.getElementById('status').textContent === 'Syncing', null, { timeout: 3000 });
   ok(true, 'cold start paints cached feed (pill Syncing) before TDLib is ready');

@@ -22,7 +22,20 @@ public struct TGSecrets {
 }
 
 final class TDClient {
-    private let manager: TDLibClientManager
+    /// EXACTLY ONE per process, for the lifetime of the process.
+    ///
+    /// `TDLibClientManager.init` spawns a thread that loops on `td_receive`, and TDLib aborts
+    /// (`process_fatal_error` from its own LOG(FATAL)) the moment a second thread calls
+    /// `td_receive` concurrently. Two managers therefore = a guaranteed SIGABRT, which is
+    /// exactly what shipped: a crash report showed two `app.swiftgram.TDLibKit.receive`
+    /// queues and `client-1` + `client-2` alive in one process.
+    ///
+    /// A second manager is easy to create by accident because SwiftUI may initialise an
+    /// `App`/`View` struct more than once — every `@State private var model = AppModel()`
+    /// evaluates its default again, even though only the first instance is kept. Owning the
+    /// manager statically makes that harmless: extra `TDClient`s share this one receive loop.
+    private static let manager = TDLibClientManager()
+
     private(set) var api: TDLibClient
     private let updates: AsyncStream<Update>.Continuation
     private let pump: Task<Void, Never>
@@ -30,13 +43,12 @@ final class TDClient {
     /// Delivered on the main actor, in order: one FIFO stream, one consumer. Per-update Tasks would not
     /// preserve order across hops.
     init(onUpdate: @escaping @MainActor (Update) -> Void) {
-        manager = TDLibClientManager()
         let (stream, continuation) = AsyncStream.makeStream(of: Update.self)
         updates = continuation
         pump = Task { @MainActor in
             for await update in stream { onUpdate(update) }
         }
-        api = Self.makeClient(manager, continuation)
+        api = Self.makeClient(Self.manager, continuation)
     }
 
     deinit { updates.finish(); pump.cancel() }
@@ -51,10 +63,10 @@ final class TDClient {
     }
 
     /// After `logOut` TDLib closes the client instance; a fresh one restarts the auth flow on the same stream.
-    func recreate() { api = Self.makeClient(manager, updates) }
+    func recreate() { api = Self.makeClient(Self.manager, updates) }
 
     /// Blocking; call only from willTerminate.
-    func closeClients() { manager.closeClients() }
+    func closeClients() { Self.manager.closeClients() }
 
     static var databaseDirectory: String {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

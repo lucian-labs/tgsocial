@@ -17,11 +17,26 @@ import ca.lucianlabs.tgsocial.repo.MediaRepo
 /** Loads a TDLib file as an ImageBitmap at roughly [width], via the MediaRepo cache. */
 @Composable
 fun rememberTdImage(ref: FileRef?, width: Dp, priority: Int = MediaRepo.PRIORITY_VISIBLE): ImageBitmap? {
-    val app = LocalContext.current.applicationContext as TgApp
     val px = with(LocalDensity.current) { width.roundToPx() }
-    var image by remember(ref?.uniqueId) { mutableStateOf(ref?.let { app.media.cached(it, px) }) }
+    return rememberTdImagePx(ref, px, priority)
+}
+
+/**
+ * The pixel-exact form, for callers that already know the decode size they want — the viewer asks for
+ * `media.zoomWidthPx` rather than doubling a Dp, which on a 3x display used to work out to six times the
+ * screen width and put a sensor-resolution decode in the cache.
+ *
+ * The decoded bitmap is held in composition state, so a memory-pressure eviction of the shared cache never
+ * blanks what is on screen — the next composition of a card that scrolled away decodes again from disk.
+ */
+@Composable
+fun rememberTdImagePx(ref: FileRef?, px: Int, priority: Int = MediaRepo.PRIORITY_VISIBLE): ImageBitmap? {
+    val app = LocalContext.current.applicationContext as TgApp
+    var image by remember(ref?.uniqueId, px) { mutableStateOf(ref?.let { app.media.cached(it, px) }) }
     LaunchedEffect(ref?.uniqueId, px) {
         if (ref == null || image != null) return@LaunchedEffect
+        // Cancellation (the row scrolled away) drops the decode with the composition; MediaRepo releases the
+        // per-key load lock in a finally, so a cancelled load leaves nothing behind.
         image = runCatching { app.media.image(ref, px, priority) }.getOrNull()
     }
     return image

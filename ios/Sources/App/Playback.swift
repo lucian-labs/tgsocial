@@ -16,6 +16,40 @@ enum AudioSession {
     }
 }
 
+/// The AV resources one player model owns — the AVPlayer and its observer registrations — in an
+/// object whose `deinit` is allowed to touch them.
+///
+/// Two things make this necessary. AVPlayer owns its periodic-time observer and NotificationCenter
+/// owns the `didPlayToEnd` token; **neither is released by the observing object going away**, so
+/// something has to remove them, and a paused-but-retained AVPlayer keeps its item, decode ring and
+/// render buffers alive. And a `@MainActor` class's own `deinit` is nonisolated and cannot reach
+/// its isolated stored properties, so it cannot do the removal itself. Holding them here means the
+/// release happens whenever the model is dropped — including the paths that never run a view's
+/// `onDisappear`: a navigation stack replaced wholesale, a sign-out that drops the model graph.
+final class PlayerResources {
+    var player: AVPlayer?
+    var timeObserver: Any?
+    var endObserver: NSObjectProtocol?
+    var statusObservation: NSKeyValueObservation?
+
+    /// Removes both observer registrations, invalidates the KVO token, detaches the item — which
+    /// drops its decode ring and render buffers now rather than at some later autorelease — and
+    /// lets the player go.
+    func release() {
+        if let timeObserver { player?.removeTimeObserver(timeObserver) }
+        timeObserver = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        statusObservation?.invalidate()
+        statusObservation = nil
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+    }
+
+    deinit { release() }
+}
+
 /// The single audio player. Starting another item pauses (replaces) the first; playback
 /// continues while scrolling and across tabs; the docked now-playing row mirrors this state.
 @MainActor @Observable
@@ -36,9 +70,8 @@ final class AudioPlayback {
     /// starting audio pauses an audible inline video — §2.11's one-sound rule in both directions.
     @ObservationIgnored var onWillPlay: (() -> Void)?
 
-    @ObservationIgnored private var player: AVPlayer?
-    @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var endObserver: NSObjectProtocol?
+    @ObservationIgnored private let resources = PlayerResources()
+    private var player: AVPlayer? { resources.player }
 
     var progress: Double { duration > 0 ? min(1, elapsed / duration) : 0 }
 
@@ -47,21 +80,21 @@ final class AudioPlayback {
     func play(_ item: Item, url: URL) {
         AudioSession.activate()
         onWillPlay?()
-        teardown()
+        resources.release()
         let p = AVPlayer(url: url)
-        player = p
+        resources.player = p
         current = item
         duration = Double(item.duration)
         elapsed = 0
         loadingKey = nil
-        timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-                                                 queue: .main) { [weak self] time in
+        resources.timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+                                                           queue: .main) { [weak self] time in
             guard let self else { return }
             self.elapsed = time.seconds.isFinite ? time.seconds : 0
             if let d = self.player?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.duration = d }
         }
-        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
-                                                             object: p.currentItem, queue: .main) { [weak self] _ in
+        resources.endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                                       object: p.currentItem, queue: .main) { [weak self] _ in
             self?.stop()
         }
         p.play()
@@ -88,20 +121,11 @@ final class AudioPlayback {
     }
 
     func stop() {
-        teardown()
-        player = nil
+        resources.release()
         current = nil
         isPlaying = false
         elapsed = 0
         duration = 0
-    }
-
-    private func teardown() {
-        if let timeObserver { player?.removeTimeObserver(timeObserver) }
-        timeObserver = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
-        player?.pause()
     }
 }
 
@@ -132,7 +156,6 @@ final class VideoCoordinator {
 /// the download completes.
 @MainActor @Observable
 final class InlinePlayerModel {
-    private(set) var player: AVPlayer?
     private(set) var isPlaying = false
     private(set) var elapsed: Double = 0
     var duration: Double = 0
@@ -141,9 +164,10 @@ final class InlinePlayerModel {
     var loop = false
     var muted = false
 
-    @ObservationIgnored private var timeObserver: Any?
-    @ObservationIgnored private var endObserver: NSObjectProtocol?
-    @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    /// The player and its observer registrations. Held in a box so they are released even when the
+    /// model is dropped without `teardown()` ever being called — see `PlayerResources`.
+    @ObservationIgnored private let resources = PlayerResources()
+    var player: AVPlayer? { resources.player }
 
     var progress: Double { duration > 0 ? min(1, elapsed / duration) : 0 }
 
@@ -153,22 +177,22 @@ final class InlinePlayerModel {
         let item = AVPlayerItem(url: url)
         let p = AVPlayer(playerItem: item)
         p.isMuted = muted
-        player = p
-        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+        resources.player = p
+        resources.statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             Task { @MainActor [weak self] in
                 self?.failed = true
                 self?.isPlaying = false
             }
         }
-        timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-                                                 queue: .main) { [weak self] time in
+        resources.timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+                                                           queue: .main) { [weak self] time in
             guard let self else { return }
             self.elapsed = time.seconds.isFinite ? time.seconds : 0
             if let d = self.player?.currentItem?.duration.seconds, d.isFinite, d > 0 { self.duration = d }
         }
-        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
-                                                             object: item, queue: .main) { [weak self] _ in
+        resources.endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                                       object: item, queue: .main) { [weak self] _ in
             guard let self else { return }
             if self.loop {
                 self.player?.seek(to: .zero)
@@ -203,16 +227,15 @@ final class InlinePlayerModel {
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
     }
 
+    /// Releases the player, its item and both observer registrations. Called from every media
+    /// view's `onDisappear`: a *paused* player still holds its item, decode ring and render
+    /// buffers, so pausing alone left a scrolled-past video card costing memory for the rest of
+    /// the session.
     func teardown() {
-        if let timeObserver { player?.removeTimeObserver(timeObserver) }
-        timeObserver = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        endObserver = nil
-        statusObservation = nil
-        player?.pause()
-        player = nil
+        resources.release()
         isPlaying = false
         elapsed = 0
+        duration = 0
     }
 }
 

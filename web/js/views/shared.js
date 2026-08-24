@@ -5,7 +5,7 @@
 import { h, button, pill, avatar, sectionMark, modal } from '../../vendor/house-pour.js';
 import { entityRuns, formatTime, formatExactTime, compactCount, serverMessageId } from '../protocol.js';
 import { userMessage } from '../repo.js';
-import { mediaBlocks } from '../media.js';
+import { mediaBlocks, bindPicture } from '../media.js';
 
 export function openExternal(url) {
   window.open(url, '_blank', 'noopener');
@@ -41,19 +41,28 @@ function safeHref(url) {
   return 'about:blank';
 }
 
-/** Resolve a slim file ({ id, uniqueId }) to a blob URL, or null. */
-export async function fileUrl(app, slim) {
+/**
+ * Device pixels an avatar paints: 36 pt in a row, 72 pt on a profile head
+ * (house-pour.css), doubled for retina with a little headroom. A profile photo
+ * from Telegram is 640 px square — decoding one of those per row is 1.6 MB of
+ * surface for something the size of a thumbnail.
+ */
+const AVATAR_PX = { row: 96, profile: 192 };
+
+/** Resolve a slim file ({ id, uniqueId }) to a blob URL at `width` device pixels, or null. */
+export async function fileUrl(app, slim, { width = null } = {}) {
   if (!slim?.id || !app.td?.client) return null;
+  const file = { id: slim.id, remote: { unique_id: slim.uniqueId }, local: { is_downloading_completed: false } };
   try {
-    return await app.td.fileUrl({ id: slim.id, remote: { unique_id: slim.uniqueId }, local: { is_downloading_completed: false } });
+    return width ? await app.td.imageUrl(file, { width }) : await app.td.fileUrl(file);
   } catch (e) {
     return null;
   }
 }
 
 /** Set an <img> src once the file is available; the placeholder stays otherwise. */
-export function loadImage(app, img, slim) {
-  fileUrl(app, slim).then((url) => {
+export function loadImage(app, img, slim, { width = null } = {}) {
+  fileUrl(app, slim, { width }).then((url) => {
     if (url) img.src = url;
   });
 }
@@ -61,9 +70,14 @@ export function loadImage(app, img, slim) {
 export function avatarFor(app, name, slim, size = 'row') {
   const el = avatar(name, null, size);
   if (slim?.id) {
-    fileUrl(app, slim).then((url) => {
-      if (url) el.setImage(url);
+    const width = AVATAR_PX[size] ?? AVATAR_PX.row;
+    const load = () => fileUrl(app, slim, { width }).then((url) => {
+      if (url && el.isConnected) el.setImage(url);
     });
+    load();
+    // a memory-pressure flush revokes the URL this avatar is painting; the
+    // media layer calls back here to fetch it again (js/media.js)
+    bindPicture(el, load);
   }
   return el;
 }

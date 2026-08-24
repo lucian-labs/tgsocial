@@ -7,6 +7,7 @@
  */
 import { h, button, modal, replace, sectionMark } from '../../vendor/house-pour.js';
 import { connectionCopy } from '../td.js';
+import { formatSize } from '../media.js';
 import { collapseLabels } from '../activity.js';
 import { formatClock } from '../protocol.js';
 
@@ -48,6 +49,7 @@ export function openStatusSheet(app) {
     row('Telegram'),
     row('Node'),
     row('Feed'),
+    row('Media'),
     row('Pending'),
     row('Last error'),
     row('TDLib'),
@@ -81,6 +83,10 @@ export function openStatusSheet(app) {
       const posts = `${stats.posts} ${stats.posts === 1 ? 'post' : 'posts'}`;
       set('Feed', `${src} · ${posts} · refreshed ${formatClock(new Date(stats.at))}`);
     } else set('Feed', 'None');
+
+    // what the byte-bounded media cache is holding right now (js/blobcache.js)
+    const media = app.td.mediaStats();
+    set('Media', `${formatSize(media.bytes)} of ${formatSize(media.maxBytes)} · ${media.entries} ${media.entries === 1 ? 'file' : 'files'}`);
 
     const pending = collapseLabels(app.activity.list());
     set('Pending', pending.length ? pending.map((l) => h('span.pending-item', `${l}…`)) : 'Nothing');

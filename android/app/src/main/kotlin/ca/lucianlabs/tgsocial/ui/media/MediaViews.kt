@@ -1,6 +1,7 @@
 package ca.lucianlabs.tgsocial.ui.media
 
 import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
 import android.os.Build
 import android.widget.ImageView
 import androidx.compose.foundation.Image
@@ -27,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,10 +43,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -227,9 +231,17 @@ private fun InlinePhoto(media: PostMedia.Photo, onTap: () -> Unit) {
     }
 }
 
+/**
+ * The width a full-bleed card image is actually drawn at on a screen [screenWidthDp] wide: the House Pour
+ * content column, capped and padded (PRODUCT §1). This is the single source of that arithmetic — `TgApp` sizes
+ * the decode bucket from it too, and a bucket that disagreed with the drawn width sent every landscape photo
+ * into the zoom rendition.
+ */
+fun mediaWidthDp(screenWidthDp: Int): Dp =
+    screenWidthDp.dp.coerceAtMost(HPTokens.Space.columnMax) - HPTokens.Space.columnSide * 2 - HPTokens.Space.cardPad * 2
+
 @Composable
-private fun mediaWidth() = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
-    .coerceAtMost(HPTokens.Space.columnMax) - HPTokens.Space.columnSide * 2 - HPTokens.Space.cardPad * 2
+private fun mediaWidth() = mediaWidthDp(androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp)
 
 /** Pauses/releases with the composition, pauses when scrolled away (disposal) and when the app stops. */
 @OptIn(UnstableApi::class)
@@ -459,26 +471,49 @@ private fun InlineAnimation(key: String, media: PostMedia.Animation, onTap: () -
     }
 }
 
-/** GIF documents and animations: AnimatedImageDrawable on 28+, first frame before that (PRODUCT platform note). */
+/**
+ * GIF documents and animations: AnimatedImageDrawable on 28+, first frame before that (PRODUCT platform note).
+ *
+ * Two memory rules live here. The decode is bounded to the card width — an AnimatedImageDrawable holds decoded
+ * frame buffers, so a 1080p GIF in a 360 px card costs nine times what it needs to. And the drawable is
+ * **stopped and detached in `onRelease`**: without that, a GIF scrolled off screen kept animating and kept its
+ * buffers alive for as long as the process did. `key(path)` makes the view a new node when the file changes so
+ * the old one is actually released instead of silently reused with a stale frame.
+ */
 @Composable
 fun AnimatedGif(path: String, thumb: FileRef?) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        AndroidView(
-            factory = { context ->
-                ImageView(context).apply {
-                    scaleType = ImageView.ScaleType.CENTER_CROP
-                    runCatching {
-                        val drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(File(path)))
-                        setImageDrawable(drawable)
-                        (drawable as? android.graphics.drawable.AnimatedImageDrawable)?.apply {
-                            repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE
-                            start()
+        val cardWidth = mediaWidth()
+        val targetPx = with(LocalDensity.current) { cardWidth.roundToPx() }
+        key(path) {
+            AndroidView(
+                factory = { context ->
+                    ImageView(context).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        runCatching {
+                            val source = ImageDecoder.createSource(File(path))
+                            val drawable = ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
+                                val w = info.size.width
+                                if (w > targetPx) {
+                                    val h = (info.size.height.toLong() * targetPx / w).toInt().coerceAtLeast(1)
+                                    decoder.setTargetSize(targetPx, h)
+                                }
+                            }
+                            setImageDrawable(drawable)
+                            (drawable as? AnimatedImageDrawable)?.apply {
+                                repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                start()
+                            }
                         }
                     }
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+                },
+                onRelease = { view ->
+                    (view.drawable as? AnimatedImageDrawable)?.stop()
+                    view.setImageDrawable(null)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     } else {
         val image = rememberTdImage(thumb, mediaWidth())
         MediaGround(null, image)

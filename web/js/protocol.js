@@ -599,6 +599,38 @@ export function insertIndex(list, date, id = 0) {
   return i;
 }
 
+/**
+ * Bound the in-memory feed window (PRODUCT §2.3).
+ *
+ * An infinite scroll that keeps every post it has ever loaded is a memory leak
+ * with a nice animation: a few hundred cards, their models, and every picture
+ * bound to them stay live until the tab is killed. This keeps `max` entries of
+ * a newest-first list and drops the rest off whichever end is furthest from
+ * what the reader is looking at.
+ *
+ * `from: 'head'` (the default) is the load-more case: another page has just
+ * landed at the bottom, which is where the reader is, so the oldest-held
+ * entries — the newest posts, already scrolled past — come off the top.
+ * `from: 'tail'` is the live-insert case: a new post has landed at the top,
+ * and trimming the head there would delete the very post that just arrived,
+ * so the bottom of the window goes instead.
+ *
+ * Order is untouched either way (the survivors are a contiguous newest-first
+ * run) and pagination is unaffected: the feed session's per-source cursors
+ * live outside this list, so the next page still starts where the last one
+ * ended. The cold-start cache keeps its own copy of the true newest posts.
+ *
+ * Returns { posts, dropped }.
+ */
+export function trimFeedWindow(posts, max, { from = 'head' } = {}) {
+  const list = Array.isArray(posts) ? posts : [];
+  if (!(max > 0) || list.length <= max) return { posts: list, dropped: 0 };
+  const dropped = list.length - max;
+  return from === 'tail'
+    ? { posts: list.slice(0, max), dropped }
+    : { posts: list.slice(dropped), dropped };
+}
+
 /** Compact, serialisable cursor snapshot (PROTOCOL §6: discardable). */
 export function mergeCursors(merge) {
   const out = {};

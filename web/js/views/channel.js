@@ -8,6 +8,7 @@
 import { h, kebabMenu, pill, replace } from '../../vendor/house-pour.js';
 import { hasBacklink, publicFeedUrl, channelLink } from '../protocol.js';
 import { avatarFor, postCard, emptyCard, openExternal } from './shared.js';
+import { releaseMedia } from '../media.js';
 
 const PAGE = 20;
 
@@ -24,6 +25,8 @@ export function render(app, { username }) {
   let alive = true;
   app.onLeave(() => {
     alive = false;
+    // players and picture bindings go with the screen (js/media.js)
+    releaseMedia(root);
   });
 
   (async () => {

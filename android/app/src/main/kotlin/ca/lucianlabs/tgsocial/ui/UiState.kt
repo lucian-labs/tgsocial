@@ -58,6 +58,11 @@ data class FeedUi(
     val ready: Boolean = false,
     /** Epoch ms of the last completed refresh — the Status sheet's `refreshed HH:mm`. */
     val refreshedAt: Long = 0,
+    /**
+     * A post arrived live that is newer than everything the window holds, and the window is full (see
+     * `FeedOrder.window`). The feed shows a `Newer posts` jump rather than losing it silently; a refresh clears it.
+     */
+    val newerAvailable: Boolean = false,
 )
 
 data class ExploreUi(
