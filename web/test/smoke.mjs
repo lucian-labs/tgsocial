@@ -4,6 +4,8 @@
  *   - the wordmark renders in Kaushan Script (computed font-family)
  *   - config.json loaded (or the "Missing config.json." card renders when absent)
  *   - TdClient reaches authorizationStateWaitPhoneNumber within 60 s
+ *   - PRODUCT §2.13's premise: real TDLib refuses chat reads before
+ *     authorization (searchPublicChat → 401) while getOption answers
  *
  *   node test/smoke.mjs
  *
@@ -20,6 +22,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { PREAUTH_QUERIES } from '../js/td.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const web = join(here, '..');
@@ -210,6 +213,38 @@ try {
     );
     if (conn === 'connectionStateReady') console.log('ok - Telegram reachable (connectionStateReady)');
     else notes.push(`environment: Telegram network not confirmed (connection state ${conn}); auth state machine still reached WaitPhoneNumber`);
+
+    /* PRODUCT §2.13 — the premise the whole public-link design rests on, held
+     * against the real bundled TDLib rather than a mock: a connected but
+     * unauthorized client answers preauthentication requests and refuses every
+     * chat request. If this ever starts resolving, an anonymous public read
+     * became possible and §2.13 can be revisited; until then a public link
+     * has to sign the visitor in first. Needs a live connection to mean
+     * anything, so it only asserts once Telegram is reachable. */
+    if (conn === 'connectionStateReady' && state === 'authorizationStateWaitPhoneNumber') {
+      const preauth = await page.evaluate(async () => {
+        const td = window.__tgsocial.td;
+        const probe = async (query) => {
+          try {
+            const r = await td.send(query);
+            return { ok: true, type: r?.['@type'] ?? null };
+          } catch (e) {
+            return { ok: false, code: e.code ?? 0, message: e.message };
+          }
+        };
+        return {
+          getOption: await probe({ '@type': 'getOption', name: 'version' }),
+          searchPublicChat: await probe({ '@type': 'searchPublicChat', username: 'telegram' }),
+        };
+      }, { timeout: 30000 });
+      ok(preauth.getOption.ok, `preauth: getOption answers before authorization (${preauth.getOption.type ?? preauth.getOption.message})`);
+      ok(PREAUTH_QUERIES.has('getOption') && !PREAUTH_QUERIES.has('searchPublicChat'),
+        'td.js PREAUTH_QUERIES lists what TDLib answers pre-auth, and no chat read');
+      ok(preauth.searchPublicChat.ok === false && preauth.searchPublicChat.code === 401,
+        `PRODUCT §2.13: searchPublicChat is refused before authorization (${preauth.searchPublicChat.ok ? 'RESOLVED — anonymous reads are possible now' : `${preauth.searchPublicChat.code} ${preauth.searchPublicChat.message}`})`);
+    } else {
+      notes.push('§2.13 preauth check skipped: needs connectionStateReady at WaitPhoneNumber');
+    }
   } else {
     ok(/Missing config\.json\./.test(viewText), 'renders the Missing config.json. card without config');
     notes.push('config.json absent: TDLib boot assertion skipped');

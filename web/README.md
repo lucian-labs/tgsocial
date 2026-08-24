@@ -62,8 +62,13 @@ media (player rows, GIF autoplay, full-screen viewer with album swipe, the
 now-playing dock), comments (thread screen, first-run channel creation,
 optimistic post, delete), the Status sheet, explore, profile (optimistic
 follow + rollback), feed channel, graph, you (edit card, listing, announce,
-compose), sign-out wipe, cold-start cache, the FLOOD_WAIT toast and the
-Offline pill.
+compose), sign-out wipe, cold-start cache, the FLOOD_WAIT toast, the Offline
+pill, and public links (§2.13: `/f/<channel>` signed out → Sign in naming the
+destination → landing on the channel, the same across a Setup detour, the
+refused pre-auth read, `/n/<node>`, the missing-channel empty card, Copy Link,
+and malformed escapes falling through). Its static server does what the deploy
+host's nginx does — `try_files $uri $uri/ /index.html` — so a public link
+resolves the same way it does in production.
 
 ## Layout
 
@@ -72,7 +77,7 @@ index.html            shell: topbar + view + floating tab dock + toast/modal/vie
 privacy.html          docs/PRIVACY.md as a House Pour page
 css/tokens.css        GENERATED --hp-* token supplement (design/web/tokens.build.mjs)
 css/app.css           product composites (post card, node row, graph, profile head) — var(--token) only
-js/app.js             boot, hash router, status pill + floating tab dock, sign-out
+js/app.js             boot, router (hash + public /f//n/ paths), status pill + floating tab dock, sign-out
 js/td.js              TdClient wrapper: auth stream, send + FLOOD_WAIT backoff, update bus, downloads, file → blob cache
 js/activity.js        in-flight operation registry behind the Syncing pill and the Status sheet
 js/protocol.js        pure protocol module (card + replies, comments, usernames, backlink, deep link, merge cursor, entities) — no DOM/TDLib
@@ -88,6 +93,49 @@ scripts/install-tdweb.sh
 tdweb-build/Dockerfile
 test/                 protocol.test.mjs, smoke.mjs, flows.mjs, mock-tdweb.js
 ```
+
+## Public links (PRODUCT §2.13)
+
+`/f/<channel>` and `/n/<node>` are pathnames, not hashes. nginx's SPA fallback
+serves `index.html` for them and `js/app.js` reads `location.pathname` when
+there is no `#/` route, so a deep link loads the app on that screen. Hash
+routes are unchanged and win whenever there is one — navigating inside the app
+from a public URL never reloads the page.
+
+**There is no anonymous read.** TDLib answers `401 Unauthorized` to every chat
+request made before authorization. Measured against the bundled tdweb 1.8.66
+on a client at `connectionStateReady` and `authorizationStateWaitPhoneNumber`:
+
+```
+getOption         → optionValueString
+searchPublicChat  → 401 Unauthorized
+getChat           → 401 Unauthorized
+getChatHistory    → 401 Unauthorized
+```
+
+Only preauthentication requests (`setTdlibParameters`, `getOption`,
+`setNetworkType`, the auth calls) answer — `PREAUTH_QUERIES` in `js/td.js`.
+A public channel is public to Telegram's servers, not to an unauthorized
+client, so a public page cannot be served from the browser alone. Serving one
+would take a server-side reader (bot API or an MTProto session on the host),
+which v1 does not have. `test/smoke.mjs` asserts this against the real library
+on every run, and `test/mock-tdweb.js` enforces the same gate, so a future
+change cannot quietly re-assume otherwise.
+
+**So a link is a destination, not a mode.** `App.boot()` parses the pathname
+into `app.pendingDest` before TDLib comes up. With no session the visitor gets
+Sign in with the destination named (`Sign in to see @<name>.`); the pathname
+stays in the address bar through the whole detour, and `render()` spends the
+destination on the first pass that has a session — navigating to
+`#/feed/<name>` or `#/node/<name>` if Setup rewrote the hash along the way,
+and doing nothing when the pathname already resolves there. Nothing is
+written to storage: the URL is the memory.
+
+Signed in, a public route is the ordinary channel or node screen with a
+`Copy Link` ghost in the header (`app.route.viaPath`). A malformed escape
+(`/f/%zz`) is not a route at all — `parsePublicPath` swallows the `URIError`
+and returns null, because it runs in `boot()` before there is a repo or a view
+to render an error into.
 
 ## vendor/tdweb provenance
 

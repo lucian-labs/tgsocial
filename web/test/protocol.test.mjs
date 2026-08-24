@@ -37,6 +37,9 @@ import {
   parseComment,
   serialiseComment,
   targetKey,
+  parsePublicPath,
+  publicFeedUrl,
+  publicNodeUrl,
 } from '../js/protocol.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +69,41 @@ for (const c of vectors.username.cases) {
 for (const c of vectors.deepLink.cases) {
   test(`deepLink: ${c.username}/${c.messageId}`, () => {
     assert.equal(deepLink(c.username, c.messageId), c.out);
+  });
+}
+
+// PRODUCT §2.13 public links: the pathnames nginx falls back to index.html for.
+{
+  const cases = [
+    ['/f/waveloop_devlog', { name: 'channel', username: 'waveloop_devlog' }],
+    ['/f/waveloop_devlog/', { name: 'channel', username: 'waveloop_devlog' }],
+    ['/n/tgs_elijah', { name: 'node', username: 'tgs_elijah' }],
+    ['/f/@waveloop_devlog', { name: 'channel', username: 'waveloop_devlog' }],
+    ['/', null],
+    ['/index.html', null],
+    ['/privacy.html', null],
+    ['/f/', null],
+    ['/f/no', null],
+    ['/f/bad-name', null],
+    ['/f/a/b', null],
+    ['/x/waveloop_devlog', null],
+    ['', null],
+    // a malformed percent-escape is a bad username, never a URIError: this is
+    // parsed in boot() before there is a repo to render an error with
+    ['/f/%zz', null],
+    ['/f/%E0%A4%A', null],
+    ['/n/%zz', null],
+    ['/f/%2Fwaveloop_devlog', null],
+    ['/f/%77aveloop_devlog', { name: 'channel', username: 'waveloop_devlog' }],
+  ];
+  for (const [path, out] of cases) {
+    test(`publicPath: ${JSON.stringify(path)}`, () => {
+      assert.deepEqual(parsePublicPath(path), out);
+    });
+  }
+  test('publicFeedUrl / publicNodeUrl are absolute to the canonical host', () => {
+    assert.equal(publicFeedUrl('waveloop_devlog'), 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog');
+    assert.equal(publicNodeUrl('tgs_elijah'), 'https://tgsocial.lucianlabs.ca/n/tgs_elijah');
   });
 }
 

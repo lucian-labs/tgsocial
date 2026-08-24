@@ -12,6 +12,12 @@ struct RootView: View {
             HPBackdrop()
             content
         }
+        // The floating bottom chrome sits over the content (PRODUCT §1: "content scrolls under
+        // it") and reports its measured height; every Screen pads its scroll content by that.
+        .overlay(alignment: .bottom) { BottomChrome() }
+        .onPreferenceChange(BottomChromeHeightKey.self) { [model] height in
+            Task { @MainActor in model.bottomChromeHeight = height }
+        }
         .overlay {
             // Full-screen media viewer (PRODUCT §2.11): covers the topbar and the tab bar.
             if let request = model.viewer {
@@ -64,22 +70,51 @@ struct RootView: View {
                     }
             }
             .toolbar(.hidden, for: .navigationBar)
-            // The floating tab bar (PRODUCT §1): hugging pill, centred, cardGap above the
-            // safe-area bottom; scroll views inset under it. Hidden inside full-screen viewers;
-            // present on pushed screens. Sign in and Setup render on other branches without it.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if model.viewer == nil {
-                    VStack(spacing: HPTokens.Space.rowGap) {
-                        if let item = model.audio.current {
-                            HPNowPlaying(title: item.title,
-                                         elapsed: PostTime.duration(seconds: Int(model.audio.elapsed)),
-                                         playing: model.audio.isPlaying) { model.audio.toggle() }
-                        }
-                        HPFloatingTabs(items: Tab.allCases, selected: tabSelection) { $0.label }
-                    }
-                    .padding(.bottom, HPTokens.Space.cardGap)
-                    .padding(.horizontal, HPTokens.Space.columnSide)
+        }
+    }
+}
+
+/// Reports the measured height of the floating bottom chrome up to the shell. A preference key
+/// rather than a constant: the dock's height is whatever its type and the reader's Dynamic Type
+/// setting make it, and it has to leave the inset the instant playback stops.
+struct BottomChromeHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// The floating bottom chrome (PRODUCT §1, §2.11): the docked now-playing row above the floating
+/// tab bar, `cardGap` above the safe-area bottom. It measures itself, so a scroll surface's bottom
+/// inset is always exactly what is on screen — it grows when the dock appears and shrinks back the
+/// moment playback stops. The tab bar is hidden on Sign in, on Setup, and inside full-screen
+/// viewers; the dock follows the audio, so it stays docked on Setup and on pushed screens where
+/// there is no tab bar under it.
+struct BottomChrome: View {
+    @Environment(AppModel.self) private var model
+
+    private var showsTabs: Bool { !model.secretsMissing && model.auth == .ready && !model.needsSetup }
+    private var showsDock: Bool { model.audio.current != nil }
+
+    var body: some View {
+        if model.viewer == nil, showsTabs || showsDock {
+            VStack(spacing: HPTokens.Space.rowGap) {
+                if let item = model.audio.current {
+                    HPNowPlaying(title: item.title,
+                                 elapsed: PostTime.duration(seconds: Int(model.audio.elapsed)),
+                                 playing: model.audio.isPlaying) { model.audio.toggle() }
                 }
+                if showsTabs {
+                    HPFloatingTabs(items: Tab.allCases, selected: tabSelection) { $0.label }
+                }
+            }
+            .padding(.bottom, HPTokens.Space.cardGap)
+            .padding(.horizontal, HPTokens.Space.columnSide)
+            // Measurement only: a Color is hit-testable in SwiftUI, and this one sits over the
+            // scroll content, so it must never swallow a tap or a drag meant for the page.
+            .background {
+                GeometryReader { geo in
+                    Color.clear.preference(key: BottomChromeHeightKey.self, value: geo.size.height)
+                }
+                .allowsHitTesting(false)
             }
         }
     }

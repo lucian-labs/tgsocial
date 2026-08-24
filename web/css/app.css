@@ -80,7 +80,6 @@ button.status::after {
   position: absolute;
   inset: calc(-2 * var(--hp-space-tabs-pad)) calc(-1 * var(--hp-space-tabs-pad));
 }
-
 /* Content scrolls under the floating tab bar: the column pads its bottom by
    the bar height + cardGap so the last card clears it (PRODUCT §1).
    --dock-extra is set on #app by App.updateDock() while the now-playing row
@@ -470,6 +469,15 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 /* ── profile head (PRODUCT §2.5) ─────────────────────────────────────────── */
 
 .profile-head { text-align: center; }
+/* Channel header actions (PRODUCT §2.6): Open in Telegram, the `Copy Link`
+   ghost on a public route (§2.13), and the Verified pill. They centre and wrap
+   as whole pills — a button label never breaks across two lines. */
+.profile-head .row {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: var(--hp-space-btn-row-gap);
+}
+.profile-head .row .btn { white-space: nowrap; }
 .profile-head .avatar { margin: 0 auto var(--hp-space-row-gap); }
 .profile-head h1, .profile-head h2 { margin-bottom: var(--hp-space-tabs-pad); }
 .profile-head .mono { display: block; margin-bottom: var(--hp-space-row-gap); }

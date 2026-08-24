@@ -258,6 +258,47 @@ export function channelLink(username) {
   return `https://t.me/${username}`;
 }
 
+// ── public links (PRODUCT §2.13) ───────────────────────────────────────────
+
+/** The canonical web host (PRODUCT §0). Public links are always absolute to it. */
+export const PUBLIC_ORIGIN = 'https://tgsocial.lucianlabs.ca';
+
+/** `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies. */
+export function publicFeedUrl(username) {
+  return `${PUBLIC_ORIGIN}/f/${username}`;
+}
+
+/** `https://tgsocial.lucianlabs.ca/n/<node>`. */
+export function publicNodeUrl(username) {
+  return `${PUBLIC_ORIGIN}/n/${username}`;
+}
+
+/**
+ * A `location.pathname` served by the SPA off nginx's index.html fallback:
+ * `/f/<channel>` → the feed channel screen, `/n/<node>` → the node profile.
+ * Anything else (including `/` and `/index.html`) → null, and the hash router
+ * keeps the signed-in app exactly as it was.
+ *
+ * Total on any string: a malformed percent-escape (`/f/%zz`) is a bad
+ * username, not an exception. `decodeURIComponent` throws URIError on those,
+ * and this is called from boot() before the app has a repo — a throw here is
+ * a blank page — so the raw segment falls through to normaliseUsername and
+ * routes exactly like `/f/bad-name`.
+ */
+export function parsePublicPath(pathname) {
+  const m = /^\/(f|n)\/([^/?#]+)\/?$/.exec(String(pathname ?? ''));
+  if (!m) return null;
+  let raw;
+  try {
+    raw = decodeURIComponent(m[2]);
+  } catch {
+    raw = m[2];
+  }
+  const username = normaliseUsername(raw);
+  if (!username) return null;
+  return { name: m[1] === 'f' ? 'channel' : 'node', username };
+}
+
 /** 0 → "0", 1200 → "1.2k", 15000 → "15k", 2400000 → "2.4m". */
 export function compactCount(n) {
   const v = Math.max(0, Math.floor(Number(n) || 0));

@@ -1,14 +1,22 @@
-/* PRODUCT §2.1 Sign in — shown whenever TDLib is not authorizationStateReady. */
+/* PRODUCT §2.1 Sign in — shown whenever TDLib is not authorizationStateReady.
+ *
+ * A visitor who arrived on a public link (§2.13) gets the same screen with the
+ * destination named: TDLib refuses every chat read before authorization, so
+ * the link cannot be honoured until this is done.
+ */
 import { h, button, field, replace } from '../../vendor/house-pour.js';
 import { authErrorCopy } from '../td.js';
 
 export function render(app) {
   const root = h('div.signin');
   const stage = h('div');
+  const dest = app.pendingDest;
   const intro = h('div',
     h('div.wordmark', 'tgsocial'),
     h('h1', 'Your Telegram, as a feed.'),
-    h('p.muted', 'Sign in with the Telegram account you already have. Nothing is stored anywhere but Telegram and this device.'),
+    h('p.muted', dest
+      ? `Sign in to see @${dest.username}.`
+      : 'Sign in with the Telegram account you already have. Nothing is stored anywhere but Telegram and this device.'),
   );
   root.append(h('div.card', intro, stage));
 

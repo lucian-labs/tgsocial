@@ -42,6 +42,20 @@ export function connectionCopy(state) {
   return CONNECTION_COPY[state] ?? 'Connecting';
 }
 
+/** The IndexedDB instance every session runs in. */
+export const TD_INSTANCE = 'tgsocial';
+
+/**
+ * Everything TDLib answers before authorization (PRODUCT §2.13). Measured
+ * against the bundled tdweb 1.8.66 on a client at `connectionStateReady` and
+ * `authorizationStateWaitPhoneNumber`: `getOption` resolves, and
+ * `searchPublicChat`, `getChat` and `getChatHistory` all reject `401
+ * Unauthorized`. There is no anonymous read of a public channel — the check
+ * that holds this true lives in test/smoke.mjs. Anything that wants chat data
+ * has to sign in first.
+ */
+export const PREAUTH_QUERIES = new Set(['setTdlibParameters', 'getOption', 'setNetworkType', 'getAuthorizationState']);
+
 /** Downloads with no progress for this long are given up on (not cancelled in TDLib — the next tap resumes). */
 const DOWNLOAD_STALL_MS = 60000;
 /** A connection that stays Connecting/Updating this long gets a nudge (setNetworkType) so TDLib re-checks its socket. */
@@ -64,6 +78,8 @@ export class Td {
     this.connectionSince = 0;
     this.lastNudge = 0;
     this.watchdog = null;
+    /** Bumped by init/close; updates from a superseded client are dropped. */
+    this.generation = 0;
   }
 
   track(label, work) {
@@ -127,9 +143,15 @@ export class Td {
   async init(config) {
     if (!Td.available()) throw new Error('tdweb is not loaded.');
     const TdClient = window.tdweb.default;
+    const generation = this.generation + 1;
+    this.generation = generation;
     this.client = new TdClient({
-      onUpdate: (u) => this.handleUpdate(u),
-      instanceName: 'tgsocial',
+      onUpdate: (u) => {
+        // a client we have closed must not keep driving the app
+        if (generation !== this.generation) return;
+        this.handleUpdate(u);
+      },
+      instanceName: TD_INSTANCE,
       isBackground: false,
       jsLogVerbosityLevel: 'error',
       logVerbosityLevel: 0,
@@ -185,6 +207,11 @@ export class Td {
 
   get isReady() {
     return this.authState?.['@type'] === 'authorizationStateReady';
+  }
+
+  /** TDLib is up and answering — past `WaitTdlibParameters`, whatever it says about the user. */
+  get isBooted() {
+    return !!this.client && !!this.authState && this.authState['@type'] !== 'authorizationStateWaitTdlibParameters';
   }
 
   // ── connection watchdog ──────────────────────────────────────────────────

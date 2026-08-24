@@ -7,11 +7,11 @@
  * Asserts the copy on each screen, optimistic follow + rollback, FLOOD_WAIT
  * toast, compose → Posted., sign-out wipe, and zero console errors overall.
  */
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { existsSync, readdirSync, readFileSync, mkdirSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { createReadStream, existsSync, readdirSync, readFileSync, mkdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +43,59 @@ function waitFor(url, ms) {
     tick();
   });
 }
+/**
+ * The deploy host serves web/ with `try_files $uri $uri/ /index.html`, which is
+ * what makes a public link (/f/<channel>, PRODUCT §2.13) load the app. This
+ * server does the same so the flow test exercises the real thing: existing
+ * files as themselves, extensionless paths as index.html, everything else 404.
+ */
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+function serveStatic(root, port) {
+  const srv = createHttpServer((req, res) => {
+    // nginx serves a malformed escape (/f/%zz) through try_files without
+    // complaint; decodeURIComponent throws on it, so this must not either
+    const raw = new URL(req.url, 'http://127.0.0.1').pathname;
+    let decoded;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch {
+      decoded = raw;
+    }
+    let rel = normalize(decoded);
+    if (rel.endsWith('/')) rel = join(rel, 'index.html');
+    let file = join(root, rel);
+    const inside = file === root || file.startsWith(root + '/');
+    if (!inside || !existsSync(file) || statSync(file).isDirectory()) {
+      file = extname(rel) ? null : join(root, 'index.html');
+    }
+    if (!file) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found');
+      return;
+    }
+    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    createReadStream(file).pipe(res);
+  });
+  return new Promise((resolve, reject) => {
+    srv.on('error', reject);
+    srv.listen(port, '127.0.0.1', () => resolve(srv));
+  });
+}
+
 function findPlaywright() {
   for (const dir of [process.env.PW_MODULE_DIR, PW_HOME].filter(Boolean)) {
     try {
@@ -81,7 +134,7 @@ const ok = (cond, label) => {
 
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
-const server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1'], { cwd: web, stdio: 'ignore' });
+const server = await serveStatic(web, port);
 const mock = readFileSync(join(here, 'mock-tdweb.js'), 'utf8');
 let shot = 0;
 
@@ -99,11 +152,12 @@ try {
     if (m.type() === 'error') errors.push(m.text());
   });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
-  const snap = async (name) => {
+  const snapPage = async (p, name) => {
     if (!shotsDir) return;
     shot += 1;
-    await page.screenshot({ path: join(shotsDir, `${String(shot).padStart(2, '0')}-${name}.png`), fullPage: true });
+    await p.screenshot({ path: join(shotsDir, `${String(shot).padStart(2, '0')}-${name}.png`), fullPage: true });
   };
+  const snap = (name) => snapPage(page, name);
   const text = () => page.evaluate(() => document.getElementById('view').innerText);
   const toastText = () => page.evaluate(() => document.getElementById('toast').textContent);
   const status = () => page.evaluate(() => document.getElementById('status').textContent);
@@ -728,6 +782,122 @@ try {
   ok(resort.sorted && resort.n > 1 && resort.painted > 0, `stale cache: ${resort.n} cached posts re-sorted newest-first on cold start`);
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 20000 });
 
+  // ── §2.13 public links ───────────────────────────────────────────────────
+  // The premise first: TDLib refuses every chat request made before
+  // authorization, public channels included, so a public link cannot render
+  // anything until the visitor signs in. The mock enforces the same gate the
+  // real library does (test/mock-tdweb.js, measured in test/smoke.mjs).
+  {
+    const pubCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ['clipboard-read', 'clipboard-write'] });
+    await pubCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    const pub = await pubCtx.newPage();
+    pub.on('console', (m) => {
+      if (m.type() === 'error') errors.push(`public: ${m.text()}`);
+    });
+    pub.on('pageerror', (e) => errors.push(`public pageerror: ${e.message}`));
+    const pubText = () => pub.evaluate(() => document.getElementById('view').innerText);
+
+    // signed out on a public link → Sign in, with the destination named
+    await pub.goto(`${base}/f/waveloop_devlog?mock=node`, { waitUntil: 'load' });
+    await pub.waitForSelector('input[type="tel"]', { timeout: 20000 });
+    ok(/Sign in to see @waveloop_devlog\./.test(await pubText()), 'public: signed out → Sign in, destination named');
+    ok(await pub.evaluate(() => window.__tgsocial.app.pendingDest?.username === 'waveloop_devlog'), 'public: the destination is held for the sign-in detour');
+    ok(await pub.evaluate(() => document.getElementById('dock').hidden), 'public: no tab bar on Sign in');
+    await snapPage(pub, 'public-signin');
+
+    // the premise, asserted rather than assumed
+    const refused = await pub.evaluate(async () => {
+      try {
+        await window.__tgsocial.td.send({ '@type': 'searchPublicChat', username: 'waveloop_devlog' });
+        return 'resolved';
+      } catch (e) {
+        return `${e.code} ${e.message}`;
+      }
+    });
+    ok(/^401 /.test(refused), `public: a chat read before authorization is refused (${refused})`);
+
+    // sign in → land on the linked screen, not the feed
+    await pub.fill('input[type="tel"]', '+16045550199');
+    await pub.click('button.btn.primary');
+    await pub.waitForSelector('input[inputmode="numeric"]', { timeout: 10000 });
+    await pub.fill('input[inputmode="numeric"]', '12345');
+    await pub.click('button.btn.primary');
+    await pub.waitForSelector('#view article.post', { timeout: 25000 });
+    ok(/@waveloop_devlog/.test(await pubText()), 'public: signing in lands on the linked channel');
+    const landed = await pub.evaluate(() => ({
+      path: location.pathname,
+      dest: window.__tgsocial.app.pendingDest,
+      tabs: !document.querySelector('#dock .tabs').hidden,
+      status: document.getElementById('status').textContent,
+      copyLink: [...document.querySelectorAll('#view .profile-head button')].some((b) => /Copy Link/i.test(b.textContent)),
+      comments: document.querySelectorAll('#view article.post .post-foot .btn').length,
+    }));
+    ok(landed.path === '/f/waveloop_devlog' && landed.dest === null, 'public: the link stays in the address bar and is spent once');
+    ok(landed.tabs && landed.status !== 'Public', 'public: the normal shell — floating tab bar, the real status pill');
+    ok(landed.comments > 0, 'public: the Comment button is on the card, like every other screen');
+    ok(landed.copyLink, 'public: Copy Link is in the channel header on a public route');
+    await snapPage(pub, 'public-channel');
+
+    // §2.13 Sharing — Copy Link copies the tgsocial URL, not the t.me one
+    await pub.locator('#view .profile-head button:has-text("Copy Link")').click();
+    await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent)
+      && document.getElementById('toast').classList.contains('show'), null, { timeout: 6000 });
+    const copiedPublic = await pub.evaluate(() => navigator.clipboard.readText());
+    ok(copiedPublic === 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog', `public: Copy Link copies ${copiedPublic}`);
+
+    // /n/<node> is the same deal
+    await pub.goto(`${base}/n/tgs_ana?mock=node`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /@tgs_ana/.test(document.getElementById('view').innerText), null, { timeout: 25000 });
+    ok(/Ana Iliovic/.test(await pubText()), 'public: /n/<node> opens the node profile');
+
+    // a channel that cannot be read gets the §2.6 empty card, no special copy
+    await pub.goto(`${base}/f/tgs_private_room?mock=node`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /Channel not found\./.test(document.getElementById('view').innerText), null, { timeout: 25000 });
+    ok(/@tgs_private_room is not a public channel\./.test(await pubText()), 'public: an unreadable channel gets the §2.6 empty card');
+    await snapPage(pub, 'public-empty');
+
+    // a malformed escape is a bad username, never a blank page (§2.13)
+    for (const bad of ['/f/%zz', '/f/%E0%A4%A', '/f/bad-name']) {
+      await pub.goto(`${base}${bad}?mock=node`, { waitUntil: 'load' });
+      await pub.waitForSelector('#view article.post', { timeout: 25000 });
+      const fell = await pub.evaluate(() => ({
+        repo: !!window.__tgsocial.repo,
+        dest: window.__tgsocial.app.pendingDest,
+        view: document.getElementById('view').textContent.trim().length,
+      }));
+      ok(fell.repo && fell.dest === null && fell.view > 0, `public: ${bad} falls through to the feed, no blank page`);
+    }
+    await pubCtx.close();
+  }
+
+  // the destination survives the Setup detour (§2.13): a brand-new account
+  // opening a public link signs in, meets Setup, and still gets where it
+  // was going — Setup rewrites the hash, and the link outlives it.
+  {
+    const newCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await newCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    const fresh = await newCtx.newPage();
+    fresh.on('console', (m) => {
+      if (m.type() === 'error') errors.push(`public-setup: ${m.text()}`);
+    });
+    fresh.on('pageerror', (e) => errors.push(`public-setup pageerror: ${e.message}`));
+    await fresh.goto(`${base}/f/waveloop_devlog?mock=fresh`, { waitUntil: 'load' });
+    await fresh.waitForSelector('input[type="tel"]', { timeout: 20000 });
+    await fresh.fill('input[type="tel"]', '+16045550199');
+    await fresh.click('button.btn.primary');
+    await fresh.waitForSelector('input[inputmode="numeric"]', { timeout: 10000 });
+    await fresh.fill('input[inputmode="numeric"]', '12345');
+    await fresh.click('button.btn.primary');
+    await fresh.waitForFunction(() => /Make your node\./.test(document.getElementById('view').innerText), null, { timeout: 25000 });
+    ok(await fresh.evaluate(() => location.hash === '#/setup' && window.__tgsocial.app.pendingDest?.username === 'waveloop_devlog'),
+      'public: Setup takes the hash, and the destination is still held');
+    await fresh.click('#view button.btn.ghost:has-text("Skip for now")');
+    await fresh.waitForFunction(() => /@waveloop_devlog/.test(document.getElementById('view').innerText), null, { timeout: 25000 });
+    ok(await fresh.evaluate(() => location.hash === '#/feed/waveloop_devlog' && window.__tgsocial.app.pendingDest === null),
+      'public: leaving Setup lands on the linked channel, and the link is spent');
+    await newCtx.close();
+  }
+
   ok(errors.length === 0, `zero console errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
   await browser.close();
 } catch (e) {
@@ -738,7 +908,7 @@ try {
     if (shotsDir && globalThis.__page) await globalThis.__page.screenshot({ path: join(shotsDir, 'zz-failure.png'), fullPage: true });
   } catch {}
 } finally {
-  server.kill();
+  server.close();
 }
 
 if (failures.length) {

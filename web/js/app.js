@@ -1,13 +1,19 @@
-/* app.js — boot, shell, hash router, app-wide state.
+/* app.js — boot, shell, router, app-wide state.
  *
  * Routes: #/feed #/explore #/graph #/you #/setup #/node/<username>
  *         #/feed/<username> #/compose[?feed=<username>]
+ *
+ * Public links (PRODUCT §2.13) are pathnames, not hashes: /f/<channel> and
+ * /n/<node>. nginx falls back to index.html for them, so the router reads
+ * location.pathname when there is no hash route. TDLib refuses every chat
+ * read before authorization, so a visitor with no session gets Sign in with
+ * the destination named, and lands on it once TDLib reports Ready.
  */
 import { h, button, tabs, toast, replace } from '../vendor/house-pour.js';
 import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
-import { normaliseUsername } from './protocol.js';
+import { normaliseUsername, parsePublicPath, usernameKey } from './protocol.js';
 import { closeViewer, currentAudio } from './media.js';
 import { openStatusSheet } from './views/status.js';
 import * as signin from './views/signin.js';
@@ -48,6 +54,8 @@ class App {
     this.feedStats = null;
     this.feedRefresh = null;
     this.lastError = null;
+    /** The public link this visit arrived on, until it is spent (§2.13). */
+    this.pendingDest = null;
     /** Every in-flight operation lives here; the pill derives from it (PRODUCT §2.10). */
     this.activity = new Activity({ onChange: () => this.paintStatus() });
     this.td.activity = this.activity;
@@ -97,10 +105,11 @@ class App {
   }
 
   paintStatus() {
-    const s = this.status();
     const el = this.els.status;
+    const s = this.status();
     el.textContent = s;
     el.classList.toggle('gold', s === 'Synced');
+    el.setAttribute('aria-label', 'Status. Opens the status sheet');
   }
 
   /**
@@ -126,23 +135,36 @@ class App {
   }
 
   /**
-   * The dock hosts the floating tab bar and, while audio plays, the
-   * now-playing row (PRODUCT §1). It shows while either is live — audio keeps
-   * its dock even where the tab bar is hidden (Setup, screens pushed from a
-   * viewer). The column's bottom inset tracks the row dynamically: --dock-extra
-   * is set to the row's measured height + the dock gap while it is mounted and
-   * removed when playback stops, so every scroll surface's last element clears
-   * the tab bar AND the dock exactly while both are there.
+   * The dock hosts the floating tab bar and, above it, whatever else is docked
+   * for the moment: the now-playing row while audio plays (PRODUCT §1). It
+   * shows while any of them is live — audio keeps its dock even where the tab
+   * bar is hidden (Setup, screens pushed from a viewer). The column's bottom
+   * inset tracks them dynamically: --dock-extra is the measured height + the
+   * dock gap of every docked extra, and it is removed when the last one
+   * unmounts, so every scroll surface's last element clears the tab bar AND
+   * everything stacked over it, exactly while they are there.
    */
   updateDock() {
-    const np = this.els.dock.querySelector('.now-playing');
-    this.els.dock.hidden = this.tabs.hidden && !np;
-    if (np) {
+    const extras = [...this.els.dock.children].filter((el) => el !== this.tabs && !el.hidden);
+    this.els.dock.hidden = this.tabs.hidden && extras.length === 0;
+    if (extras.length) {
       const gap = parseFloat(getComputedStyle(this.els.dock).rowGap) || 0;
-      this.els.app.style.setProperty('--dock-extra', `${Math.ceil(np.getBoundingClientRect().height + gap)}px`);
+      const total = extras.reduce((sum, el) => sum + el.getBoundingClientRect().height + gap, 0);
+      this.els.app.style.setProperty('--dock-extra', `${Math.ceil(total)}px`);
     } else {
       this.els.app.style.removeProperty('--dock-extra');
     }
+  }
+
+  /**
+   * PRODUCT §2.13 — the public link this visit arrived on, spent once. The
+   * URL is the only memory: the pathname stays `/f/<name>` through Sign in
+   * and Setup, so this is read from it in boot() and nothing is written down.
+   */
+  takePendingDest() {
+    const dest = this.pendingDest;
+    this.pendingDest = null;
+    return dest;
   }
 
   // ── navigation ───────────────────────────────────────────────────────────
@@ -167,6 +189,13 @@ class App {
   }
 
   parseRoute() {
+    // A public link is a pathname (PRODUCT §2.13). The hash wins whenever
+    // there is one, so the signed-in app keeps routing exactly as before and
+    // navigating away from a public URL works without a page load.
+    if (!location.hash.startsWith('#/')) {
+      const pub = parsePublicPath(location.pathname);
+      if (pub) return { ...pub, params: {}, viaPath: true };
+    }
     const raw = location.hash || '#/feed';
     const [path, query = ''] = raw.split('?');
     const parts = path.replace(/^#\/?/, '').split('/').filter(Boolean);
@@ -272,6 +301,19 @@ class App {
       return;
     }
 
+    // PRODUCT §2.13 — land on the link this visit came in on. The pathname
+    // still reads /f/<name> unless Setup rewrote the hash on the way, so this
+    // is usually a no-op that only spends the token; after a Setup detour it
+    // is the navigation that puts the visitor where they were going.
+    if (this.pendingDest && route.name !== 'setup') {
+      const dest = this.takePendingDest();
+      const there = route.name === dest.name && usernameKey(route.username) === usernameKey(dest.username);
+      if (!there) {
+        this.navigate(dest.name === 'node' ? `#/node/${dest.username}` : `#/feed/${dest.username}`, { replace: true });
+        return;
+      }
+    }
+
     const main = MAIN_TABS.some((t) => t.id === route.name);
     if (main) {
       this.lastMain = `#/${route.name}`;
@@ -368,14 +410,17 @@ class App {
       this.render();
       return;
     }
+    // PRODUCT §2.13: a public link is a destination, not a mode. TDLib
+    // refuses every chat read before authorization, so a visitor with no
+    // session signs in first; this remembers where they were going, and the
+    // sign-in screen names it.
+    this.pendingDest = parsePublicPath(location.pathname);
     this.repo = new Repo(this.td, this.config);
     this.td.onFloodWait = (s) => this.toast(`Telegram asked us to wait ${s} s.`);
     this.td.on('auth', (state) => {
       const t = state?.['@type'];
       if (t === 'authorizationStateReady') this.nodeLookupDone = false;
-      if (t === 'authorizationStateClosed' && !this.fatal) {
-        localStorage.clear();
-      }
+      if (t === 'authorizationStateClosed' && !this.fatal) localStorage.clear();
       this.render();
     });
     this.td.on('connection', () => this.paintStatus());
@@ -396,4 +441,10 @@ class App {
 
 const app = new App();
 window.__tgsocial = { app, td: app.td, get repo() { return app.repo; }, currentAudio };
-app.boot();
+// boot() paints every failure it knows about; anything it does not know about
+// still has to become a card, never a blank page.
+app.boot().catch((e) => {
+  console.error('[app] boot', e);
+  app.fatal = h('div.card', h('h2', "tgsocial didn't start."), h('p.muted', e.message));
+  app.render();
+});

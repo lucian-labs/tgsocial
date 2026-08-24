@@ -282,18 +282,23 @@ final class NodeRepository {
     // MARK: §4.7 My feeds
 
     /// Channels where I am creator or an administrator with post rights.
+    ///
+    /// Every read here is a hard `try`: the scan either saw all of your channels or it throws. An
+    /// empty result therefore always means "Telegram says you have none", never "I could not look",
+    /// so the caller can keep the cached list on screen — and because the disk cache is written only
+    /// at the end of a complete pass, a failure never blanks it either (PRODUCT §4, reads serve cache).
     func myFeedCandidates(excluding myNodeChatId: Int64?) async throws -> [FeedCandidate] {
-        var ids: [Int64] = []
-        if let created = try? await api.getCreatedPublicChats(type: .publicChatTypeHasUsername) { ids += created.chatIds }
-        ids += await loadMainChatList(limit: 200)
+        var ids: [Int64] = try await api.getCreatedPublicChats(type: .publicChatTypeHasUsername).chatIds
+        ids += try await loadMainChatList(limit: 200)
         var seen = Set<Int64>()
         var out: [FeedCandidate] = []
         for id in ids where !seen.contains(id) {
             seen.insert(id)
             if id == myNodeChatId { continue }
-            guard let chat = try? await api.getChat(chatId: id), Mapping.isChannel(chat),
-                  let sgId = Mapping.supergroupId(of: chat),
-                  let sg = try? await api.getSupergroup(supergroupId: sgId) else { continue }
+            let chat = try await api.getChat(chatId: id)
+            // Not a channel is not a failure — it is an answer, and the answer is "not a candidate".
+            guard Mapping.isChannel(chat), let sgId = Mapping.supergroupId(of: chat) else { continue }
+            let sg = try await api.getSupergroup(supergroupId: sgId)
             let canPost: Bool
             switch sg.status {
             case .chatMemberStatusCreator: canPost = true
@@ -302,8 +307,10 @@ final class NodeRepository {
             }
             guard canPost else { continue }
             let username = Mapping.username(of: chat, supergroup: sg)
-            var description = ""
-            if username != nil, let full = try? await api.getSupergroupFullInfo(supergroupId: sgId) { description = full.description }
+            // The description drives the Verified pill and is the text `addBacklink` appends to, so a
+            // row carrying a half-read (empty) description would both mislabel itself and let Verify
+            // overwrite the channel's real description. Rather than guess, fail the pass.
+            let description = username == nil ? "" : try await api.getSupergroupFullInfo(supergroupId: sgId).description
             out.append(FeedCandidate(chatId: id, supergroupId: sgId, title: chat.title, username: username, description: description))
         }
         out.sort { ($0.isPublic ? 0 : 1, $0.title.lowercased()) < ($1.isPublic ? 0 : 1, $1.title.lowercased()) }
@@ -312,19 +319,25 @@ final class NodeRepository {
     }
 
     /// loadChats until TDLib answers 404 (fully loaded) or we have enough, then getChats.
-    func loadMainChatList(limit: Int) async -> [Int64] {
+    ///
+    /// Throws when TDLib could not load the list. A cold client that has not synced the main chat list
+    /// yet must not be reported as "no chats" — that is the difference between an empty feeds card and
+    /// a cache that stays on screen.
+    func loadMainChatList(limit: Int) async throws -> [Int64] {
         var rounds = 0
         while rounds < 5 {
             rounds += 1
             do {
                 try await api.loadChats(chatList: .chatListMain, limit: limit)
             } catch {
+                // 404 is TDLib's "that is all of them" — the only non-error way out of the loop.
                 if TDFailure(error).isNotFound { break }
-                break
+                throw error
             }
-            if let ids = try? await api.getChats(chatList: .chatListMain, limit: limit).chatIds, ids.count >= limit { return ids }
+            let ids = try await api.getChats(chatList: .chatListMain, limit: limit).chatIds
+            if ids.count >= limit { return ids }
         }
-        return (try? await api.getChats(chatList: .chatListMain, limit: limit).chatIds) ?? []
+        return try await api.getChats(chatList: .chatListMain, limit: limit).chatIds
     }
 
     // MARK: §3 Backlink

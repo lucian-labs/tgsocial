@@ -50,12 +50,15 @@ struct Screen<Content: View>: View {
     }
 
     @ViewBuilder private var scroll: some View {
-        // The floating tab bar provides the bottom inset (safeAreaInset in RootView), so the
-        // column keeps only cardGap below the last card (PRODUCT §1).
+        // PRODUCT §1: content scrolls under the floating bottom chrome and pads its bottom by the
+        // chrome's measured height — the tab bar, plus the now-playing dock and its gap whenever
+        // audio is playing (PRODUCT §2.11). HPColumn adds the cardGap above it, so the last card
+        // always clears the chrome by exactly one card gap, and by nothing extra once it is gone.
         let body = ScrollView(.vertical, showsIndicators: false) {
             HPColumn(bottomPadded: false) {
                 VStack(alignment: .leading, spacing: 0) { content }
                     .padding(.top, HPTokens.Space.topbarBottom)
+                    .padding(.bottom, model.bottomChromeHeight)
             }
         }
         .scrollDismissesKeyboard(.interactively)

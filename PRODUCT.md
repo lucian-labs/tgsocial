@@ -72,6 +72,9 @@ PHONE NUMBER                                (field label)
 ( Send Code )                               (btn primary)
 ```
 
+Arrived on a public link (§2.13), the muted line names the destination
+instead: `Sign in to see @<name>.` Everything else is unchanged.
+
 Step 2 replaces the field with `CODE` + input (numeric, 5 digits) and the
 button reads `Sign In`. A ghost button `Use another number` goes back.
 
@@ -450,57 +453,47 @@ Behaviour:
 - A commenter row's avatar/name opens their node profile. Comments from
   nodes you don't follow (found via +1) show a small `+1` neutral pill.
 
-### 2.13 Public links — browse without signing in (web only)
+### 2.13 Public links — a URL for every channel and node
 
-`https://tgsocial.lucianlabs.ca/f/<channel>` shows that channel's posts to
-anyone, signed in or not. `/n/<node>` does the same for a node profile.
-Telegram exposes public channels to anonymous clients, so no account is
-needed to read one — the app just has to not demand one first.
+`https://tgsocial.lucianlabs.ca/f/<channel>` opens that channel's feed screen
+(§2.6); `/n/<node>` opens that node profile (§2.5). A link is the address of a
+screen, not a second app: a signed-in visitor lands on it directly, tab bar
+and all.
 
-**Anonymous mode.** When the route is `/f/…` or `/n/…` and TDLib is not
-signed in, the client authenticates as an anonymous TDLib session and reads
-only that public chat (`searchPublicChat` → `getChatHistory`). Nothing is
-written, no node is created, and the local database is namespaced so an
-anonymous visit never touches a signed-in user's data. If the channel is
-private or missing: one card, h2 `Nothing here.` muted `That channel is
-private, or it doesn't exist.`
+**Every read needs a session.** TDLib answers `401 Unauthorized` to every
+chat request made before authorization — `searchPublicChat`, `getChat` and
+`getChatHistory` all refuse on a client that is connected (`connectionState
+Ready`) but not signed in; only preauthentication requests
+(`setTdlibParameters`, `getOption`, `setNetworkType`) answer. Public channels
+are public to Telegram's servers, not to an unauthorized client. So there is
+no anonymous read to build a public page on, and v1 does not pretend
+otherwise: **all three platforms behave the same way** — a visitor with no
+session gets Sign in, then lands on the linked screen.
 
-**What renders.** The feed channel screen (§2.6) exactly as a signed-in user
-sees it — post cards with media playable inline, the full-screen viewer,
-relative times, the long-press post sheet — with these differences:
+**Signed out.** Sign in (§2.1), with the destination named: the usual
+wordmark and h1 `Your Telegram, as a feed.`, and the muted line replaced by
+`Sign in to see @<name>.` — the phone form is unchanged. The destination
+survives the whole detour, Setup (§2.2) included, and the app opens on the
+linked screen the moment TDLib reports Ready. The URL is the only memory —
+nothing about the link is written down, and it is spent once.
 
-- Post attribution falls back to the channel (§2.3), since an anonymous
-  visitor has no follows to attribute through.
-- `Comment` is absent; comment counts are absent (comments are network-
-  scoped, and an anonymous visitor has no network).
-- The floating tab bar is hidden; the topbar shows the wordmark and a
-  neutral `Public` pill instead of the status pill.
+**Signed in.** The linked screen exactly as any other route, plus:
 
-**The nag.** A dismissible bar docked at the bottom (the floating-bar slot,
-same panel/pill/shadow treatment), on every public route:
+- **Sharing.** The Share button (§2.3) keeps sharing the Telegram `t.me`
+  link; the channel header on a public route gains a `Copy Link` ghost sm
+  that copies the `tgsocial.lucianlabs.ca/f/<channel>` URL, toast
+  `Link copied.`
+- A channel that cannot be read gets the §2.6 empty card — `Channel not
+  found.` muted `@<name> is not a public channel.` — the same card the same
+  channel gets from anywhere else in the app.
 
-```
-  ╭────────────────────────────────────────────╮
-  │ Follow this feed in tgsocial.   ( Get It ) │   body muted + btn primary sm
-  ╰────────────────────────────────────────────╯
-```
-
-`Get It` goes to `/` (sign in). Dismiss (×, 40pt target) hides it for the
-session; it returns on the next visit. Content padding accounts for it the
-same way it accounts for the tab bar (§1).
-
-A signed-in visitor opening the same link gets the normal feed channel
-screen with the tab bar and no nag — the public route is a lens, not a
-separate app.
-
-**Sharing.** The Share button (§2.3) keeps sharing the Telegram `t.me` link;
-the channel header on a public route gains a `Copy Link` ghost sm that
-copies the `tgsocial.lucianlabs.ca/f/<channel>` URL, toast `Link copied.`
+**Malformed links.** `/f/no`, `/f/bad-name`, `/f/%zz` are not public routes:
+they are not a username, so the app opens on the feed. A bad percent-escape
+is a bad username, never an error screen.
 
 **Native.** iOS and Android register `tgsocial.lucianlabs.ca/f/*` and `/n/*`
 as universal/app links so a tapped link opens the installed app on that
-screen. Neither platform has an anonymous mode in v1 — an unsigned-in app
-opening a public link shows Sign in, then lands on the linked screen.
+screen, signing in first when there is no session.
 
 ## 3. Copy rules
 

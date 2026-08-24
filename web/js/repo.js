@@ -226,6 +226,16 @@ export class Repo {
     return this.td.track(label, work);
   }
 
+  // ── local store ──────────────────────────────────────────────────────────
+
+  store(key, value) {
+    save(key, value);
+  }
+
+  storeVersioned(key, data) {
+    saveVersioned(key, data);
+  }
+
   // ── events ───────────────────────────────────────────────────────────────
 
   subscribe(fn) {
@@ -247,9 +257,9 @@ export class Repo {
   // ── persistence ──────────────────────────────────────────────────────────
 
   persist() {
-    save(LS.myNode, this.myNode);
-    saveVersioned(LS.cards, this.cards);
-    save(LS.prefs, this.prefs);
+    this.store(LS.myNode, this.myNode);
+    this.storeVersioned(LS.cards, this.cards);
+    this.store(LS.prefs, this.prefs);
   }
 
   wipe() {
@@ -279,7 +289,7 @@ export class Repo {
 
   setPref(key, value) {
     this.prefs[key] = value;
-    save(LS.prefs, this.prefs);
+    this.store(LS.prefs, this.prefs);
   }
 
   // ── chat lookups ─────────────────────────────────────────────────────────
@@ -493,7 +503,7 @@ export class Repo {
     const key = usernameKey(username);
     const prev = this.cards[key] ?? {};
     this.cards[key] = { ...prev, ...entry, username, fetchedAt: Date.now() };
-    saveVersioned(LS.cards, this.cards);
+    this.storeVersioned(LS.cards, this.cards);
     return this.cards[key];
   }
 
@@ -567,7 +577,7 @@ export class Repo {
       const guess = mutate(prevCard);
       this.serialise(guess); // refuse "Card is full." before touching anything
       this.cards[key] = { ...prevEntry, card: guess, fetchedAt: Date.now() };
-      saveVersioned(LS.cards, this.cards);
+      this.storeVersioned(LS.cards, this.cards);
       this.notify('card');
     }
     try {
@@ -578,13 +588,13 @@ export class Repo {
         await this.td.trySend({ '@type': 'setChatDescription', chat_id: this.myNode.chatId, description: nodeDescription(next) });
       }
       this.cards[key] = { ...(this.cards[key] ?? {}), username: this.myNode.username, card: next, newer: false, missing: false, pinnedMessageId: messageId, fetchedAt: Date.now() };
-      saveVersioned(LS.cards, this.cards);
+      this.storeVersioned(LS.cards, this.cards);
       this.notify('card');
       return next;
     } catch (e) {
       if (prevEntry) this.cards[key] = prevEntry;
       else delete this.cards[key];
-      saveVersioned(LS.cards, this.cards);
+      this.storeVersioned(LS.cards, this.cards);
       this.notify('card');
       throw e;
     }
@@ -801,7 +811,7 @@ export class Repo {
   }
 
   cacheFeed(posts) {
-    saveVersioned(LS.feed, posts.slice(0, FEED_CACHE_MAX));
+    this.storeVersioned(LS.feed, posts.slice(0, FEED_CACHE_MAX));
   }
 
   /** Fetch one page of channel history, repeating while TDLib returns short (§4.8). */
@@ -1098,7 +1108,7 @@ export class Repo {
         console.warn('[repo] comments', channel, e.message);
       }
     });
-    saveVersioned(LS.comments, this.comments);
+    this.storeVersioned(LS.comments, this.comments);
     this.notify('comments');
   }
 
@@ -1195,7 +1205,7 @@ export class Repo {
       const entry = this.comments[k] ?? { channel, node: this.myNode.username, comments: [], fetchedAt: 0 };
       if (comment) entry.comments.unshift(comment);
       this.comments[k] = entry;
-      saveVersioned(LS.comments, this.comments);
+      this.storeVersioned(LS.comments, this.comments);
       this.notify('comments');
       return comment;
     });
@@ -1210,7 +1220,7 @@ export class Repo {
       const entry = this.comments[k];
       if (entry) {
         entry.comments = entry.comments.filter((c) => c.key !== comment.key);
-        saveVersioned(LS.comments, this.comments);
+        this.storeVersioned(LS.comments, this.comments);
       }
       this.notify('comments');
     });

@@ -52,6 +52,28 @@ enum Modal: Equatable {
     case postSheet(Post)
 }
 
+/// The fields of a supergroup that decide feed candidacy (PRODUCT §2.2): its usernames, the
+/// class of my membership, and whether that membership may post. Everything else about a
+/// supergroup — member counts, boosts, slow mode — can change all day without changing
+/// whether the channel can be one of my feeds, so only these three are watched.
+struct SupergroupCandidacy: Equatable {
+    let usernames: [String]
+    let status: String
+    let canPost: Bool
+
+    init(_ sg: Supergroup) {
+        usernames = sg.usernames.map { [$0.editableUsername] + $0.activeUsernames } ?? []
+        switch sg.status {
+        case .chatMemberStatusCreator: status = "creator"; canPost = true
+        case .chatMemberStatusAdministrator(let a): status = "administrator"; canPost = a.rights.canPostMessages
+        case .chatMemberStatusMember: status = "member"; canPost = false
+        case .chatMemberStatusRestricted: status = "restricted"; canPost = false
+        case .chatMemberStatusLeft: status = "left"; canPost = false
+        case .chatMemberStatusBanned: status = "banned"; canPost = false
+        }
+    }
+}
+
 @MainActor @Observable
 final class AppModel {
     // Infrastructure
@@ -136,6 +158,9 @@ final class AppModel {
     /// live only while this is > 0 — never on a timer, never in the background.
     @ObservationIgnored private var feedsSurfaces = 0
     @ObservationIgnored private var candidatesRefreshTask: Task<Void, Never>?
+    /// The one live query in flight. A second caller joins it instead of firing a second
+    /// loadChats burst at Telegram; the scheduler uses it to tell "in flight" from "idle".
+    @ObservationIgnored private var candidatesQuery: Task<Void, Never>?
     /// Candidacy fingerprint per supergroup id — the fields that decide whether a channel
     /// can appear in "Your feeds". Updates that do not change it (echoes of our own
     /// getChat/getSupergroup traffic, unrelated flags) never trigger a re-query.
@@ -309,9 +334,67 @@ final class AppModel {
         case .updateChatPhoto(let u):
             nodes.apply(chatId: u.chatId, photo: .some(u.photo))
             if u.chatId == myNode?.chatId { myPhoto = Mapping.photoRef(u.photo) }
+        // PRODUCT §2.2 — the three updates that can change feed candidacy. Each one decides for
+        // itself whether anything actually changed; only then does a re-query get scheduled.
+        case .updateNewChat(let u):
+            note(newChat: u.chat)
+        case .updateChatPosition(let u):
+            note(chatId: u.chatId, position: u.position)
+        case .updateSupergroup(let u):
+            note(supergroup: u.supergroup)
         default:
             break
         }
+    }
+
+    // MARK: Feed candidacy signals (PRODUCT §2.2)
+
+    /// A channel arrived. Here a first sighting *is* the signal — a channel created in Telegram
+    /// while Setup / Manage feeds is up can become a feed the moment it appears — so this
+    /// re-queries. Anything that is not a channel is not a candidate and is ignored.
+    private func note(newChat chat: Chat) {
+        guard Mapping.isChannel(chat) else { return }
+        knownChannelChats.insert(chat.id)
+        // Seed the main-list baseline from the positions TDLib already handed us here. Without it the
+        // first `updateChatPosition` for this channel reads as a fresh join — and ordinary message
+        // traffic fires one for every channel, because order derives from the last message date — so a
+        // quiet screen full of channels would trickle out a full candidate scan per channel.
+        if chat.positions.contains(where: { if case .chatListMain = $0.list { return $0.order.rawValue != 0 } else { return false } }) {
+            mainListChats.insert(chat.id)
+        }
+        scheduleCandidateRefresh()
+    }
+
+    /// Main-list membership flipped for a channel we have seen. `order` churns constantly from
+    /// ordinary message traffic; only joining or leaving the list changes candidacy, so a bare
+    /// reorder never re-queries.
+    private func note(chatId: Int64, position: ChatPosition) {
+        guard case .chatListMain = position.list, knownChannelChats.contains(chatId) else { return }
+        let inList = position.order.rawValue != 0
+        let flipped = inList ? mainListChats.insert(chatId).inserted : mainListChats.remove(chatId) != nil
+        guard flipped else { return }
+        scheduleCandidateRefresh()
+    }
+
+    /// The candidacy fingerprint changed for a supergroup we have already seen — a channel made
+    /// public, a username dropped, posting rights granted or taken away. The *first* fingerprint
+    /// for a supergroup is TDLib's initial sync telling us what it already knew, not a change, so
+    /// it is recorded silently; that is what keeps cold start from firing hundreds of re-queries.
+    private func note(supergroup sg: Supergroup) {
+        let next = SupergroupCandidacy(sg)
+        guard let previous = supergroupCandidacy.updateValue(next, forKey: sg.id), previous != next else { return }
+        scheduleCandidateRefresh()
+    }
+
+    /// Per-session memory (Android clears it on every client attach): a new TDLib client re-announces
+    /// every chat and supergroup, and those are first sightings again, not changes.
+    private func resetCandidacyMemory() {
+        candidatesRefreshTask?.cancel(); candidatesRefreshTask = nil
+        candidatesQuery?.cancel(); candidatesQuery = nil
+        candidatesDirty = false
+        supergroupCandidacy = [:]
+        knownChannelChats = []
+        mainListChats = []
     }
 
     // MARK: Auth state machine (PROTOCOL §4.1)
@@ -341,6 +424,7 @@ final class AppModel {
             auth = .loading
         case .authorizationStateClosed:
             auth = .loading
+            resetCandidacyMemory()
             td.recreate()
         default:
             auth = .unsupported(state: Self.stateName(authState))
@@ -665,11 +749,73 @@ final class AppModel {
         }
     }
 
+    // MARK: Feed candidates (PRODUCT §2.2)
+
+    /// Setup's feeds card and Manage feeds register while they are on screen. Candidacy updates
+    /// re-query live only while at least one of them is up: with none on screen nothing runs, and
+    /// opening one always re-queries anyway, so the cache is never served stale. There is no timer.
+    func feedsSurfaceAppeared() { feedsSurfaces += 1 }
+
+    func feedsSurfaceDisappeared() {
+        feedsSurfaces = max(0, feedsSurfaces - 1)
+        guard feedsSurfaces == 0 else { return }
+        candidatesRefreshTask?.cancel()
+        candidatesRefreshTask = nil
+        candidatesDirty = false
+    }
+
+    /// PRODUCT §2.2 — the candidate list is never trusted stale: every open of the Setup feeds card
+    /// or Manage feeds re-queries live (getCreatedPublicChats + the admin-channel scan). The cached
+    /// list stays on screen while the query runs and only a success replaces it.
+    ///
+    /// Offline it does not query at all — reads serve cache (PRODUCT §4), same guard as createNode /
+    /// findExistingNode / verifyFeed. Silent, because this is a read: no `You're offline.` toast.
     func loadCandidates() async {
-        guard auth == .ready else { return }
-        candidatesLoading = true; defer { candidatesLoading = false }
-        if let list = try? await activity.run("Reading your channels", { try await nodes.myFeedCandidates(excluding: myNode?.chatId) }) {
+        guard auth == .ready, !isOffline else { return }
+        // Never two live queries at once: a second caller joins the one in flight rather than
+        // firing another loadChats burst at Telegram.
+        if let running = candidatesQuery { await running.value; return }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runCandidatesQuery()
+        }
+        candidatesQuery = task
+        await task.value
+    }
+
+    /// One pass. Wrapped in the activity registry so the pill reads `Syncing` while it is in flight
+    /// (PRODUCT §2.10). A failure — offline, timeout, FLOOD_WAIT — leaves `candidates` alone: the
+    /// card keeps showing the cache instead of blanking.
+    private func runCandidatesQuery() async {
+        candidatesLoading = true
+        candidatesDirty = false
+        defer {
+            candidatesLoading = false
+            candidatesQuery = nil
+            // An update that landed mid-query gets exactly one more pass, debounced like any other.
+            // That pass echoes nothing new (TDLib announces each chat once per session), so it sets
+            // no flag and the chain stops.
+            if candidatesDirty { candidatesDirty = false; scheduleCandidateRefresh() }
+        }
+        // `myFeedCandidates` throws on any read it could not complete, so `list` is only ever a list
+        // that saw everything. A failure leaves `candidates` — and the disk cache — exactly as they were.
+        if let list = try? await activity.run("Checking your channels", { try await self.nodes.myFeedCandidates(excluding: self.myNode?.chatId) }) {
             candidates = list
+        }
+    }
+
+    /// A candidacy-changing update arrived. While a feeds surface is on screen, re-query live after a
+    /// ~1 s debounce so a burst collapses into one query. While a query is already in flight this only
+    /// marks the list dirty — the query's own loadChats traffic echoes back as these very updates, and
+    /// re-querying per echo would loop.
+    private func scheduleCandidateRefresh() {
+        guard auth == .ready, feedsSurfaces > 0 else { return }
+        guard candidatesQuery == nil else { candidatesDirty = true; return }
+        candidatesRefreshTask?.cancel()
+        candidatesRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, self.feedsSurfaces > 0 else { return }
+            await self.loadCandidates()
         }
     }
 
@@ -861,6 +1007,7 @@ final class AppModel {
         setupSkipped = false; nodeLookupDone = false; inSetup = false
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
         feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
+        resetCandidacyMemory()
         path = []; tab = .feed
         feedReady = false; feedStale = false; feedExhausted = false
         lastError = nil; lastFeedRefresh = nil; myCardFetchedAt = nil

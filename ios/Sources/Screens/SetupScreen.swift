@@ -118,13 +118,19 @@ struct FeedsCard: View {
             }
             .padding(.top, HPTokens.Space.rowPad)
         }
+        // PRODUCT §2.2: the cached list and the saved selection paint immediately, then the card
+        // always re-queries live — a channel made public in Telegram a minute ago must show up.
         .task {
-            if model.candidates.isEmpty || !seeded { await model.loadCandidates() }
             if !seeded {
                 selected = Set((model.myCard?.feeds ?? []).map(Username.key))
                 seeded = true
             }
+            await model.loadCandidates()
         }
+        // While this card is on screen, candidacy-changing TDLib updates re-query on their own.
+        // The selection is @State, so a background refresh never disturbs an unsaved edit.
+        .onAppear { model.feedsSurfaceAppeared() }
+        .onDisappear { model.feedsSurfaceDisappeared() }
     }
 
     @ViewBuilder private func candidateRow(_ c: FeedCandidate, isLast: Bool) -> some View {

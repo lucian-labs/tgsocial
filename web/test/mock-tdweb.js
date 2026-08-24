@@ -3,6 +3,13 @@
  * window.tdweb.default with the same surface the app uses (send → Promise,
  * onUpdate, close). Scenario via ?mock=<fresh|node>&mockflood=1.
  *
+ * Authorization is modelled the way real TDLib enforces it (PRODUCT §2.13,
+ * measured against tdweb 1.8.66): before `authorizationStateReady` only
+ * preauthentication requests answer — `setTdlibParameters`, `getOption`,
+ * `setNetworkType` and the auth calls themselves. Every chat request,
+ * `searchPublicChat` included, comes back `401 Unauthorized`. There is no
+ * anonymous read of a public channel to mock.
+ *
  * Never loaded in production; nothing in index.html references it.
  */
 (function () {
@@ -199,12 +206,25 @@
   }
 
   // ── client ───────────────────────────────────────────────────────────────
+
+  /**
+   * Everything real TDLib answers before authorization: the parameters call,
+   * options, the network type, and the auth state machine itself. Anything
+   * else is 401 until the client reaches Ready (PRODUCT §2.13).
+   */
+  const PREAUTH_OK = new Set([
+    'setTdlibParameters', 'getOption', 'setNetworkType', 'getAuthorizationState',
+    'setAuthenticationPhoneNumber', 'checkAuthenticationCode', 'checkAuthenticationPassword',
+    'requestQrCodeAuthentication', 'registerUser', 'logOut', 'close', 'destroy',
+  ]);
+
   class MockTdClient {
     constructor(options) {
       this.onUpdate = options.onUpdate;
       this.auth = null;
       this.joined = new Set();
       this.floodUsed = false;
+      this.instanceName = options.instanceName || 'tgsocial';
       this.ready = saved?.auth === 'ready';
       setTimeout(() => this.setAuth('authorizationStateWaitTdlibParameters'), slow);
       window.__mock = { history, pinned, chats, supergroups, fulls, client: this, persist };
@@ -221,7 +241,9 @@
       this.emit({ '@type': 'updateAuthorizationState', authorization_state: this.auth });
     }
 
-    close() {}
+    close() {
+      this.closed = true;
+    }
 
     send(q) {
       return new Promise((resolve, reject) => {
@@ -248,6 +270,9 @@
     handle(q) {
       const t = q['@type'];
       const ok = { '@type': 'ok' };
+      // real TDLib refuses every chat request before authorization — public
+      // channels included (PRODUCT §2.13)
+      if (this.auth?.['@type'] !== 'authorizationStateReady' && !PREAUTH_OK.has(t)) throw err(401, 'Unauthorized');
       switch (t) {
         case 'setTdlibParameters':
           if (!q.api_id || !q.api_hash) throw err(400, 'api_id missing');
