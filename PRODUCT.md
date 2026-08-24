@@ -453,47 +453,67 @@ Behaviour:
 - A commenter row's avatar/name opens their node profile. Comments from
   nodes you don't follow (found via +1) show a small `+1` neutral pill.
 
-### 2.13 Public links — a URL for every channel and node
+### 2.13 Public pages — a URL for every feed and every person
 
-`https://tgsocial.lucianlabs.ca/f/<channel>` opens that channel's feed screen
-(§2.6); `/n/<node>` opens that node profile (§2.5). A link is the address of a
-screen, not a second app: a signed-in visitor lands on it directly, tab bar
-and all.
+Anyone can read a public tgsocial page without an account, without the app,
+and without waiting for a 14 MB wasm to boot. Three routes:
 
-**Every read needs a session.** TDLib answers `401 Unauthorized` to every
-chat request made before authorization — `searchPublicChat`, `getChat` and
-`getChatHistory` all refuse on a client that is connected (`connectionState
-Ready`) but not signed in; only preauthentication requests
-(`setTdlibParameters`, `getOption`, `setNetworkType`) answer. Public channels
-are public to Telegram's servers, not to an unauthorized client. So there is
-no anonymous read to build a public page on, and v1 does not pretend
-otherwise: **all three platforms behave the same way** — a visitor with no
-session gets Sign in, then lands on the linked screen.
+| Route | Shows |
+| --- | --- |
+| `/u/<name>` | A **person**: the merged, newest-first feed of every channel on their card. The landing page. |
+| `/f/<channel>` | One **channel**'s posts. |
+| `/n/<node>` | A node's **card** — bio, feeds, follows — the graph view. |
 
-**Signed out.** Sign in (§2.1), with the destination named: the usual
-wordmark and h1 `Your Telegram, as a feed.`, and the muted line replaced by
-`Sign in to see @<name>.` — the phone form is unchanged. The destination
-survives the whole detour, Setup (§2.2) included, and the app opens on the
-linked screen the moment TDLib reports Ready. The URL is the only memory —
-nothing about the link is written down, and it is spent once.
+`<name>` on `/u/` resolves two ways, so a person can be reached by the handle
+people actually know:
 
-**Signed in.** The linked screen exactly as any other route, plus:
+1. If `<name>` is a node channel (its pinned message is a card), use it.
+2. Otherwise, if `<name>` is a feed channel whose description carries
+   `tgsocial: @<node>` (`PROTOCOL §3`), follow that backlink to the node.
 
-- **Sharing.** The Share button (§2.3) keeps sharing the Telegram `t.me`
-  link; the channel header on a public route gains a `Copy Link` ghost sm
-  that copies the `tgsocial.lucianlabs.ca/f/<channel>` URL, toast
-  `Link copied.`
-- A channel that cannot be read gets the §2.6 empty card — `Channel not
-  found.` muted `@<name> is not a public channel.` — the same card the same
-  channel gets from anywhere else in the app.
+So `/u/tastycrow` reaches the person behind `@tastycrow` even though their
+node is `@tgs_dankcoin`. A name that resolves to neither shows the §2.6 empty
+card.
 
-**Malformed links.** `/f/no`, `/f/bad-name`, `/f/%zz` are not public routes:
-they are not a username, so the app opens on the feed. A bad percent-escape
-is a bad username, never an error screen.
+**How it reads without an account.** Not through TDLib — TDLib refuses every
+chat read before authorization (401, measured; `web/test/smoke.mjs` asserts
+it). It reads Telegram's own public preview, `t.me/s/<channel>`, which
+Telegram serves to anonymous browsers and which carries everything the
+protocol needs: post text, media, timestamps, view counts, `data-post`
+message ids, the channel description with its backlink, and the pinned card
+message itself. The wire details are in [`PUBLIC.md`](./PUBLIC.md).
 
-**Native.** iOS and Android register `tgsocial.lucianlabs.ca/f/*` and `/n/*`
-as universal/app links so a tapped link opens the installed app on that
-screen, signing in first when there is no session.
+The public page is a **lens, not a copy**: nothing is stored, the cache is
+seconds long, and deleting a post in Telegram removes it from the page. No
+account data, no private chats — a channel is only readable here because its
+owner made it public on Telegram.
+
+**What renders.** The post card of §2.3 with media playable inline and the
+full-screen viewer, relative times, and the long-press sheet — minus the
+things that need an identity: no Comment button, no comment counts, no
+Follow. The floating tab bar is hidden; the topbar carries the wordmark and a
+neutral `Public` pill.
+
+**The nag.** A dismissible bar in the floating-bar slot on every public page:
+
+```
+  ╭────────────────────────────────────────────╮
+  │ Follow this feed in tgsocial.   ( Get It ) │
+  ╰────────────────────────────────────────────╯
+```
+
+`Get It` goes to `/`. Dismiss (×, 40pt) hides it for the session.
+
+A signed-in visitor on the same URL gets the full screen — tab bar, Follow,
+Comment — with no nag. The public page is the same product seen from outside.
+
+**Sharing.** `Copy Link` in the channel kebab (§2.6) copies the
+`tgsocial.lucianlabs.ca/u/<name>` URL for a person and `/f/<channel>` for a
+channel.
+
+**Native.** iOS and Android register these paths as universal/app links, so a
+tapped link opens the installed app on that screen. An unsigned-in app shows
+Sign in naming the destination, then lands there.
 
 ### 2.14 Connector (Mac only)
 
