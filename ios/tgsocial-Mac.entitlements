@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- TDLib's MTProto transport: outbound TCP to Telegram's data centres, and
+	     the media downloads behind every photo, video and document. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- The Connector bridge (CONNECTOR.md §2) listens on 127.0.0.1. The sandbox
+	     rejects listen()/accept() without this, even on loopback: the socket
+	     binds, the MCP server dials, and the connection is refused with no error
+	     the app can surface. Loopback-only is enforced in code — ConnectorServer
+	     binds 127.0.0.1 explicitly and never 0.0.0.0 — so this entitlement makes
+	     the accept() legal without widening the bind. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- The handshake file (CONNECTOR.md §2) has to land in the *real* `~/.tgsocial`:
+	     `lucian-mcp` runs outside this sandbox and looks there, and a token written into
+	     the app container is a token no client can read. The exception is one directory
+	     wide and holds nothing but `connector.json` and `audit.log`. If a build ever
+	     cannot carry it, ConnectorHandshakeStore falls back to the container home — the
+	     bridge still runs, the MCP server just has to be pointed at the other path. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/.tgsocial/</string>
+	</array>
+	<!-- Compose attaches a photo the user picks (PRODUCT §2.9), and the
+	     full-screen viewer's Share hands a downloaded file to the system share
+	     sheet (§2.11). -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+</dict>
+</plist>

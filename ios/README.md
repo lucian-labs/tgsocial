@@ -1,7 +1,12 @@
-# tgsocial — iOS
+# tgsocial — iOS and Mac
 
-SwiftUI, iOS 17+, iPhone and iPad. TDLib via [Swiftgram/TDLibKit](https://github.com/Swiftgram/TDLibKit)
-(pinned `1.5.2-tdlib-1.8.66-022d6020`). No server; every call is a TDLib call to Telegram.
+SwiftUI, iOS 17+, iPhone and iPad, plus a Mac Catalyst build of the same target. TDLib via
+[Swiftgram/TDLibKit](https://github.com/Swiftgram/TDLibKit) (pinned `1.5.2-tdlib-1.8.66-022d6020`).
+No server; every call is a TDLib call to Telegram.
+
+The Mac build adds the Connector — a loopback HTTP bridge and the fifth tab that governs it
+([`CONNECTOR.md`](../CONNECTOR.md), [PRODUCT §2.14](../PRODUCT.md)). It is compiled behind
+`#if targetEnvironment(macCatalyst)` and does not exist in the iOS build at all.
 
 ## Configure secrets
 
@@ -28,6 +33,34 @@ make export   # App Store Connect export → build/export/tgsocial.ipa
 make upload   # altool upload; ASC_API_KEY / ASC_API_ISSUER from Secrets.xcconfig or the environment
 ```
 
+### Mac Catalyst
+
+```bash
+make mac-build  # Debug, destination 'platform=macOS,variant=Mac Catalyst' → build/derivedDataMac
+make mac-test   # the same, running the tests — including the Connector suite
+make mac-tdlib  # resolve packages + patch the TDLib xcframework (both other targets depend on it)
+```
+
+Its own `-derivedDataPath` (`build/derivedDataMac`): the two flows build the same scheme for
+different platforms, and sharing one would have each invalidate the other's module cache.
+
+`make test` runs on the simulator, where the Connector compiles to nothing — the Connector suite
+lives in `make mac-test`.
+
+**The xcframework patch.** `TDLibFramework.xcframework` ships ios, ios-simulator, macos, tvos,
+watchos and xros slices, but no `ios-*-maccatalyst`, so a Catalyst link fails outright:
+
+```
+ld: building for 'macCatalyst', but linking in object file (…ConcurrentScheduler.cpp.o) built for 'macOS'
+```
+
+`scripts/tdlib-maccatalyst.py` derives the missing slice from the macos one, rewriting each object's
+`LC_BUILD_VERSION` platform stamp from macOS to MACCATALYST. TDLib is platform-agnostic C++ — no
+AppKit, no UIKit, just libc++, zlib and BSD sockets — so the objects are already correct code for
+`arm64-apple-ios-macabi`; only the label disagreed. Four bytes per load command change and nothing
+else, so the Catalyst build links the same code the iOS build does. The script is idempotent and
+runs from `make mac-tdlib`; deleting the slice or the whole DerivedData just makes the next build
+recreate it.
 The first build resolves the TDLib xcframework (≈360 MB download, 1.3 GB unpacked) into
 `build/SourcePackages`; every `xcodebuild` passes `-clonedSourcePackagesDirPath build/SourcePackages`
 and `-derivedDataPath build/derivedData` so it is only fetched once.
@@ -42,13 +75,22 @@ Sources/
   Repo/       Models, LocalStore, Mapping, NodeRepository, FeedRepository, DiscoveryRepository, MediaLoader
   Components/ Scaffold (topbar, status pill), PostCard, Rows (NodeRow, FeedRow, EmptyCard), RichTextView, RemoteImage
   Screens/    SignIn, Setup (+ FeedsCard), Feed, Explore, NodeProfile, FeedChannel, Graph, You (+ modals), Compose
-Tests/        CardVectorTests (loads ../docs/card-vectors.json), FeedMergeTests
+  Connector/  Mac only. Scope, token + handshake file, audit, wire, router, NWListener, service, screen
+Tests/        CardVectorTests (loads ../docs/card-vectors.json), FeedMergeTests, media/memory,
+              ConnectorTests + ConnectorBridgeTests (Catalyst only)
 Resources/    Assets.xcassets (AppIcon, AccentColor, LaunchBackground), PrivacyInfo.xcprivacy
 ../design/swift/HousePour/   the House Pour kit (HP* views) + generated HousePourTokens.swift
 ```
 
 `Protocol/` has no TDLib or SwiftUI imports, so the parser, serialiser, username rules, deep links,
 backlinks, time/count formatting and the k-way feed merge are unit-tested against the shared vectors.
+
+`Connector/` reads through the same repositories the app does — it is a second reader of one model,
+not a second TDLib session — and its scope check has exactly one door: reads take a `ScopedSource`,
+whose initialiser is private to `ConnectorScope.swift`, so the only way to name a chat is to have
+passed `ScopeResolution.admit`. `tgsocial-Mac.entitlements` carries the sandbox grants Catalyst
+needs: `network.server` for the loopback listen, `network.client` for TDLib, and a one-directory
+home-relative exception so the handshake lands in the real `~/.tgsocial` where the MCP server looks.
 
 ## Tokens
 

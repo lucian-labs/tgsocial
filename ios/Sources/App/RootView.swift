@@ -64,6 +64,10 @@ struct RootView: View {
                             case .feedChannel(let username): FeedChannelScreen(username: username)
                             case .manageFeeds: ManageFeedsScreen()
                             case .thread(let post): ThreadScreen(post: post)
+                            #if targetEnvironment(macCatalyst)
+                            case .connectorSources: ConnectorSourcesScreen()
+                            case .connectorCustom: ConnectorCustomScreen()
+                            #endif
                             }
                         }
                         .background(HPBackdrop())
@@ -137,6 +141,9 @@ struct TabRoot: View {
             case .explore: ExploreScreen()
             case .graph: GraphScreen()
             case .you: YouScreen()
+            #if targetEnvironment(macCatalyst)
+            case .connector: ConnectorScreen()
+            #endif
             }
         }
         .background(HPBackdrop())

@@ -35,6 +35,9 @@ struct tgsocialApp: App {
                 RootView()
                     .environment(model)
                     .preferredColorScheme(.light)
+                    // Mac only in practice: this is where the Connector bridge comes back up if
+                    // the user left it on (PRODUCT §2.14). A no-op everywhere else.
+                    .task { await model.startServices() }
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                         model.terminate()
                     }

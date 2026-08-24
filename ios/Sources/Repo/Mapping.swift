@@ -36,8 +36,12 @@ enum Mapping {
         return nil
     }
 
-    static func isChannel(_ chat: Chat) -> Bool {
-        if case .chatTypeSupergroup(let sg) = chat.type { return sg.isChannel }
+    static func isChannel(_ chat: Chat) -> Bool { isChannel(chat.type) }
+
+    /// A chat type is a channel only as a supergroup flagged `isChannel`: a private chat, a basic
+    /// group, a secret chat and an ordinary supergroup are all not one.
+    static func isChannel(_ type: ChatType) -> Bool {
+        if case .chatTypeSupergroup(let sg) = type { return sg.isChannel }
         return false
     }
 

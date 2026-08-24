@@ -32,6 +32,10 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
+    # PRODUCT §5 "Mac": the same SwiftUI app built for Mac Catalyst, plus the
+    # Connector tab (§2.14) and the bridge. Not a second app and not a second
+    # TDLib session — one target, one codebase, one signed-in account.
+    supportsMacCatalyst: true
     sources:
       - path: Sources
       - path: ../design/swift/HousePour
@@ -54,7 +58,12 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: tgsocial
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MACCATALYST: YES
+        # Catalyst runs sandboxed; the bridge needs network.server for its
+        # loopback listen() and TDLib needs network.client (see the file). iOS
+        # and the simulator carry no entitlements file at all — the sdk
+        # condition keeps the Mac grants off the phone build.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": tgsocial-Mac.entitlements
     info:
       path: Info.plist
       properties:
@@ -96,6 +105,9 @@ targets:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "17.0"
+    # The Connector suite only exists on Catalyst (the bridge is not compiled
+    # in anywhere else), so the test bundle has to build for Catalyst too.
+    supportsMacCatalyst: true
     sources:
       - path: Tests
       - path: ../docs/card-vectors.json
@@ -106,6 +118,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ca.lucianlabs.tgsocialTests
         GENERATE_INFOPLIST_FILE: YES
+        SUPPORTS_MACCATALYST: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/tgsocial.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/tgsocial
         BUNDLE_LOADER: $(TEST_HOST)
 

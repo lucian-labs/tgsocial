@@ -20,12 +20,21 @@ enum AuthPhase: Equatable {
 
 enum Tab: String, CaseIterable, Hashable {
     case feed, explore, graph, you
+    #if targetEnvironment(macCatalyst)
+    /// PRODUCT §2.14: a fifth tab, present only on macOS. On iOS and Android it does not exist
+    /// and the bridge is not compiled in — a phone is not a host for a local service.
+    case connector
+    #endif
+
     var label: String {
         switch self {
         case .feed: return "Feed"
         case .explore: return "Explore"
         case .graph: return "Graph"
         case .you: return "You"
+        #if targetEnvironment(macCatalyst)
+        case .connector: return "Connector"
+        #endif
         }
     }
 }
@@ -36,6 +45,12 @@ enum Route: Hashable {
     case manageFeeds
     /// PRODUCT §2.12: the post with its comment tree.
     case thread(post: Post)
+    #if targetEnvironment(macCatalyst)
+    /// PRODUCT §2.14: "the answer to 'what can it see' is always one tap away".
+    case connectorSources
+    /// PRODUCT §2.14: the editable custom scope list.
+    case connectorCustom
+    #endif
 }
 
 enum Modal: Equatable {
@@ -89,6 +104,10 @@ final class AppModel {
     @ObservationIgnored private(set) var feed: FeedRepository!
     @ObservationIgnored private(set) var discovery: DiscoveryRepository!
     private(set) var comments: CommentRepository!
+    #if targetEnvironment(macCatalyst)
+    /// CONNECTOR.md: the local bridge and the switches that govern it. Mac only.
+    private(set) var connector: ConnectorService!
+    #endif
 
     // Auth / connection
     var auth: AuthPhase = .loading
@@ -202,9 +221,27 @@ final class AppModel {
             myCardState = cached.state == .newerVersion ? .newerVersion : .ok
         }
         secretsMissing = TGSecrets.fromBundle() == nil
+        #if targetEnvironment(macCatalyst)
+        // Last: it reads `store` and holds this model unowned, so everything it can reach is
+        // already in place by the time it exists.
+        connector = ConnectorService(model: self)
+        #endif
     }
 
-    func terminate() { td.closeClients() }
+    /// Called once from the scene. The bridge restores itself here rather than in `init` because
+    /// binding a socket is work, and `init` runs before there is a window to report a failure in.
+    func startServices() async {
+        #if targetEnvironment(macCatalyst)
+        await connector.restore()
+        #endif
+    }
+
+    func terminate() {
+        #if targetEnvironment(macCatalyst)
+        connector.shutdown()
+        #endif
+        td.closeClients()
+    }
 
     var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0" }
     var buildNumber: String { Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1" }
@@ -997,6 +1034,11 @@ final class AppModel {
     // MARK: Sign out (wipes local state)
 
     func signOut() async {
+        #if targetEnvironment(macCatalyst)
+        // PRODUCT §2.14: signing out turns the bridge off and wipes the token. Before `logOut`,
+        // so no request can be served against a session that is on its way out.
+        connector.signOut()
+        #endif
         modal = nil
         viewer = nil
         audio.stop()
@@ -1025,4 +1067,12 @@ final class AppModel {
         UIPasteboard.general.string = string
         showToast("Link copied.")
     }
+
+    #if targetEnvironment(macCatalyst)
+    /// PRODUCT §2.14: `Copy` puts the token on the clipboard, toast `Token copied.`
+    func copyToken(_ token: String) {
+        UIPasteboard.general.string = token
+        showToast("Token copied.")
+    }
+    #endif
 }
