@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!-- SYNTHETIC fixture, not fetched: a hostile channel page.
+     PUBLIC.md §3 — every string out of the preview is untrusted third-party
+     HTML. Nothing in here may execute, and no event-handler attribute,
+     `javascript:` href or `data:` href may survive into the live DOM. The
+     parser returns text and structured entities, never HTML, and the renderer
+     builds nodes; test/flows.mjs feeds this page through both and asserts the
+     page is inert afterwards.
+
+     Every payload sets window.__xss if it ever runs. -->
+<html>
+<head>
+<meta property="og:title" content="Nasty &lt;script&gt;window.__xss='og-title'&lt;/script&gt;">
+<meta property="og:image" content="javascript:window.__xss='og-image'">
+<meta property="og:site_name" content="Telegram">
+<meta property="og:description" content="Hostile by design &lt;img src=x onerror=&quot;window.__xss='og-desc'&quot;&gt; · tgsocial: @tgs_dankcoin">
+<link rel="canonical" href="/s/tgs_xss">
+</head>
+<body class="tgme_body_wrap">
+<main class="tgme_main">
+  <div class="tgme_header_right_column">
+    <section class="tgme_right_column">
+      <div class="tgme_channel_info">
+        <div class="tgme_channel_info_header">
+          <i class="tgme_page_photo_image bgcolor4" data-content="N"><img src="javascript:window.__xss='avatar'"></i>
+          <div class="tgme_channel_info_header_title_wrap">
+            <div class="tgme_channel_info_header_title"><span dir="auto">Nasty <img src="x" onerror="window.__xss='title'"></span></div>
+          </div>
+          <div class="tgme_channel_info_header_username"><a href="https://t.me/tgs_xss">@tgs_xss</a></div>
+        </div>
+        <div class="tgme_channel_info_description">Hostile by design <script>window.__xss='description'</script> · tgsocial: @tgs_dankcoin</div>
+      </div>
+    </section>
+  </div>
+  <div class="tgme_page_wrap">
+    <div class="tgme_container">
+      <section class="tgme_channel_history js-message_history">
+
+        <!-- 1. script + img/onerror + svg/onload inside the message text -->
+        <div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="tgs_xss/11">
+          <div class="tgme_widget_message_bubble">
+            <div class="tgme_widget_message_author accent_color"><a class="tgme_widget_message_owner_name" href="https://t.me/tgs_xss"><span dir="auto">Nasty</span></a></div>
+            <div class="tgme_widget_message_text js-message_text" dir="auto">payload one<script>window.__xss='inline-script'</script><img src="x" onerror="window.__xss='img-onerror'"><svg onload="window.__xss='svg-onload'"></svg><iframe src="javascript:window.__xss='iframe'"></iframe></div>
+            <div class="tgme_widget_message_footer compact js-message_footer">
+              <div class="tgme_widget_message_info short js-message_info">
+                <span class="tgme_widget_message_views">1</span><span class="copyonly"> view</span><span class="tgme_widget_message_meta"><a class="tgme_widget_message_date" href="https://t.me/tgs_xss/11"><time datetime="2026-08-22T12:00:00+00:00" class="time">12:00</time></a></span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+
+        <!-- 2. javascript: and data: links, plus a handler on a formatting tag -->
+        <div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="tgs_xss/12">
+          <div class="tgme_widget_message_bubble">
+            <div class="tgme_widget_message_author accent_color"><a class="tgme_widget_message_owner_name" href="https://t.me/tgs_xss"><span dir="auto">Nasty</span></a></div>
+            <div class="tgme_widget_message_text js-message_text" dir="auto">payload two <a href="javascript:window.__xss='href'" target="_blank">click me</a> and <a href="data:text/html;base64,PHNjcmlwdD53aW5kb3cudG9wLl9feHNzPSdkYXRhJzwvc2NyaXB0Pg==" target="_blank">a data link</a> and <b onclick="window.__xss='onclick'">bold with a handler</b> and <a href="https://example.com/ok" target="_blank">a real link</a></div>
+            <div class="tgme_widget_message_footer compact js-message_footer">
+              <div class="tgme_widget_message_info short js-message_info">
+                <span class="tgme_widget_message_views">2</span><span class="copyonly"> views</span><span class="tgme_widget_message_meta"><a class="tgme_widget_message_date" href="https://t.me/tgs_xss/12"><time datetime="2026-08-22T13:00:00+00:00" class="time">13:00</time></a></span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+
+        <!-- 3. hostile media: a photo whose background-image is javascript:,
+                a video whose src is javascript:, a document behind data: -->
+        <div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="tgs_xss/13">
+          <div class="tgme_widget_message_bubble">
+            <div class="tgme_widget_message_author accent_color"><a class="tgme_widget_message_owner_name" href="https://t.me/tgs_xss"><span dir="auto">Nasty</span></a></div>
+            <a class="tgme_widget_message_photo_wrap" href="https://t.me/tgs_xss/13" style="width:400px;background-image:url('javascript:window.__xss=\'photo\'')">
+              <div class="tgme_widget_message_photo" style="padding-top:100%"></div>
+            </a>
+            <a class="tgme_widget_message_video_player js-message_video_player" href="https://t.me/tgs_xss/13">
+              <i class="tgme_widget_message_video_thumb" style="background-image:url('data:text/html,&lt;script&gt;window.__xss=\'thumb\'&lt;/script&gt;')"></i>
+              <div class="tgme_widget_message_video_wrap" style="width:400px;padding-top:56.25%">
+                <video src="javascript:window.__xss='video'" class="tgme_widget_message_video js-message_video"></video>
+              </div>
+              <time class="message_video_duration js-message_video_duration">0:12</time>
+            </a>
+            <a class="tgme_widget_message_document_wrap" href="data:text/html,&lt;script&gt;window.__xss='doc'&lt;/script&gt;">
+              <div class="tgme_widget_message_document">
+                <div class="tgme_widget_message_document_title" dir="auto">totally-safe.html</div>
+                <div class="tgme_widget_message_document_extra">2.4 MB</div>
+              </div>
+            </a>
+            <div class="tgme_widget_message_text js-message_text" dir="auto">payload three</div>
+            <div class="tgme_widget_message_footer compact js-message_footer">
+              <div class="tgme_widget_message_info short js-message_info">
+                <span class="tgme_widget_message_views">3</span><span class="copyonly"> views</span><span class="tgme_widget_message_meta"><a class="tgme_widget_message_date" href="https://t.me/tgs_xss/13"><time datetime="2026-08-22T14:00:00+00:00" class="time">14:00</time></a></span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+
+        <!-- 4. a hostile link preview -->
+        <div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="tgs_xss/14">
+          <div class="tgme_widget_message_bubble">
+            <div class="tgme_widget_message_author accent_color"><a class="tgme_widget_message_owner_name" href="https://t.me/tgs_xss"><span dir="auto">Nasty</span></a></div>
+            <div class="tgme_widget_message_text js-message_text" dir="auto">payload four</div>
+            <a class="tgme_widget_message_link_preview" href="javascript:window.__xss='preview-href'">
+              <div class="link_preview_site_name accent_color" dir="auto">Nowhere</div>
+              <i class="link_preview_image" style="background-image:url('javascript:window.__xss=\'preview-image\'')"></i>
+              <div class="link_preview_title" dir="auto">Title <img src="x" onerror="window.__xss='preview-title'"></div>
+              <div class="link_preview_description" dir="auto">Description</div>
+            </a>
+            <div class="tgme_widget_message_footer compact js-message_footer">
+              <div class="tgme_widget_message_info short js-message_info">
+                <span class="tgme_widget_message_views">4</span><span class="copyonly"> views</span><span class="tgme_widget_message_meta"><a class="tgme_widget_message_date" href="https://t.me/tgs_xss/14"><time datetime="2026-08-22T15:00:00+00:00" class="time">15:00</time></a></span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+
+        <!-- 5. an unrecognised block: no text node, no media we know. It must
+                still become a post carrying the words it has (PUBLIC §3). -->
+        <div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message tgme_widget_message_future_format js-widget_message" data-post="tgs_xss/15">
+          <div class="tgme_widget_message_bubble">
+            <div class="tgme_widget_message_author accent_color"><a class="tgme_widget_message_owner_name" href="https://t.me/tgs_xss"><span dir="auto">Nasty</span></a></div>
+            <div class="tgme_widget_message_something_new" dir="auto">a shape this parser has never seen<script>window.__xss='unknown-block'</script></div>
+            <div class="tgme_widget_message_footer compact js-message_footer">
+              <div class="tgme_widget_message_info short js-message_info">
+                <span class="tgme_widget_message_views">5</span><span class="copyonly"> views</span><span class="tgme_widget_message_meta"><a class="tgme_widget_message_date" href="https://t.me/tgs_xss/15"><time datetime="2026-08-22T16:00:00+00:00" class="time">16:00</time></a></span>
+              </div>
+            </div>
+          </div>
+        </div></div>
+
+      </section>
+    </div>
+  </div>
+</main>
+</body>
+</html>

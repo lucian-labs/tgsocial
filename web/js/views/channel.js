@@ -7,7 +7,7 @@
  */
 import { h, kebabMenu, pill, replace } from '../../vendor/house-pour.js';
 import { hasBacklink, publicFeedUrl, channelLink } from '../protocol.js';
-import { avatarFor, postCard, emptyCard, openExternal } from './shared.js';
+import { avatarFor, postCard, emptyCard, notFoundCard, openExternal } from './shared.js';
 import { releaseMedia } from '../media.js';
 
 const PAGE = 20;
@@ -34,7 +34,7 @@ export function render(app, { username }) {
     try {
       info = await app.busy(app.repo.feedInfo(username));
     } catch (e) {
-      replace(root, emptyCard('Channel not found.', `@${username} is not a public channel.`));
+      replace(root, notFoundCard(username));
       return;
     }
     if (!alive) return;

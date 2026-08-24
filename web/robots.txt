@@ -2,3 +2,6 @@ User-agent: *
 Allow: /
 Disallow: /vendor/
 Disallow: /config.json
+# the preview proxy is a fetch path, not a page: crawling it would multiply
+# our upstream requests to t.me for nothing (PUBLIC.md §1)
+Disallow: /tg/

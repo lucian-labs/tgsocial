@@ -40,6 +40,8 @@ import {
   parsePublicPath,
   publicFeedUrl,
   publicNodeUrl,
+  publicPersonUrl,
+  publicPath,
   trimFeedWindow,
 } from '../js/protocol.js';
 import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
@@ -82,6 +84,11 @@ for (const c of vectors.deepLink.cases) {
     ['/f/waveloop_devlog', { name: 'channel', username: 'waveloop_devlog' }],
     ['/f/waveloop_devlog/', { name: 'channel', username: 'waveloop_devlog' }],
     ['/n/tgs_elijah', { name: 'node', username: 'tgs_elijah' }],
+    ['/u/tastycrow', { name: 'person', username: 'tastycrow' }],
+    ['/u/tastycrow/', { name: 'person', username: 'tastycrow' }],
+    ['/u/@tastycrow', { name: 'person', username: 'tastycrow' }],
+    ['/u/bad-name', null],
+    ['/u/%zz', null],
     ['/f/@waveloop_devlog', { name: 'channel', username: 'waveloop_devlog' }],
     ['/', null],
     ['/index.html', null],
@@ -105,11 +112,45 @@ for (const c of vectors.deepLink.cases) {
       assert.deepEqual(parsePublicPath(path), out);
     });
   }
-  test('publicFeedUrl / publicNodeUrl are absolute to the canonical host', () => {
+  test('publicFeedUrl / publicNodeUrl / publicPersonUrl are absolute to the canonical host', () => {
     assert.equal(publicFeedUrl('waveloop_devlog'), 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog');
     assert.equal(publicNodeUrl('tgs_elijah'), 'https://tgsocial.lucianlabs.ca/n/tgs_elijah');
+    assert.equal(publicPersonUrl('tastycrow'), 'https://tgsocial.lucianlabs.ca/u/tastycrow');
+  });
+  test('publicPath round-trips every public route', () => {
+    for (const path of ['/u/tastycrow', '/f/waveloop_devlog', '/n/tgs_elijah']) {
+      assert.equal(publicPath(parsePublicPath(path)), path);
+    }
+    assert.equal(publicPath({ name: 'feed' }), '/');
   });
 }
+
+/* PUBLIC.md §3 — "the renderer builds nodes; no innerHTML of preview content
+ * anywhere". The cheapest way to keep that true is to have none at all: no
+ * module in js/ may assign innerHTML/outerHTML or call insertAdjacentHTML,
+ * because a page rendering third-party HTML is one careless line away and the
+ * line is easy to grep for and hard to notice in review. */
+test('no HTML injection sink exists anywhere in js/', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const walk = async (dir) => {
+    const out = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...await walk(full));
+      else if (entry.name.endsWith('.js')) out.push(full);
+    }
+    return out;
+  };
+  const sink = /\.(innerHTML|outerHTML)\s*(=|\+=)|insertAdjacentHTML|document\.write/;
+  const offenders = [];
+  for (const file of await walk(join(here, '..', 'js'))) {
+    const src = await readFile(file, 'utf8');
+    src.split('\n').forEach((line, i) => {
+      if (sink.test(line)) offenders.push(`${file}:${i + 1} ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(offenders, [], 'HTML injection sinks in js/');
+});
 
 for (const c of vectors.backlink.cases) {
   test(`backlink: ${c.description}`, () => {

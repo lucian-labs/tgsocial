@@ -214,13 +214,14 @@ try {
     if (conn === 'connectionStateReady') console.log('ok - Telegram reachable (connectionStateReady)');
     else notes.push(`environment: Telegram network not confirmed (connection state ${conn}); auth state machine still reached WaitPhoneNumber`);
 
-    /* PRODUCT §2.13 — the premise the whole public-link design rests on, held
-     * against the real bundled TDLib rather than a mock: a connected but
-     * unauthorized client answers preauthentication requests and refuses every
-     * chat request. If this ever starts resolving, an anonymous public read
-     * became possible and §2.13 can be revisited; until then a public link
-     * has to sign the visitor in first. Needs a live connection to mean
-     * anything, so it only asserts once Telegram is reachable. */
+    /* PRODUCT §2.13 / PUBLIC §intro — the finding that sent the public pages
+     * to Telegram's preview instead of TDLib, held against the real bundled
+     * library rather than a mock: a connected but unauthorized client answers
+     * preauthentication requests and refuses every chat request. Still true,
+     * still worth guarding — if it ever starts resolving, a public page could
+     * be served by TDLib and the preview reader becomes a fallback rather than
+     * the only door. Needs a live connection to mean anything, so it only
+     * asserts once Telegram is reachable. */
     if (conn === 'connectionStateReady' && state === 'authorizationStateWaitPhoneNumber') {
       const preauth = await page.evaluate(async () => {
         const td = window.__tgsocial.td;
@@ -257,6 +258,79 @@ try {
   ok(pr.ok(), 'privacy.html serves');
   ok(await p2.evaluate(() => /Privacy policy/.test(document.body.textContent)), 'privacy.html renders the policy');
   await p2.close();
+
+  /* PRODUCT §2.13 / PUBLIC §1 — the public reader, end to end and live.
+   *
+   * `python3 -m http.server` can neither proxy nor fall back to index.html, so
+   * this stretch runs against web/scripts/dev-proxy.mjs — the development
+   * stand-in for web/nginx-public.conf, doing what nginx does: the SPA
+   * fallback, and `/tg/s/<channel>` proxied to the real t.me with the same
+   * rules (only `/s/`, only a bare channel with an optional numeric
+   * `?before=`). The refusals are local and always asserted; the parts that
+   * need Telegram are asserted only when Telegram answered earlier in this
+   * run, and reported as an environment note otherwise.
+   *
+   * When this fails on the live page but web/test/flows.mjs still passes on
+   * the fixtures, Telegram changed its markup: refresh web/test/fixtures/. */
+  {
+    const devPort = await freePort();
+    const proxy = spawn('node', [join(web, 'scripts', 'dev-proxy.mjs'), '--port', String(devPort)], { stdio: 'ignore' });
+    try {
+      const devBase = `http://127.0.0.1:${devPort}`;
+      await waitFor(`${devBase}/index.html`, 10000);
+      const get = async (path) => {
+        const r = await fetch(`${devBase}${path}`);
+        return { status: r.status, headers: r.headers, body: await r.text() };
+      };
+      // NOTE — everything in this block runs against web/scripts/dev-proxy.mjs,
+      // never against web/nginx-public.conf, which nothing in this repo can
+      // apply. It asserts that the two agree on the rules, not that the shipped
+      // config obeys them: the nginx side of `?before=<digits>` is the
+      // `if ($args !~ …)` guard (a location regex cannot see a query string at
+      // all), and its cache needs `proxy_ignore_headers` because t.me sends
+      // `Set-Cookie` and `Cache-Control: no-store` on every response. Both are
+      // in the file; verifying them wants a real nginx in the loop.
+      const refused = await Promise.all(['/tg/s/bad-name', '/tg/s/x', '/tg/tastycrow', '/tg/s/tastycrow?before=abc', '/tg/s/tastycrow?q=x', '/tg/s/tastycrow/extra'].map((p) => get(p)));
+      ok(refused.every((r) => r.status === 404), 'public proxy: anything that is not a bare channel with an optional ?before=<digits> is refused');
+      ok((await get('/f/tastycrow')).body.includes('<div class="app" id="app">'), 'public proxy: the SPA fallback serves index.html for a public link');
+
+      const live = await get('/tg/s/tastycrow');
+      if (live.status === 200 && /tgme_widget_message/.test(live.body)) {
+        ok(/data-post="tastycrow\/\d+"/.test(live.body) && /<time datetime=/.test(live.body),
+          'public proxy: the live t.me preview still carries data-post and <time datetime>');
+        // Telegram's HTML reaches the reader as a string, never as a document:
+        // relabelled and sandboxed, and its Set-Cookie dropped (PUBLIC §1)
+        ok(/^text\/plain/.test(live.headers.get('content-type') ?? '')
+          && live.headers.get('x-content-type-options') === 'nosniff'
+          && /sandbox/.test(live.headers.get('content-security-policy') ?? '')
+          && !live.headers.get('set-cookie'),
+          `public proxy: the preview leaves as inert text (${live.headers.get('content-type')})`);
+        const p3 = await browser.newPage();
+        p3.on('console', (m) => {
+          if (m.type() === 'error') consoleErrors.push(`public: ${m.text()}`);
+        });
+        p3.on('pageerror', (e) => consoleErrors.push(`public pageerror: ${e.message}`));
+        await p3.goto(`${devBase}/f/tastycrow`, { waitUntil: 'load' });
+        await p3.waitForSelector('#view article.post', { timeout: 25000 });
+        const pub = await p3.evaluate(() => ({
+          publicMode: window.__tgsocial.app.publicMode,
+          repo: !!window.__tgsocial.repo,
+          status: document.getElementById('status').textContent,
+          posts: document.querySelectorAll('#view article.post').length,
+          comment: [...document.querySelectorAll('#view article.post .btn')].some((b) => /Comment/i.test(b.textContent)),
+          nag: document.querySelector('#dock .nag .nag-text')?.textContent ?? null,
+        }));
+        ok(pub.publicMode && !pub.repo && pub.status === 'Public', 'public: a real anonymous read — public page, no TDLib, Public pill');
+        ok(pub.posts > 0 && !pub.comment, `public: ${pub.posts} live posts render with no Comment button`);
+        ok(pub.nag === 'Follow this feed in tgsocial.', 'public: the nag is docked');
+        await p3.close();
+      } else {
+        notes.push(`environment: t.me not reachable through the proxy (status ${live.status}); the live public-page assertions were skipped`);
+      }
+    } finally {
+      proxy.kill();
+    }
+  }
 
   const realFailures = failedRequests.filter((f) => !/favicon\.ico/.test(f));
   ok(consoleErrors.length === 0, `zero console errors${consoleErrors.length ? `: ${consoleErrors.join(' | ')}` : ''}`);

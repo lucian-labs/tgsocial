@@ -29,6 +29,21 @@ function fullFile(slim) {
   return { id: slim.id, size: slim.size ?? 0, remote: { unique_id: slim.uniqueId }, local: { is_downloading_completed: !!slim.done } };
 }
 
+/**
+ * A file that already has its bytes at a URL: everything on a public page
+ * (PUBLIC.md §3 — Telegram serves the preview's media straight off its CDN),
+ * where a signed-in file is a TDLib id we have to download first. The URL was
+ * scheme-checked in the parser, so only http/https ever reaches here.
+ *
+ * This is the single seam that lets §2.3's post card, §2.11's players and the
+ * full-screen viewer render a preview post and a TDLib post with one set of
+ * code: everything below asks for a URL, and this answers immediately when
+ * there is nothing to download.
+ */
+function directUrl(slim) {
+  return typeof slim?.url === 'string' && slim.url ? slim.url : null;
+}
+
 const DOWNLOAD_LABELS = {
   photo: 'Downloading photo',
   video: 'Downloading video',
@@ -228,6 +243,13 @@ function releasePlayer(el) {
  * Returns { start(priority) } so a tap can begin/bump the download.
  */
 export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto = true, showRing = true, decodeWidth = null }) {
+  // a preview file is already at a URL: nothing to download, no ring, no
+  // decode budget — paint it and we are done
+  const direct = directUrl(slim);
+  if (direct) {
+    onUrl(direct);
+    return { start: () => {}, reload: () => onUrl(direct) };
+  }
   if (!slim?.id) return { start: () => {} };
   const file = fullFile(slim);
   // a picture goes through the downsampling decode path and is cached at the
@@ -302,8 +324,13 @@ export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto 
   return { start, reload };
 }
 
-/** Resolve a slim file to a blob URL at tap priority; rejects on cancel/failure. */
+/** Resolve a slim file to a playable URL at tap priority; rejects on cancel/failure. */
 function urlFor(app, slim, kind, mime = null) {
+  const direct = directUrl(slim);
+  if (direct) return Promise.resolve(direct);
+  // a preview block can carry a thumbnail and no file at all (Telegram serves
+  // some media only in the app); that is a failure to play, not a crash
+  if (!slim?.id) return Promise.reject(new Error('File is empty.'));
   return app.td.fileUrlOrThrow(fullFile(slim), { priority: 32, label: labelFor(kind), mime });
 }
 
@@ -789,14 +816,42 @@ function docKind(mime) {
 
 function documentBlock(app, post, item) {
   const viewable = VIEWABLE_DOC.test(item.mime ?? '');
-  const meta = [item.file?.size ? formatSize(item.file.size) : null, item.mime || null].filter(Boolean).join(' · ');
-  const action = button(viewable ? 'Open' : 'Download', { size: 'sm', ariaLabel: `${viewable ? 'Open' : 'Download'} ${item.fileName}` });
+  // the preview gives a size line and no mime; TDLib gives bytes and a mime
+  const meta = [item.file?.size ? formatSize(item.file.size) : item.extra || null, item.mime || null].filter(Boolean).join(' · ');
+  // A preview file is somebody else's URL, and `download` is ignored
+  // cross-origin — a button would therefore *navigate this tab* to it, off
+  // tgsocial, to an address the row never showed. So a preview document's
+  // action is a real link: hoverable, with its destination in the status bar,
+  // opening in its own tab, and marked `noopener nofollow ugc` like every other
+  // link out of the preview (PUBLIC §3). The parser has already refused every
+  // host but Telegram's own; this is the wall behind that one.
+  const label = viewable ? 'Open' : 'Download';
+  const previewUrl = post?.source === 'preview' ? directUrl(item.file) : null;
+  const action = previewUrl
+    ? h('a.btn.sm', {
+      href: previewUrl,
+      download: item.fileName || 'file',
+      target: '_blank',
+      rel: 'noopener nofollow ugc',
+      'aria-label': `${label} ${item.fileName}`,
+    }, label)
+    : button(label, { size: 'sm', ariaLabel: `${label} ${item.fileName}` });
   const row = h('div.post-file',
     icon('file'),
     h('div.post-file-text', h('div.post-file-name', item.fileName), meta ? h('div.post-file-meta', meta) : null),
     action,
   );
   row.addEventListener('click', stop);
+  if (previewUrl) {
+    // the link is the action; `Open` still opens the in-app viewer
+    action.addEventListener('click', (e) => {
+      stop(e);
+      if (!viewable) return;
+      e.preventDefault();
+      openViewer(app, post, null, { doc: item });
+    });
+    return row;
+  }
   action.addEventListener('click', async (e) => {
     stop(e);
     if (viewable) {
@@ -804,10 +859,11 @@ function documentBlock(app, post, item) {
       return;
     }
     // not viewable: fetch with the ring in the row, then hand the file over
-    const prog = ring({ onCancel: () => app.td.cancel(item.file.id) });
-    action.replaceWith(prog);
+    const direct = directUrl(item.file);
+    const prog = ring({ onCancel: () => app.td.cancel(item.file?.id) });
+    if (!direct) action.replaceWith(prog);
     try {
-      const url = await app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime, onProgress: (f) => prog.set(f) });
+      const url = direct || await app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime, onProgress: (f) => prog.set(f) });
       triggerDownload(url, item.fileName);
     } catch (err) {
       if (!err?.cancelled) app.toast("Couldn't download this file.", 'bad');
@@ -818,8 +874,32 @@ function documentBlock(app, post, item) {
   return row;
 }
 
+/** True only for an http(s) URL on somebody else's origin — blob: and our own stay false. */
+function isForeignUrl(url) {
+  try {
+    const u = new URL(String(url), location.href);
+    return /^https?:$/.test(u.protocol) && u.origin !== location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hand a file over. A TDLib download is a blob: on our own origin, where
+ * `download` is honoured and this saves silently.
+ *
+ * A preview file is Telegram's CDN — a different origin, where browsers ignore
+ * `download` and *follow the link instead*. A bare click would therefore
+ * navigate this tab off tgsocial, so a foreign URL gets its own tab and
+ * `noopener`: the reader keeps the page they were reading either way.
+ */
 export function triggerDownload(url, name) {
+  const foreign = isForeignUrl(url);
   const a = h('a', { href: url, download: name || 'file' });
+  if (foreign) {
+    a.target = '_blank';
+    a.rel = 'noopener nofollow ugc';
+  }
   document.body.append(a);
   a.click();
   a.remove();
@@ -949,11 +1029,11 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
   downloadBtn.addEventListener('click', async () => {
     const item = items[idx];
     const slim = item.kind === 'photo' ? pickPhotoSize(item.sizes, 4096)?.file : item.file;
-    if (!slim?.id) return;
+    if (!slim?.id && !directUrl(slim)) return;
     downloadBtn.disabled = true;
     try {
-      const url = await app.td.fileUrlOrThrow(fullFile(slim), { priority: 32, label: labelFor(item.kind), mime: item.mime ?? null });
-      triggerDownload(url, item.fileName || `${item.kind}-${slim.id}`);
+      const url = await urlFor(app, slim, item.kind, item.mime ?? null);
+      triggerDownload(url, item.fileName || `${item.kind}-${slim.id ?? 'file'}`);
     } catch (e) {
       if (!e?.cancelled) app.toast("Couldn't download this file.", 'bad');
     } finally {
@@ -1037,6 +1117,14 @@ function buildPhotoSlide(app, slide, item, pinnedKeys = null) {
   }
   const wrap = h('div.viewer-zoom', img);
   slide.append(wrap);
+  // a preview photo is one rendition at a URL: no bigger size to ask for, no
+  // decode budget to hold, nothing to pin
+  const direct = directUrl(size?.file);
+  if (direct) {
+    img.src = direct;
+    img.style.filter = '';
+    return;
+  }
   if (!size?.file?.id) return;
   const file = fullFile(size.file);
   const prog = ring({ onCancel: () => app.td.cancel(size.file.id) });
@@ -1060,10 +1148,12 @@ function buildPhotoSlide(app, slide, item, pinnedKeys = null) {
 }
 
 function buildVideoSlide(app, slide, item, loop, resumeAt = 0) {
-  const prog = ring({ onCancel: () => app.td.cancel(item.file.id) });
-  slide.append(prog);
-  app.td
-    .fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor(item.kind), mime: item.mime ?? null, onProgress: (f) => prog.set(f) })
+  const direct = directUrl(item.file);
+  const prog = ring({ onCancel: () => app.td.cancel(item.file?.id) });
+  if (!direct) slide.append(prog);
+  (direct
+    ? Promise.resolve(direct)
+    : app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor(item.kind), mime: item.mime ?? null, onProgress: (f) => prog.set(f) }))
     .then((url) => {
       prog.remove();
       const video = h('video', { src: url, loop });
@@ -1111,16 +1201,19 @@ function buildVideoSlide(app, slide, item, loop, resumeAt = 0) {
 
 function buildDocSlide(app, slide, item) {
   const kind = docKind(item.mime ?? '');
-  const prog = ring({ onCancel: () => app.td.cancel(item.file.id) });
-  slide.append(prog);
-  app.td
-    .fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime ?? null, onProgress: (f) => prog.set(f) })
+  const direct = directUrl(item.file);
+  const prog = ring({ onCancel: () => app.td.cancel(item.file?.id) });
+  if (!direct) slide.append(prog);
+  (direct
+    ? Promise.resolve(direct)
+    : app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime ?? null, onProgress: (f) => prog.set(f) }))
     .then(async (url) => {
       prog.remove();
       if (kind === 'image') slide.append(h('div.viewer-zoom', h('img', { src: url, alt: item.fileName })));
       else if (kind === 'pdf') slide.append(h('iframe.viewer-doc', { src: url, title: item.fileName }));
       else if (kind === 'text') {
-        const blob = await app.td.fileBlob(fullFile(item.file), { mime: item.mime });
+        // a preview document is behind a URL, not in TDLib's file store
+        const blob = direct ? await fetch(url).then((r) => r.blob()).catch(() => null) : await app.td.fileBlob(fullFile(item.file), { mime: item.mime });
         const text = blob ? await blob.text() : '';
         slide.append(h('div.viewer-textdoc', text.slice(0, 200000)));
       } else if (kind === 'audio') {

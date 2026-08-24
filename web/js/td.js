@@ -52,9 +52,10 @@ export const TD_INSTANCE = 'tgsocial';
  * against the bundled tdweb 1.8.66 on a client at `connectionStateReady` and
  * `authorizationStateWaitPhoneNumber`: `getOption` resolves, and
  * `searchPublicChat`, `getChat` and `getChatHistory` all reject `401
- * Unauthorized`. There is no anonymous read of a public channel — the check
+ * Unauthorized`. TDLib has no anonymous read of a public channel — the check
  * that holds this true lives in test/smoke.mjs. Anything that wants chat data
- * has to sign in first.
+ * from *this library* has to sign in first; the public pages read Telegram's
+ * own preview instead and never touch TDLib at all (PUBLIC.md, js/public/).
  */
 export const PREAUTH_QUERIES = new Set(['setTdlibParameters', 'getOption', 'setNetworkType', 'getAuthorizationState']);
 

@@ -1378,9 +1378,13 @@ export function inputText(text) {
   };
 }
 
-/** Pick the smallest photo size whose width covers the target, else the largest. */
+/**
+ * Pick the smallest photo size whose width covers the target, else the largest.
+ * A preview photo (PUBLIC §3) arrives as one size whose file is a URL rather
+ * than a TDLib id; it is still a size, and it is the only one on offer.
+ */
 export function pickPhotoSize(sizes, targetWidth) {
-  const withFile = (sizes ?? []).filter((s) => s.file?.id);
+  const withFile = (sizes ?? []).filter((s) => s.file?.id || s.file?.url);
   if (!withFile.length) return null;
   const sorted = [...withFile].sort((a, b) => a.w - b.w);
   return sorted.find((s) => s.w >= targetWidth) ?? sorted[sorted.length - 1];
@@ -1389,6 +1393,15 @@ export function pickPhotoSize(sizes, targetWidth) {
 /**
  * One merged feed across sources with per-source cursors. Sources that
  * cannot be resolved are marked exhausted so the merge never stalls.
+ *
+ * The merge itself is PROTOCOL §4.8 in protocol.js (`createMerge` /
+ * `pushMessages` / `takeNext` / `takeAlbumRest` / `groupAlbums`); this class is
+ * the orchestration around it — when to refill, which page to ask for, what to
+ * keep. Three seams are left open so a different reader can supply the pages
+ * without a second merger existing: `resolve()` (username → source),
+ * `page()` (source + cursor → one newest-first page), `keep()` (what counts as
+ * a post) and `postOf()` (merged group → post model). `js/public/feed.js`
+ * overrides exactly those to read Telegram's public preview instead of TDLib.
  */
 export class FeedSession {
   constructor(repo, usernames, { cardMessageIds = {} } = {}) {
@@ -1423,35 +1436,55 @@ export class FeedSession {
     }
   }
 
+  /**
+   * One page of a source, newest-first, plus the cursor the next (older) page
+   * starts from and whether this was the last one. Overridden by the public
+   * reader (js/public/feed.js), which pages with `?before=` instead.
+   */
+  async page(src, from) {
+    const items = await this.repo.track(`Loading @${src.username}`, () => this.repo.history(src.chatId, from, PAGE));
+    return { items, cursor: items.length ? items[items.length - 1].id : from, done: false };
+  }
+
+  /** Which items of a page are posts: not service messages, not the card (PROTOCOL §4.8). */
+  keep(item, key) {
+    return isPost(item, this.cardMessageIds[key] ?? null);
+  }
+
+  /** One merged group (album head + the rest) → a post model. */
+  async postOf(src, head, rest) {
+    return this.repo.toPost(head.message, src, rest.map((i) => i.message));
+  }
+
   async fill(key) {
     const src = await this.resolve(this.usernames.find((u) => usernameKey(u) === key) ?? key);
     if (!src) {
       markExhausted(this.merge, key);
       return;
     }
-    const from = this.merge.sources[key].cursor;
-    let msgs;
+    const s = this.merge.sources[key];
+    let page;
     try {
-      msgs = await this.repo.track(`Loading @${src.username}`, () => this.repo.history(src.chatId, from, PAGE));
+      page = await this.page(src, s.cursor);
     } catch (e) {
       console.warn('[feed] history', src.username, e.message);
       markExhausted(this.merge, key);
       return;
     }
-    const cardId = this.cardMessageIds[key] ?? null;
-    if (!msgs.length) {
+    const items = page?.items ?? [];
+    if (!items.length) {
       markExhausted(this.merge, key);
       return;
     }
-    const posts = msgs.filter((m) => isPost(m, cardId));
-    pushMessages(this.merge, key, posts);
+    pushMessages(this.merge, key, items.filter((m) => this.keep(m, key)));
     // the cursor advances past everything fetched, including filtered service messages;
-    // a source is only exhausted once a fetch comes back empty
-    const s = this.merge.sources[key];
-    const oldest = msgs[msgs.length - 1];
-    if (s.cursor === 0 || oldest.id < s.cursor) s.cursor = oldest.id;
+    // a source is only exhausted once a fetch comes back empty (or the reader
+    // says this was the last page)
+    const oldest = items[items.length - 1];
+    const cursor = page.cursor ?? oldest.id;
+    if (cursor && (s.cursor === 0 || cursor < s.cursor)) s.cursor = cursor;
     if (oldest.date < s.lastDate) s.lastDate = oldest.date;
-    s.exhausted = false;
+    s.exhausted = page.done === true;
   }
 
   async prime() {
@@ -1482,7 +1515,7 @@ export class FeedSession {
       if (!src) continue;
       // items are in posting order (id asc); the album's newest message anchors the post
       const [head, ...rest] = [...group.items].sort((a, b) => b.id - a.id);
-      posts.push(await this.repo.toPost(head.message, src, rest.map((i) => i.message)));
+      posts.push(await this.postOf(src, head, rest));
     }
     return posts;
   }

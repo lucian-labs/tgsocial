@@ -18,32 +18,65 @@ directly. nginx proxies it under our own origin and caches it:
 
 ```
 location /tg/s/ {
+    if ($args !~ "^(before=[0-9]+)?$") { return 404; }
+
     proxy_pass https://t.me/s/;
     proxy_set_header Host t.me;
     proxy_set_header User-Agent "tgsocial/1.0 (+https://tgsocial.lucianlabs.ca)";
+
+    proxy_ignore_headers Set-Cookie Cache-Control Expires;
+    proxy_hide_header Set-Cookie;
+
     proxy_cache tgpreview;
     proxy_cache_valid 200 60s;          # a page is a lens, not an archive
     proxy_cache_use_stale error timeout updating;
     proxy_cache_lock on;                # one upstream fetch per key, not a stampede
-    add_header Access-Control-Allow-Origin "*";
-    add_header X-Cache $upstream_cache_status;
+
+    proxy_hide_header Content-Type;
+    proxy_hide_header Content-Security-Policy;
+    proxy_hide_header X-Frame-Options;
+    add_header Content-Type "text/plain; charset=utf-8" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Content-Security-Policy "sandbox; default-src 'none'" always;
+
+    add_header Access-Control-Allow-Origin "*" always;
+    add_header X-Cache $upstream_cache_status always;
 }
 ```
 
 Rules this proxy obeys, and why:
 
-- **Only `/s/`.** It proxies the preview path and nothing else — not `t.me/`
-  join pages, not the API. A path that is not a bare channel (optionally with
-  `?before=`) is refused.
+- **Only `/s/`, only a bare channel.** It proxies the preview path and nothing
+  else — not `t.me/` join pages, not the API. A path that is not a bare
+  channel is refused by the regex location beside this one; a query string
+  that is not `?before=<digits>` is refused by the `if` above, because nginx
+  matches locations against the URI with the arguments stripped and a location
+  regex therefore cannot see the query at all.
+- **The body is data, not a document.** What comes back is Telegram's HTML,
+  scripts and all. The parser reads it as a *string*, so it is relabelled
+  `text/plain` and sandboxed on the way out: opening `/tg/s/<channel>` in a
+  tab yields characters, never Telegram's page executing on the origin that
+  holds the reader's TDLib session. `sandbox` applies to documents, so the
+  `fetch()` in `js/public/source.js` is unaffected.
 - **60 seconds.** Long enough that a busy page costs Telegram one fetch,
   short enough that a deleted post disappears quickly. `proxy_cache_lock`
   means a hundred simultaneous readers still produce one upstream request.
+  This only works because of `proxy_ignore_headers`: t.me sends `Set-Cookie`
+  and `Cache-Control: no-store` on every response, and nginx stores neither
+  kind — without those two lines the whole cache is decoration. The cookie is
+  hidden as well as ignored; a Telegram session cookie does not belong on our
+  origin.
 - **No storage beyond the cache.** Nothing is written to a database. The page
   is a lens: delete the post on Telegram and it is gone here on the next
   fetch.
 - **Identifies itself.** A real User-Agent with a contact URL, because
   scraping anonymously and lying about it is how you get blocked, and
   deservedly.
+
+The site itself carries a second wall — a `Content-Security-Policy` in
+`web/index.html` pinning scripts, frames and objects to our own origin — so
+that "nothing from the preview is adopted into the live page" (§3) is enforced
+by the browser and not only by the parser's discipline.
 
 ## 2. What the preview carries
 
@@ -88,6 +121,17 @@ entities*, never HTML, and the renderer builds nodes — no `innerHTML` of
 preview content anywhere. Links are rendered with `rel="noopener nofollow
 ugc"`, and any `javascript:`/`data:` URL is dropped.
 
+A **document row** is held to a stricter rule than the rest, because it is the
+only media kind whose action hands the reader a URL to *go to*. Its `href` must
+be on Telegram's own file hosts; every other host — including `t.me` itself —
+degrades to §2.11's muted one-line summary. Otherwise a channel writes
+`href="https://evil.example/pwn.exe"` on a row captioned `invoice.pdf` and the
+`Download` button is a phishing link with no address bar: `download` is ignored
+cross-origin, so the browser follows it and takes the tab along. For the same
+reason nothing hands a foreign URL to a plain click — a file that really is on
+Telegram's CDN opens in its own tab, `noopener`, so the page being read
+survives either way.
+
 ## 4. Resolving `/u/<name>`
 
 1. Fetch `/tg/s/<name>`. If its card parses (`tgsocial v1`), `<name>` is the
@@ -102,7 +146,12 @@ the same k-way merge as `PROTOCOL §4.8`. `?before=` per source drives
 
 A node whose card says `public: no` is not served on a public page at all —
 that flag is the owner saying "not in directories", and a public URL is a
-directory of one.
+directory of one. The routes are not the only door, so the refusal lives with
+the *source* rather than the URL: an unlisted node is skipped as a merge
+source when someone else's card names it in `feeds:`, and a row for one on
+another node's page keeps the bare `@handle` instead of filling in their name,
+face and feed count. Nobody's consent is needed to follow them or to list
+their channel, so both of those are ordinary use, not a hostile card.
 
 ## 5. Limits, honestly
 

@@ -11,8 +11,15 @@ export function openExternal(url) {
   window.open(url, '_blank', 'noopener');
 }
 
-/** Render formattedText runs into a container: bold → <b>, italic → <i>, code → <code>, links → <a>. */
-export function renderEntities(app, text, entities) {
+/**
+ * Render formattedText runs into a container: bold → <b>, italic → <i>,
+ * code → <code>, links → <a>. Every run's text is a text node, never markup.
+ *
+ * `rel` is the link relationship for this text's provenance: a signed-in post
+ * came through TDLib from a channel the reader chose, a public post is
+ * third-party HTML off `t.me/s/` and gets `noopener nofollow ugc` (PUBLIC §3).
+ */
+export function renderEntities(app, text, entities, { rel = 'noopener noreferrer' } = {}) {
   const frag = document.createDocumentFragment();
   for (const run of entityRuns(text, entities)) {
     let node = document.createTextNode(run.text);
@@ -20,12 +27,15 @@ export function renderEntities(app, text, entities) {
     if (run.bold) node = h('b', node);
     if (run.italic) node = h('i', node);
     if (run.href) {
-      node = h('a', { href: safeHref(run.href), target: '_blank', rel: 'noopener noreferrer', onclick: (e) => e.stopPropagation() }, node);
+      node = h('a', { href: safeHref(run.href), target: '_blank', rel, onclick: (e) => e.stopPropagation() }, node);
     } else if (run.mention) {
       node = h('a', {
-        href: `#/node/${run.mention}`,
+        href: app.publicMode ? `/n/${run.mention}` : `#/node/${run.mention}`,
         onclick: (e) => {
           e.stopPropagation();
+          if (!app.publicMode) return;
+          e.preventDefault();
+          app.openNode(run.mention);
         },
       }, node);
     }
@@ -51,6 +61,8 @@ const AVATAR_PX = { row: 96, profile: 192 };
 
 /** Resolve a slim file ({ id, uniqueId }) to a blob URL at `width` device pixels, or null. */
 export async function fileUrl(app, slim, { width = null } = {}) {
+  // a preview file already has its URL (PUBLIC §3) — no TDLib, no download
+  if (typeof slim?.url === 'string' && slim.url) return slim.url;
   if (!slim?.id || !app.td?.client) return null;
   const file = { id: slim.id, remote: { unique_id: slim.uniqueId }, local: { is_downloading_completed: false } };
   try {
@@ -69,7 +81,9 @@ export function loadImage(app, img, slim, { width = null } = {}) {
 
 export function avatarFor(app, name, slim, size = 'row') {
   const el = avatar(name, null, size);
-  if (slim?.id) {
+  if (slim?.url) {
+    el.setImage(slim.url);
+  } else if (slim?.id) {
     const width = AVATAR_PX[size] ?? AVATAR_PX.row;
     const load = () => fileUrl(app, slim, { width }).then((url) => {
       if (url && el.isConnected) el.setImage(url);
@@ -197,7 +211,8 @@ export function postCard(app, post, { thread = true } = {}) {
     'aria-label': attributed ? `Open ${name}` : `Open ${post.title} feed`,
     onclick: (e) => {
       e.stopPropagation();
-      app.navigate(attributed ? `#/node/${post.node}` : `#/feed/${post.username}`);
+      if (attributed) app.openNode(post.node);
+      else app.openChannel(post.username);
     },
   }, name);
   const sub = attributed
@@ -206,7 +221,7 @@ export function postCard(app, post, { thread = true } = {}) {
       'aria-label': `Open ${post.title || post.username} feed`,
       onclick: (e) => {
         e.stopPropagation();
-        app.navigate(`#/feed/${post.username}`);
+        app.openChannel(post.username);
       },
     }, post.title || `@${post.username}`)
     : null;
@@ -223,7 +238,9 @@ export function postCard(app, post, { thread = true } = {}) {
   const parts = [head];
   if (post.forwardedFrom) parts.push(h('div.post-fwd', `Forwarded from ${post.forwardedFrom}`));
   if (post.text) {
-    const body = h('div.post-body', renderEntities(app, post.text, post.entities));
+    // a public post's links are untrusted third-party markup (PUBLIC §3)
+    const rel = post.source === 'preview' ? 'noopener nofollow ugc' : 'noopener noreferrer';
+    const body = h('div.post-body', renderEntities(app, post.text, post.entities, { rel }));
     if (thread) {
       // tapping the text opens the Thread screen (PRODUCT §2.3)
       body.classList.add('opens-thread');
@@ -241,7 +258,10 @@ export function postCard(app, post, { thread = true } = {}) {
   const reactionText = reactions.length >= 1 && reactions.length <= 3
     ? reactions.map((r) => `${r.emoji} ${compactCount(r.count)}`).join(' ')
     : `${compactCount(reactionTotal)} ${reactionTotal === 1 ? 'reaction' : 'reactions'}`;
-  const countsEl = h('div.post-counts', reactionText);
+  // a public post has neither reactions (the preview does not carry them) nor a
+  // comment count (comments are network-scoped, PROTOCOL §6.3): print nothing
+  // rather than "0 reactions" (PRODUCT §2.13)
+  const countsEl = h('div.post-counts', thread || reactions.length ? reactionText : '');
   if (thread) {
     // "N comments" — from your network (PROTOCOL §6.3); tappable → Thread
     const n = app.repo?.commentCount(post.link) ?? 0;
@@ -288,7 +308,7 @@ export function nodeRow(app, entry, { mutual = null, showFollow = true } = {}) {
   const text = h('div.row-text', h('div.row-name', name), h('div.row-sub', sub));
   if (mutual !== null) text.append(h('div.row-via', `Followed by ${mutual} of yours`));
   const trail = h('div.row-trail');
-  if (showFollow && app.repo.myNode && username.toLowerCase() !== app.repo.myNode.username.toLowerCase()) {
+  if (showFollow && app.repo?.myNode && username.toLowerCase() !== app.repo.myNode.username.toLowerCase()) {
     trail.append(followButton(app, username));
   } else {
     trail.append(h('span.chevron', { 'aria-hidden': 'true' }, '›'));
@@ -297,7 +317,7 @@ export function nodeRow(app, entry, { mutual = null, showFollow = true } = {}) {
     h('div.row-main', avatarFor(app, name, entry.photo, 'row'), text),
     trail,
   );
-  const go = () => app.navigate(`#/node/${username}`);
+  const go = () => app.openNode(username);
   row.addEventListener('click', go);
   row.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target === row) go();
@@ -346,12 +366,21 @@ export function feedRow(app, { title, username, verified = false, onClick }) {
     h('div.row-main', h('div.row-text', h('div.row-name', title || `@${username}`), sub)),
     h('div.row-trail', h('span.chevron', { 'aria-hidden': 'true' }, '›')),
   );
-  const go = onClick || (() => app.navigate(`#/feed/${username}`));
+  const go = onClick || (() => app.openChannel(username));
   row.addEventListener('click', go);
   row.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') go();
   });
   return row;
+}
+
+/**
+ * PRODUCT §2.6's empty card, one copy for every way a channel or a person can
+ * fail to resolve — signed in (TDLib could not read it) and public (the
+ * preview had nothing readable on it). One string, one place.
+ */
+export function notFoundCard(username) {
+  return emptyCard('Channel not found.', `@${username} is not a public channel.`);
 }
 
 /** COMPONENTS EmptyCard: h2 + muted + at most one accent button. */

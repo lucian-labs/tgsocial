@@ -1,11 +1,14 @@
 /* Flow test — every screen in PRODUCT.md §2 against the mock TDLib
  * (test/mock-tdweb.js, served in place of vendor/tdweb/tdweb.js by route
- * interception). No network. Not part of `npm test`; run on demand:
+ * interception) and, for the public pages (§2.13), against real t.me/s/ pages
+ * saved in test/fixtures/ and served at `/tg/s/`. No network either way.
+ * Not part of `npm test`; run on demand:
  *
  *   node test/flows.mjs [--shots <dir>]
  *
  * Asserts the copy on each screen, optimistic follow + rollback, FLOOD_WAIT
- * toast, compose → Posted., sign-out wipe, and zero console errors overall.
+ * toast, compose → Posted., sign-out wipe, the public reader (parser, routes,
+ * merge, refusals, XSS) and zero console errors overall.
  */
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
@@ -64,11 +67,58 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/**
+ * PUBLIC.md §1's `/tg/s/` proxy, served from web/test/fixtures/ so this test
+ * stays offline. Production is nginx (web/nginx-public.conf); local runs are
+ * web/scripts/dev-proxy.mjs. Same rules as both: only `/s/`, only a bare
+ * channel with an optional `?before=<id>`, anything else 404.
+ *
+ * A `?before=` page with no fixture of its own serves `_end.html` — a 200 with
+ * an empty history, which is what Telegram returns once there is nothing
+ * older. That is also why it is a 200 and not a 404: a failed request would
+ * be a console error, and this test asserts there are none.
+ *
+ * The headers are the shipped ones: the preview body is Telegram's HTML, read
+ * by the parser as a string, so it leaves as inert `text/plain` and never as a
+ * document that could run Telegram's scripts on our origin.
+ */
+const PREVIEW_HEADERS = {
+  'content-type': 'text/plain; charset=utf-8',
+  'x-content-type-options': 'nosniff',
+  'content-security-policy': "sandbox; default-src 'none'",
+  'access-control-allow-origin': '*',
+  'cache-control': 'no-store',
+};
+
+function servePreview(url, res) {
+  const m = /^\/tg\/s\/([A-Za-z0-9_]{4,32})\/?$/.exec(url.pathname);
+  const before = url.searchParams.get('before');
+  // the whole query is checked, as nginx does (`if ($args !~ "^(before=[0-9]+)?$")`)
+  const legal = m && /^(\?before=[0-9]+)?$/.test(url.search) && (before === null || /^\d+$/.test(before));
+  if (!legal) {
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
+    return;
+  }
+  const dir = join(here, 'fixtures');
+  const candidates = before
+    ? [join(dir, `${m[1]}.before-${before}.html`), join(dir, '_end.html')]
+    : [join(dir, `${m[1]}.html`), join(dir, '_end.html')];
+  const file = candidates.find((f) => existsSync(f));
+  res.writeHead(200, PREVIEW_HEADERS);
+  createReadStream(file).pipe(res);
+}
+
 function serveStatic(root, port) {
   const srv = createHttpServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname.startsWith('/tg/')) {
+      servePreview(url, res);
+      return;
+    }
     // nginx serves a malformed escape (/f/%zz) through try_files without
     // complaint; decodeURIComponent throws on it, so this must not either
-    const raw = new URL(req.url, 'http://127.0.0.1').pathname;
+    const raw = url.pathname;
     let decoded;
     try {
       decoded = decodeURIComponent(raw);
@@ -131,6 +181,9 @@ const ok = (cond, label) => {
   console.log(`${cond ? 'ok' : 'not ok'} - ${label}`);
   if (!cond) failures.push(label);
 };
+
+/** 1×1 transparent PNG — stands in for every Telegram CDN picture a fixture points at. */
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
@@ -1047,14 +1100,34 @@ try {
   ok(resort.sorted && resort.n > 1 && resort.painted > 0, `stale cache: ${resort.n} cached posts re-sorted newest-first on cold start`);
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 20000 });
 
-  // ── §2.13 public links ───────────────────────────────────────────────────
-  // The premise first: TDLib refuses every chat request made before
-  // authorization, public channels included, so a public link cannot render
-  // anything until the visitor signs in. The mock enforces the same gate the
-  // real library does (test/mock-tdweb.js, measured in test/smoke.mjs).
+  // ── §2.13 /u/<name> signed in ────────────────────────────────────────────
+  // The same resolution PUBLIC §4 does, with TDLib instead of the preview:
+  // @waveloop_devlog is a feed whose description backlinks @tgs_elijah, so
+  // /u/ lands on that person's node profile; a node resolves directly.
+  await page.goto(`${base}/u/waveloop_devlog?mock=node`, { waitUntil: 'load' });
+  await page.waitForFunction(() => location.hash === '#/node/tgs_elijah', null, { timeout: 25000 });
+  ok(/Elijah Lucian/.test(await text()), 'signed in: /u/<feed> follows the backlink to the person’s node profile');
+  await page.goto(`${base}/u/tgs_ana?mock=node`, { waitUntil: 'load' });
+  await page.waitForFunction(() => location.hash === '#/node/tgs_ana', null, { timeout: 25000 });
+  ok(/Ana Iliovic/.test(await text()), 'signed in: /u/<node> opens that node directly');
+  ok(await page.evaluate(() => !window.__tgsocial.app.publicMode && !document.querySelector('#dock .nag')),
+    'signed in: a public URL is never the public page on a browser that has signed in');
+
+  // ── §2.13 public pages ───────────────────────────────────────────────────
+  // A visitor with no session reads the page itself — no sign-in wall, no
+  // TDLib. The posts come from Telegram's own preview (PUBLIC.md) through the
+  // `/tg/s/` proxy, which this test serves from web/test/fixtures/ (real
+  // fetched pages: tastycrow, tgs_dankcoin, telegram) so a Telegram markup
+  // change fails here instead of on the page.
   {
     const pubCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ['clipboard-read', 'clipboard-write'] });
     await pubCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    // the fixtures carry real CDN URLs; this test is offline, so the pictures
+    // they point at are answered locally rather than left to fail
+    await pubCtx.route(/telesco\.pe|telegram-cdn\.org/, (route) => route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL }));
+    // the destination a hostile document row would aim at, answered locally so
+    // the assertion below is offline and deterministic
+    await pubCtx.route(/evil\.example/, (route) => route.fulfill({ status: 200, contentType: 'text/plain', body: 'ATTACKER PAGE' }));
     const pub = await pubCtx.newPage();
     pub.on('console', (m) => {
       if (m.type() === 'error') errors.push(`public: ${m.text()}`);
@@ -1062,89 +1135,379 @@ try {
     pub.on('pageerror', (e) => errors.push(`public pageerror: ${e.message}`));
     const pubText = () => pub.evaluate(() => document.getElementById('view').innerText);
 
-    // signed out on a public link → Sign in, with the destination named
-    await pub.goto(`${base}/f/waveloop_devlog?mock=node`, { waitUntil: 'load' });
-    await pub.waitForSelector('input[type="tel"]', { timeout: 20000 });
-    ok(/Sign in to see @waveloop_devlog\./.test(await pubText()), 'public: signed out → Sign in, destination named');
-    ok(await pub.evaluate(() => window.__tgsocial.app.pendingDest?.username === 'waveloop_devlog'), 'public: the destination is held for the sign-in detour');
-    ok(await pub.evaluate(() => document.getElementById('dock').hidden), 'public: no tab bar on Sign in');
-    await snapPage(pub, 'public-signin');
-
-    // the premise, asserted rather than assumed
-    const refused = await pub.evaluate(async () => {
-      try {
-        await window.__tgsocial.td.send({ '@type': 'searchPublicChat', username: 'waveloop_devlog' });
-        return 'resolved';
-      } catch (e) {
-        return `${e.code} ${e.message}`;
-      }
+    // ── the parser, against the fixtures (PUBLIC §3) ───────────────────────
+    await pub.goto(`${base}/f/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    const parsed = await pub.evaluate(async () => {
+      const { parsePreview } = await import('/js/public/preview.js');
+      const get = async (name) => parsePreview(await (await fetch(`/tg/s/${name}`)).text(), name);
+      const crow = await get('tastycrow');
+      const dank = await get('tgs_dankcoin');
+      const tg = await get('telegram');
+      const blank = await get('tgs_blank');
+      const xss = await get('tgs_xss');
+      const kinds = (r) => [...new Set(r.posts.flatMap((p) => p.album.map((i) => i.kind)))];
+      const post = (r, id) => r.posts.find((p) => p.id === id) ?? null;
+      return {
+        crow: {
+          n: crow.posts.length,
+          ids: crow.posts.map((p) => p.id),
+          title: crow.channel.title,
+          username: crow.channel.username,
+          backlink: crow.channel.verifiedFor,
+          nextBefore: crow.nextBefore,
+          unavailable: crow.unavailable,
+          three: post(crow, 3),
+          videoItem: post(crow, 6)?.album[0] ?? null,
+          videoText: post(crow, 6)?.text ?? null,
+          kinds: kinds(crow),
+          gif: post(crow, 3)?.album[0] ?? null,
+          photo: post(crow, 4)?.album[0] ?? null,
+          summary: post(crow, 5)?.album[0] ?? null,
+        },
+        dank: {
+          n: dank.posts.length,
+          card: dank.card,
+          isCard: dank.posts[0]?.isCard ?? null,
+          title: dank.channel.title,
+        },
+        tg: {
+          n: tg.posts.length,
+          nextBefore: tg.nextBefore,
+          username: tg.channel.username,
+          kinds: kinds(tg),
+          maxViews: Math.max(...tg.posts.map((p) => p.views)),
+          previews: tg.posts.filter((p) => p.preview).map((p) => p.preview.url),
+          newestFirst: tg.posts.every((p, i) => i === 0 || tg.posts[i - 1].date >= p.date),
+        },
+        blank: { n: blank.posts.length, unavailable: blank.unavailable },
+        // a document row is the one media kind whose action hands the reader a
+        // URL to GO TO, so its host decides whether the row can honestly exist
+        docHosts: (() => {
+          const page = (href) => `<html><body><main class="tgme_main"><div class="tgme_container">`
+            + `<section class="tgme_channel_history"><div class="tgme_widget_message" data-post="probe/1">`
+            + `<div class="tgme_widget_message_bubble">`
+            + `<a class="tgme_widget_message_document_wrap" href="${href}">`
+            + `<div class="tgme_widget_message_document_title">invoice.pdf</div>`
+            + `<div class="tgme_widget_message_document_extra">1.2 MB</div></a>`
+            + `<div class="tgme_widget_message_footer"><div class="tgme_widget_message_info">`
+            + `<span class="tgme_widget_message_views">1</span><span class="tgme_widget_message_meta">`
+            + `<a class="tgme_widget_message_date" href="https://t.me/probe/1">`
+            + `<time datetime="2026-08-20T10:00:00+00:00">10:00</time></a></span>`
+            + `</div></div></div></div></section></div></main></body></html>`;
+          const item = (href) => parsePreview(page(href), 'probe').posts[0]?.album[0] ?? null;
+          return {
+            hostile: item('https://evil.example/pwn.exe'),
+            tme: item('https://t.me/probe/1'),
+            cdn: item('https://cdn4.telesco.pe/file/invoice.pdf'),
+          };
+        })(),
+        garbage: parsePreview('<html><body>not telegram at all</body></html>', 'nope').unavailable
+          && parsePreview('', 'nope').unavailable && parsePreview(null, 'nope').unavailable,
+        xss: {
+          json: JSON.stringify(xss),
+          n: xss.posts.length,
+          unknownBlock: post(xss, 15)?.text ?? null,
+          twelve: post(xss, 12) ?? null,
+          media: kinds(xss),
+          photo: xss.channel.photo,
+        },
+      };
     });
-    ok(/^401 /.test(refused), `public: a chat read before authorization is refused (${refused})`);
+    const crow = parsed.crow;
+    ok(crow.n === 4 && crow.ids.join(',') === '6,5,4,3',
+      `preview: tastycrow parses 4 posts newest-first, service messages skipped (${crow.ids.join(',')})`);
+    ok(crow.three?.text === 'chill, bro' && crow.three.views === 1
+      && crow.three.date === Math.floor(Date.parse('2026-08-23T23:09:48+00:00') / 1000)
+      && crow.three.link === 'https://t.me/tastycrow/3',
+      'preview: post text, views, <time datetime> and the t.me link');
+    ok(crow.title === 'tastycrow' && crow.username === 'tastycrow' && crow.backlink === 'tgs_dankcoin',
+      `preview: channel header + backlink (tgsocial: @${crow.backlink})`);
+    ok(crow.videoItem?.kind === 'video' && crow.videoItem.duration === 55
+      && /^https:\/\//.test(crow.videoItem.file?.url ?? '') && /^https:\/\//.test(crow.videoItem.thumb?.file?.url ?? '')
+      && crow.videoText === 'nobigdeal.mp4',
+      'preview: video with duration, file URL, thumbnail and caption');
+    ok(crow.gif?.kind === 'animation' && crow.photo?.kind === 'photo' && /^https:\/\//.test(crow.photo.sizes[0].file.url)
+      && crow.photo.sizes[0].w > 0 && crow.photo.sizes[0].h > 0,
+      'preview: a looping muted video is a GIF, a photo wrap is a photo with its size');
+    ok(crow.summary?.kind === 'summary' && crow.summary.text === 'Audio'
+      && crow.kinds.sort().join('+') === 'animation+photo+summary+video',
+      `preview: a file Telegram only serves in the app degrades to a summary (${crow.kinds.join('+')})`);
+    ok(crow.nextBefore === 3 && !crow.unavailable, `preview: ?before= cursor for the next page (${crow.nextBefore})`);
+    ok(parsed.dank.card?.name === 'Elijah' && parsed.dank.card.public === true
+      && parsed.dank.card.feeds.join(',') === 'tastycrow' && parsed.dank.card.replies === 'tgs_dankcoin_r',
+      'preview: the card is extracted from the channel and parsed by parseCard');
+    ok(parsed.dank.n === 1 && parsed.dank.isCard === true && parsed.dank.title === 'Elijah',
+      'preview: the pinned-message service block is skipped, the card message is flagged');
+    ok(parsed.tg.n === 20 && parsed.tg.nextBefore === 435 && parsed.tg.newestFirst,
+      `preview: telegram parses 20 posts newest-first, next page before=${parsed.tg.nextBefore}`);
+    ok(parsed.tg.kinds.includes('photo') && parsed.tg.kinds.includes('video') && parsed.tg.previews.length > 0
+      && parsed.tg.maxViews > 1000000,
+      `preview: media kinds ${parsed.tg.kinds.join('+')}, link previews, compacted views (${parsed.tg.maxViews})`);
+    ok(parsed.blank.n === 0 && parsed.blank.unavailable === true,
+      'preview: a page with no messages is unavailable, not an empty channel');
+    ok(parsed.garbage === true, 'preview: garbage, empty and null input are unavailable, never a throw');
+    ok(parsed.docHosts.hostile?.kind === 'summary' && parsed.docHosts.hostile.text === 'invoice.pdf'
+      && parsed.docHosts.tme?.kind === 'summary',
+      `public: a document row on a host that is not Telegram degrades to a summary, never a Download (${parsed.docHosts.hostile?.kind})`);
+    ok(parsed.docHosts.cdn?.kind === 'document' && parsed.docHosts.cdn.file?.url === 'https://cdn4.telesco.pe/file/invoice.pdf',
+      'public: a document on Telegram’s own CDN is still a real document row');
 
-    // sign in → land on the linked screen, not the feed
-    await pub.fill('input[type="tel"]', '+16045550199');
-    await pub.click('button.btn.primary');
-    await pub.waitForSelector('input[inputmode="numeric"]', { timeout: 10000 });
-    await pub.fill('input[inputmode="numeric"]', '12345');
-    await pub.click('button.btn.primary');
-    await pub.waitForSelector('#view article.post', { timeout: 25000 });
-    ok(/@waveloop_devlog/.test(await pubText()), 'public: signing in lands on the linked channel');
-    const landed = await pub.evaluate(() => ({
-      path: location.pathname,
-      dest: window.__tgsocial.app.pendingDest,
-      tabs: !document.querySelector('#dock .tabs').hidden,
-      status: document.getElementById('status').textContent,
-      kebab: !![...document.querySelectorAll('#view .head-actions button.kebab')].length,
-      headerTelegram: [...document.querySelectorAll('#view .profile-head button')].some((b) => /Open in Telegram/i.test(b.textContent)),
-      comments: document.querySelectorAll('#view article.post .post-foot .btn').length,
+    // …and the wall behind that one: `download` is ignored cross-origin, so a
+    // plain click would FOLLOW the link and take the reader's tab with it
+    const stayed = await pub.evaluate(async () => {
+      const media = await import('/js/media.js');
+      const before = location.href;
+      media.triggerDownload('https://evil.example/pwn.exe', 'invoice.pdf');
+      await new Promise((r) => setTimeout(r, 300));
+      return { before, after: location.href, title: document.title };
+    });
+    ok(stayed.before === stayed.after,
+      `public: handing over a foreign file never navigates the reader's own tab (${stayed.after})`);
+    ok(parsed.xss.unknownBlock === 'a shape this parser has never seen',
+      'preview: an unrecognised block degrades to a text post');
+
+    // ── XSS: nothing hostile survives the parser ───────────────────────────
+    const json = parsed.xss.json;
+    ok(!/javascript:/i.test(json) && !/onerror/i.test(json) && !/<script/i.test(json) && !/data:text\/html/i.test(json),
+      'xss: the parsed model carries no javascript:/data: URL, no handler, no markup');
+    ok(parsed.xss.media.length === 0 && parsed.xss.photo === null,
+      'xss: media behind a javascript:/data: URL is dropped, not rendered');
+    ok(parsed.xss.twelve?.entities?.some((e) => e.type.url === 'https://example.com/ok')
+      && !parsed.xss.twelve.entities.some((e) => /^(javascript|data):/i.test(e.type.url ?? '')),
+      'xss: the real link keeps its entity, the javascript: and data: links become plain text');
+
+    // ── XSS: nothing hostile survives the renderer either ──────────────────
+    await pub.goto(`${base}/f/tgs_xss`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    await pub.waitForTimeout(300);
+    const inert = await pub.evaluate(() => ({
+      fired: window.__xss ?? null,
+      handlers: document.querySelectorAll('[onerror], [onclick], [onload], [onmouseover]').length,
+      scripts: document.querySelectorAll('#view script, #view iframe, #view object, #view embed').length,
+      badLinks: [...document.querySelectorAll('#view a')].filter((a) => /^\s*(javascript|data):/i.test(a.getAttribute('href') || '')).length,
+      rels: [...document.querySelectorAll('#view .post-body a')].map((a) => a.getAttribute('rel')),
+      realLink: [...document.querySelectorAll('#view .post-body a')].some((a) => a.href === 'https://example.com/ok'),
+      posts: document.querySelectorAll('#view article.post').length,
+      text: document.getElementById('view').innerText,
     }));
-    ok(landed.path === '/f/waveloop_devlog' && landed.dest === null, 'public: the link stays in the address bar and is spent once');
-    ok(landed.tabs && landed.status !== 'Public', 'public: the normal shell — floating tab bar, the real status pill');
-    ok(landed.comments > 0, 'public: the Comment button is on the card, like every other screen');
-    ok(landed.kebab && !landed.headerTelegram, 'public: the header carries the kebab, not a standalone Open in Telegram');
+    ok(inert.fired === null, `xss: nothing executed (window.__xss is ${inert.fired})`);
+    ok(inert.handlers === 0 && inert.scripts === 0, 'xss: no handler attribute, script, iframe or object in the document');
+    ok(inert.badLinks === 0 && inert.realLink, 'xss: no javascript:/data: href in the DOM; the real link is there');
+    ok(inert.rels.length > 0 && inert.rels.every((r) => /noopener/.test(r) && /nofollow/.test(r) && /ugc/.test(r)),
+      `xss: preview links carry rel="noopener nofollow ugc" (${inert.rels[0]})`);
+    ok(inert.posts === 5 && /payload one/.test(inert.text) && !/__xss/.test(inert.text),
+      'xss: the hostile page still renders its posts, with the payloads as nothing at all');
+    await snapPage(pub, 'public-xss');
+
+    // ── a signed-out visit renders the page (§2.13) ────────────────────────
+    await pub.goto(`${base}/f/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    const shell = await pub.evaluate(() => ({
+      publicMode: window.__tgsocial.app.publicMode,
+      repo: !!window.__tgsocial.repo,
+      signin: !!document.querySelector('#view input[type="tel"]'),
+      posts: document.querySelectorAll('#view article.post').length,
+      comment: [...document.querySelectorAll('#view article.post .btn')].some((b) => /Comment/i.test(b.textContent)),
+      counts: document.querySelectorAll('#view .post-comments-count').length,
+      follow: [...document.querySelectorAll('#view .btn')].some((b) => /^Follow/i.test(b.textContent)),
+      tabs: document.querySelector('#dock .tabs').hidden,
+      dock: document.getElementById('dock').hidden,
+      status: document.getElementById('status').textContent,
+      gold: document.getElementById('status').classList.contains('gold'),
+      time: document.querySelector('#view .post-time')?.textContent ?? '',
+      text: document.getElementById('view').innerText,
+      kebab: document.querySelectorAll('#view .head-actions button.kebab').length,
+    }));
+    ok(shell.publicMode && !shell.repo, 'public: a visitor with no session gets the public page — no TDLib, no repo');
+    ok(!shell.signin && shell.posts === 4, `public: ${shell.posts} posts render with no sign-in wall`);
+    ok(!shell.comment && shell.counts === 0 && !shell.follow, 'public: no Comment button, no comment counts, no Follow');
+    ok(shell.tabs && !shell.dock, 'public: the floating tab bar is hidden, the dock stays for the nag');
+    ok(shell.status === 'Public' && !shell.gold, 'public: a neutral Public pill, never gold');
+    ok(/ago$|^now$/.test(shell.time), `public: relative time on the card (${shell.time})`);
+    ok(/chill, bro/.test(shell.text) && shell.kebab === 1, 'public: the posts and the §2.6 header kebab');
     await snapPage(pub, 'public-channel');
 
-    // §2.13 Sharing — Copy Link lives in the kebab menu and copies the
-    // tgsocial URL, not the t.me one
+    // the long-press sheet (§2.3) is on a public card too
+    await pub.click('#view article.post .post-body >> nth=0', { button: 'right' });
+    await pub.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    const sheet = await pub.evaluate(() => document.getElementById('modal').innerText);
+    ok(/POST/i.test(sheet) && /Open in Telegram/i.test(sheet) && /Views/i.test(sheet), 'public: the long-press post sheet');
+    await pub.click('#modal .modal-card button.btn.ghost');
+    await pub.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+
+    // ── the nag (§2.13), verbatim ──────────────────────────────────────────
+    const nag = await pub.evaluate(() => {
+      const el = document.querySelector('#dock .nag');
+      return el ? { text: el.querySelector('.nag-text').textContent, action: el.querySelector('.btn').textContent, close: !!el.querySelector('.nag-close') } : null;
+    });
+    ok(nag && nag.text === 'Follow this feed in tgsocial.' && nag.action === 'Get It' && nag.close,
+      'public: the nag reads "Follow this feed in tgsocial." with Get It and a dismiss');
+    await pub.click('#dock .nag .nag-close');
+    ok(await pub.evaluate(() => !document.querySelector('#dock .nag')), 'public: the nag dismisses');
+    await pub.goto(`${base}/n/tgs_dankcoin`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /FEEDS/i.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    ok(await pub.evaluate(() => !document.querySelector('#dock .nag')), 'public: it stays dismissed for the session');
+
+    // ── /n/<node> — the card ───────────────────────────────────────────────
+    const nodeText = await pubText();
+    ok(/Elijah/.test(nodeText) && /@tgs_dankcoin/.test(nodeText) && /FEEDS/i.test(nodeText) && /FOLLOWS/i.test(nodeText),
+      'public: /n/<node> renders the card — bio, feeds, follows');
+    ok(/tastycrow/.test(nodeText), 'public: the node page resolves its feed rows from their own previews');
+    await snapPage(pub, 'public-node');
+
+    // ── /u/<name> — the person, resolved through the backlink (PUBLIC §4) ──
+    await pub.goto(`${base}/u/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    const person = await pub.evaluate(() => ({
+      head: document.querySelector('#view .profile-head').innerText,
+      title: document.querySelector('#view .post-title')?.textContent ?? '',
+      sub: document.querySelector('#view .post-sub')?.textContent ?? '',
+      posts: document.querySelectorAll('#view article.post').length,
+      text: document.getElementById('view').innerText,
+    }));
+    ok(/Elijah/.test(person.head) && /@tgs_dankcoin/.test(person.head),
+      'public: /u/tastycrow follows the feed\'s backlink to @tgs_dankcoin');
+    ok(person.posts === 4 && /chill, bro/.test(person.text),
+      `public: it merges the node's feeds: (${person.posts} posts from @tastycrow)`);
+    ok(person.title === 'Elijah' && person.sub === 'tastycrow',
+      `public: attribution — the person leads (${person.title}), the channel follows (${person.sub})`);
+    await snapPage(pub, 'public-person');
+
+    // Copy Link: /u/<name> on a person page, /f/<channel> on a channel page
     await pub.click('#view .head-actions button.kebab');
     await pub.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
     await pub.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
-    await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent)
-      && document.getElementById('toast').classList.contains('show'), null, { timeout: 6000 });
-    const copiedPublic = await pub.evaluate(() => navigator.clipboard.readText());
-    ok(copiedPublic === 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog', `public: Copy Link copies ${copiedPublic}`);
+    await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/u/tastycrow',
+      'public: Copy Link on a person page copies /u/<name>');
 
-    // /n/<node> is the same deal
-    await pub.goto(`${base}/n/tgs_ana?mock=node`, { waitUntil: 'load' });
-    await pub.waitForFunction(() => /@tgs_ana/.test(document.getElementById('view').innerText), null, { timeout: 25000 });
-    ok(/Ana Iliovic/.test(await pubText()), 'public: /n/<node> opens the node profile');
+    // tapping the channel subheading pushes the channel page, with ‹ Back
+    await pub.click('#view .post-sub >> nth=0');
+    await pub.waitForFunction(() => location.pathname === '/f/tastycrow', null, { timeout: 10000 });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    ok(await pub.evaluate(() => /Back/.test(document.getElementById('topbar-lead').textContent)),
+      'public: a pushed public screen carries ‹ Back');
+    await pub.click('#view .head-actions button.kebab');
+    await pub.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await pub.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
+    await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/tastycrow',
+      'public: Copy Link on a channel page copies /f/<channel>');
 
-    // a channel that cannot be read gets the §2.6 empty card, no special copy
-    await pub.goto(`${base}/f/tgs_private_room?mock=node`, { waitUntil: 'load' });
-    await pub.waitForFunction(() => /Channel not found\./.test(document.getElementById('view').innerText), null, { timeout: 25000 });
-    ok(/@tgs_private_room is not a public channel\./.test(await pubText()), 'public: an unreadable channel gets the §2.6 empty card');
+    // ── the merge is the app's own, across two feeds, newest first ─────────
+    await pub.goto(`${base}/u/tgs_merge`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    await pub.waitForFunction(() => document.querySelectorAll('#view article.post').length >= 20, null, { timeout: 20000 });
+    const merged = await pub.evaluate(() => {
+      const subs = [...document.querySelectorAll('#view .post-sub')].map((s) => s.textContent);
+      return { subs, first: subs.slice(0, 4), fifth: subs[4], n: subs.length };
+    });
+    ok(merged.first.every((s) => s === 'tastycrow') && merged.fifth === 'Telegram News',
+      `public: two feeds merge strictly newest-first (${merged.first[0]} ×4 then ${merged.fifth})`);
+    // endless scroll: the older ?before= page appends
+    await pub.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await pub.waitForFunction(() => document.querySelectorAll('#view article.post').length > 24, null, { timeout: 20000 });
+    const scrolled = await pub.evaluate(() => ({
+      n: document.querySelectorAll('#view article.post').length,
+      end: /That's everything\./.test(document.getElementById('view').innerText),
+    }));
+    ok(scrolled.n > 24, `public: endless scroll pages each source with ?before= (${scrolled.n} posts)`);
+
+    // ── refusals ───────────────────────────────────────────────────────────
+    for (const path of ['/u/tgs_hidden', '/f/tgs_hidden', '/n/tgs_hidden']) {
+      await pub.goto(`${base}${path}`, { waitUntil: 'load' });
+      await pub.waitForFunction(() => /Not listed\.|Channel not found\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+      const t = await pubText();
+      ok(/Not listed\./.test(t) && /asked to stay out of directories/.test(t) && !/A post nobody outside/.test(t),
+        `public: ${path} — a node with public: no is not served at all`);
+    }
+
+    // The three routes are not the only door. @tgs_seen is an ordinary public
+    // node that lists @tgs_hidden in its `feeds:` and follows them — which
+    // needs nobody's consent — so the refusal has to hold one hop out too: no
+    // merged posts on /u/, and no name, face or feed count filled into a row
+    // on /n/. What stays is the bare handle @tgs_seen's own card published.
+    await pub.goto(`${base}/n/tgs_seen`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => [...document.querySelectorAll('#view .feed-row .row-name')].some((e) => e.textContent === 'tastycrow'),
+      null, { timeout: 20000 });
+    await pub.waitForTimeout(400);
+    const hop = await pub.evaluate(() => ({
+      feeds: [...document.querySelectorAll('#view .feed-row .row-name')].map((e) => e.textContent),
+      follows: [...document.querySelectorAll('#view .node-row .row-name')].map((e) => e.textContent),
+      subs: [...document.querySelectorAll('#view .node-row .row-sub')].map((e) => e.textContent),
+      text: document.getElementById('view').innerText,
+    }));
+    ok(hop.feeds.join(',') === 'tastycrow,@tgs_hidden',
+      `public: an unlisted node's feed row keeps the bare handle, the listed one fills in (${hop.feeds.join(', ')})`);
+    ok(hop.follows.join(',') === '@tgs_hidden' && hop.subs.join(',') === '@tgs_hidden · 0 feeds' && !/Quiet/.test(hop.text),
+      `public: a follows row never republishes an unlisted node's name or feed count (${hop.follows.join(', ')})`);
+
+    await pub.goto(`${base}/u/tgs_seen`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    await pub.waitForFunction(() => /That's everything\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    const hopFeed = await pub.evaluate(() => ({
+      posts: document.querySelectorAll('#view article.post').length,
+      subs: [...new Set([...document.querySelectorAll('#view .post-sub')].map((s) => s.textContent))],
+      text: document.getElementById('view').innerText,
+    }));
+    ok(!/A post nobody outside/.test(hopFeed.text) && !hopFeed.subs.includes('tgs_hidden'),
+      'public: /u/<node> never merges a feed that is an unlisted node');
+    ok(hopFeed.posts === 4 && /chill, bro/.test(hopFeed.text),
+      `public: the listed feed on the same card still renders (${hopFeed.posts} posts)`);
+    // PUBLIC §1 — the proxy body is data, not a document. Telegram's preview
+    // carries nine <script> tags (six of them telegram.org's), and this origin
+    // is where the TDLib session lives, so a reader who opens /tg/s/<channel>
+    // directly must get inert characters and nothing that runs.
+    {
+      const res = await pub.goto(`${base}/tg/s/tastycrow`, { waitUntil: 'load' });
+      const headers = res.headers();
+      const raw = await pub.evaluate(() => ({
+        scripts: document.scripts.length,
+        widgets: document.querySelectorAll('.tgme_widget_message').length,
+        tbase: typeof window.TBaseUrl,
+      }));
+      ok(/^text\/plain/.test(headers['content-type'] ?? '') && headers['x-content-type-options'] === 'nosniff'
+        && /sandbox/.test(headers['content-security-policy'] ?? ''),
+        `public proxy: the preview is served as inert text (${headers['content-type']})`);
+      ok(raw.scripts === 0 && raw.widgets === 0 && raw.tbase === 'undefined',
+        `public proxy: a direct visit runs nothing — ${raw.scripts} scripts, ${raw.widgets} parsed message nodes`);
+    }
+
+    await pub.goto(`${base}/f/tgs_blank`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /Channel not found\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    ok(/@tgs_blank is not a public channel\./.test(await pubText()),
+      'public: a page that parses to nothing gets the §2.6 empty card, not an empty feed');
     await snapPage(pub, 'public-empty');
 
     // a malformed escape is a bad username, never a blank page (§2.13)
     for (const bad of ['/f/%zz', '/f/%E0%A4%A', '/f/bad-name']) {
       await pub.goto(`${base}${bad}?mock=node`, { waitUntil: 'load' });
-      await pub.waitForSelector('#view article.post', { timeout: 25000 });
+      await pub.waitForSelector('#view .card', { timeout: 25000 });
       const fell = await pub.evaluate(() => ({
-        repo: !!window.__tgsocial.repo,
-        dest: window.__tgsocial.app.pendingDest,
+        publicMode: window.__tgsocial.app.publicMode,
         view: document.getElementById('view').textContent.trim().length,
       }));
-      ok(fell.repo && fell.dest === null && fell.view > 0, `public: ${bad} falls through to the feed, no blank page`);
+      ok(!fell.publicMode && fell.view > 0, `public: ${bad} is not a public route and never a blank page`);
     }
     await pubCtx.close();
   }
 
-  // the destination survives the Setup detour (§2.13): a brand-new account
-  // opening a public link signs in, meets Setup, and still gets where it
-  // was going — Setup rewrites the hash, and the link outlives it.
+  // ── §2.13 signed in on the same URLs ──────────────────────────────────────
+  // A reader who has signed in on this device gets the app on a public link,
+  // not the public page: the tab bar, Comment, Follow, and no nag. The
+  // destination survives the Sign in and Setup detour — Setup rewrites the
+  // hash, and the link outlives it. The premise underneath is still true and
+  // still guarded: TDLib refuses every chat read before authorization.
   {
-    const newCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const newCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['clipboard-read', 'clipboard-write'] });
     await newCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    // local state is what says "this browser has signed in here" (js/app.js)
+    await newCtx.addInitScript(() => {
+      try {
+        localStorage.setItem('tgs.prefs', '{}');
+      } catch {}
+    });
     const fresh = await newCtx.newPage();
     fresh.on('console', (m) => {
       if (m.type() === 'error') errors.push(`public-setup: ${m.text()}`);
@@ -1152,6 +1515,22 @@ try {
     fresh.on('pageerror', (e) => errors.push(`public-setup pageerror: ${e.message}`));
     await fresh.goto(`${base}/f/waveloop_devlog?mock=fresh`, { waitUntil: 'load' });
     await fresh.waitForSelector('input[type="tel"]', { timeout: 20000 });
+    ok(await fresh.evaluate(() => !window.__tgsocial.app.publicMode && /Sign in to see @waveloop_devlog\./.test(document.getElementById('view').innerText)),
+      'signed in: a known browser on a public link gets Sign in, destination named');
+    ok(await fresh.evaluate(() => window.__tgsocial.app.pendingDest?.username === 'waveloop_devlog'),
+      'signed in: the destination is held for the sign-in detour');
+
+    // the premise, asserted rather than assumed
+    const refused = await fresh.evaluate(async () => {
+      try {
+        await window.__tgsocial.td.send({ '@type': 'searchPublicChat', username: 'waveloop_devlog' });
+        return 'resolved';
+      } catch (e) {
+        return `${e.code} ${e.message}`;
+      }
+    });
+    ok(/^401 /.test(refused), `signed in: a chat read before authorization is still refused (${refused})`);
+
     await fresh.fill('input[type="tel"]', '+16045550199');
     await fresh.click('button.btn.primary');
     await fresh.waitForSelector('input[inputmode="numeric"]', { timeout: 10000 });
@@ -1159,11 +1538,37 @@ try {
     await fresh.click('button.btn.primary');
     await fresh.waitForFunction(() => /Make your node\./.test(document.getElementById('view').innerText), null, { timeout: 25000 });
     ok(await fresh.evaluate(() => location.hash === '#/setup' && window.__tgsocial.app.pendingDest?.username === 'waveloop_devlog'),
-      'public: Setup takes the hash, and the destination is still held');
+      'signed in: Setup takes the hash, and the destination is still held');
     await fresh.click('#view button.btn.ghost:has-text("Skip for now")');
     await fresh.waitForFunction(() => /@waveloop_devlog/.test(document.getElementById('view').innerText), null, { timeout: 25000 });
     ok(await fresh.evaluate(() => location.hash === '#/feed/waveloop_devlog' && window.__tgsocial.app.pendingDest === null),
-      'public: leaving Setup lands on the linked channel, and the link is spent');
+      'signed in: leaving Setup lands on the linked channel, and the link is spent');
+
+    await fresh.waitForSelector('#view article.post', { timeout: 25000 });
+    const landed = await fresh.evaluate(() => ({
+      publicMode: window.__tgsocial.app.publicMode,
+      tabs: !document.querySelector('#dock .tabs').hidden,
+      status: document.getElementById('status').textContent,
+      nag: !!document.querySelector('#dock .nag'),
+      comments: document.querySelectorAll('#view article.post .post-foot .btn').length,
+      counts: document.querySelectorAll('#view .post-comments-count').length,
+      kebab: !![...document.querySelectorAll('#view .head-actions button.kebab')].length,
+      headerTelegram: [...document.querySelectorAll('#view .profile-head button')].some((b) => /Open in Telegram/i.test(b.textContent)),
+    }));
+    ok(!landed.publicMode && landed.tabs && landed.status !== 'Public' && !landed.nag,
+      'signed in: the same URL is the normal screen — tab bar, real status pill, no nag');
+    ok(landed.comments > 0 && landed.counts > 0, 'signed in: the Comment button and comment counts are on the card');
+    ok(landed.kebab && !landed.headerTelegram, 'signed in: the header carries the kebab, not a standalone Open in Telegram');
+    await snapPage(fresh, 'public-signedin');
+
+    // §2.13 Sharing — Copy Link copies the tgsocial URL, not the t.me one
+    await fresh.click('#view .head-actions button.kebab');
+    await fresh.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await fresh.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
+    await fresh.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    ok((await fresh.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog',
+      'signed in: Copy Link copies the tgsocial URL');
+
     await newCtx.close();
   }
 

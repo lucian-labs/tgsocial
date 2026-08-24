@@ -263,7 +263,7 @@ export function channelLink(username) {
 /** The canonical web host (PRODUCT §0). Public links are always absolute to it. */
 export const PUBLIC_ORIGIN = 'https://tgsocial.lucianlabs.ca';
 
-/** `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies. */
+/** `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies for a channel. */
 export function publicFeedUrl(username) {
   return `${PUBLIC_ORIGIN}/f/${username}`;
 }
@@ -273,11 +273,26 @@ export function publicNodeUrl(username) {
   return `${PUBLIC_ORIGIN}/n/${username}`;
 }
 
+/** `https://tgsocial.lucianlabs.ca/u/<name>` — the link `Copy Link` copies for a person. */
+export function publicPersonUrl(username) {
+  return `${PUBLIC_ORIGIN}/u/${username}`;
+}
+
+/** Route name ↔ public path prefix (PRODUCT §2.13). */
+const PUBLIC_PREFIX = { person: 'u', channel: 'f', node: 'n' };
+
+/** `{ name, username }` → the pathname it lives at, e.g. `/u/tastycrow`. */
+export function publicPath({ name, username }) {
+  const prefix = PUBLIC_PREFIX[name];
+  return prefix ? `/${prefix}/${username}` : '/';
+}
+
 /**
  * A `location.pathname` served by the SPA off nginx's index.html fallback:
- * `/f/<channel>` → the feed channel screen, `/n/<node>` → the node profile.
- * Anything else (including `/` and `/index.html`) → null, and the hash router
- * keeps the signed-in app exactly as it was.
+ * `/u/<name>` → a person, `/f/<channel>` → the feed channel screen,
+ * `/n/<node>` → the node profile. Anything else (including `/` and
+ * `/index.html`) → null, and the hash router keeps the signed-in app exactly
+ * as it was.
  *
  * Total on any string: a malformed percent-escape (`/f/%zz`) is a bad
  * username, not an exception. `decodeURIComponent` throws URIError on those,
@@ -286,7 +301,7 @@ export function publicNodeUrl(username) {
  * routes exactly like `/f/bad-name`.
  */
 export function parsePublicPath(pathname) {
-  const m = /^\/(f|n)\/([^/?#]+)\/?$/.exec(String(pathname ?? ''));
+  const m = /^\/(u|f|n)\/([^/?#]+)\/?$/.exec(String(pathname ?? ''));
   if (!m) return null;
   let raw;
   try {
@@ -296,7 +311,7 @@ export function parsePublicPath(pathname) {
   }
   const username = normaliseUsername(raw);
   if (!username) return null;
-  return { name: m[1] === 'f' ? 'channel' : 'node', username };
+  return { name: { u: 'person', f: 'channel', n: 'node' }[m[1]], username };
 }
 
 /** 0 → "0", 1200 → "1.2k", 15000 → "15k", 2400000 → "2.4m". */

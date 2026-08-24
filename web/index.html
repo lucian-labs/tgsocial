@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- PUBLIC.md §1/§3 — the second wall. The parser already returns text and
+       structured entities and the renderer builds nodes, so preview markup is
+       never adopted into this page; this makes the browser enforce it too.
+       Scripts, frames and objects are pinned to our own origin, `base-uri` and
+       `form-action` are closed so injected markup cannot re-point them, and
+       media/images stay open to https: because Telegram serves the preview's
+       files straight off its CDN. `wasm-unsafe-eval` is what TDLib's wasm
+       needs; connect-src stays broad because tdweb talks to whichever Telegram
+       DC it is handed; `style-src` keeps 'unsafe-inline' because the kit sets
+       element styles from JS (aspect ratios, transforms, scrubber widths) and
+       the browser counts those as inline styles — a script wall is the point
+       here, and no preview string ever becomes markup to carry a style. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; font-src 'self'; connect-src 'self' https: wss: blob: data:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>tgsocial</title>
   <meta name="description" content="Your Telegram, as a feed. A social network that lives entirely on Telegram.">

@@ -3,19 +3,30 @@
  * Routes: #/feed #/explore #/graph #/you #/setup #/node/<username>
  *         #/feed/<username> #/compose[?feed=<username>]
  *
- * Public links (PRODUCT §2.13) are pathnames, not hashes: /f/<channel> and
- * /n/<node>. nginx falls back to index.html for them, so the router reads
- * location.pathname when there is no hash route. TDLib refuses every chat
- * read before authorization, so a visitor with no session gets Sign in with
- * the destination named, and lands on it once TDLib reports Ready.
+ * Public links (PRODUCT §2.13) are pathnames, not hashes: /u/<name>,
+ * /f/<channel> and /n/<node>. nginx falls back to index.html for them, so the
+ * router reads location.pathname when there is no hash route.
+ *
+ * A visitor with no local session on one of those paths gets the **public
+ * page**: rendered from Telegram's own preview through our proxy
+ * (js/public/*), with no TDLib at all — no 14 MB wasm to wait for, no chat
+ * read to be refused. TDLib still refuses every chat read before authorization
+ * (401, asserted in test/smoke.mjs); the preview is a different door onto the
+ * same public data, and it is the door browsers are allowed through.
+ *
+ * A reader who has signed in on this device gets the ordinary signed-in screen
+ * on the same URL — tab bar, Follow, Comment, no nag — and `pendingDest`
+ * carries them there across a Sign in / Setup detour.
  */
 import { h, button, tabs, toast, replace } from '../vendor/house-pour.js';
 import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
-import { normaliseUsername, parsePublicPath, usernameKey } from './protocol.js';
+import { normaliseUsername, parsePublicPath, publicPath, usernameKey } from './protocol.js';
 import { audioRowStats, closeViewer, currentAudio, watchMedia } from './media.js';
+import { PublicSource } from './public/source.js';
 import { openStatusSheet } from './views/status.js';
+import * as publicView from './views/public.js';
 import * as signin from './views/signin.js';
 import * as setup from './views/setup.js';
 import * as feed from './views/feed.js';
@@ -40,6 +51,29 @@ const CONFIG_EXAMPLE = `{
   "indexGroup": "tgsocial_index"
 }`;
 
+/** PRODUCT §2.13 — the nag, verbatim. */
+const NAG_TEXT = 'Follow this feed in tgsocial.';
+const NAG_ACTION = 'Get It';
+const NAG_DISMISSED = 'tgs.nagDismissed';
+
+/**
+ * Has this browser ever signed in here? Every signed-in surface writes `tgs.*`
+ * local state (PROTOCOL §7), so their absence on a public URL is a visitor and
+ * their presence is the reader coming back to their own app. This is read
+ * before anything else at boot, because the whole point of a public page is
+ * not booting TDLib to find out.
+ */
+function hasLocalSession() {
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      if (String(localStorage.key(i)).startsWith('tgs.')) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 class App {
   constructor() {
     this.config = null;
@@ -58,6 +92,12 @@ class App {
     this.lastError = null;
     /** The public link this visit arrived on, until it is spent (§2.13). */
     this.pendingDest = null;
+    /** True while this tab is a public page: no TDLib, no repo, no tab bar (§2.13). */
+    this.publicMode = false;
+    /** The preview reader behind the public pages (js/public/source.js). */
+    this.source = null;
+    /** The dismissible nag docked in the floating-bar slot on a public page. */
+    this.nag = null;
     /** Every in-flight operation lives here; the pill derives from it (PRODUCT §2.10). */
     this.activity = new Activity({ onChange: () => this.paintStatus() });
     this.td.activity = this.activity;
@@ -71,7 +111,11 @@ class App {
     this.tabs = tabs(MAIN_TABS, 'feed', (id) => this.navigate(`#/${id}`));
     this.tabs.classList.add('floating');
     this.els.dock.append(this.tabs);
-    this.els.status.addEventListener('click', () => openStatusSheet(this));
+    // the pill is a button signed in (§2.10); on a public page it is a neutral
+    // label — there is no session to report on
+    this.els.status.addEventListener('click', () => {
+      if (!this.publicMode) openStatusSheet(this);
+    });
     this.toast = (message, tone, opts) => {
       if (tone === 'bad') this.lastError = { text: message, at: Date.now() };
       return toast(message, tone, opts);
@@ -88,6 +132,9 @@ class App {
    * after 30 s regardless (js/activity.js).
    */
   status() {
+    // §2.13: a public page carries a neutral `Public` pill — never gold, never
+    // a status, because there is no session behind it.
+    if (this.publicMode) return 'Public';
     // A fatal boot (missing config, tdweb absent, td.init threw) has nothing
     // in flight and no auth events coming: never report Syncing behind the
     // fatal card — the cold-start heuristic below would wedge the pill.
@@ -111,7 +158,8 @@ class App {
     const s = this.status();
     el.textContent = s;
     el.classList.toggle('gold', s === 'Synced');
-    el.setAttribute('aria-label', 'Status. Opens the status sheet');
+    el.setAttribute('aria-label', this.publicMode ? 'Public page' : 'Status. Opens the status sheet');
+    el.toggleAttribute('aria-disabled', this.publicMode);
   }
 
   /**
@@ -183,7 +231,38 @@ class App {
 
   back() {
     if (history.length > 1) history.back();
+    else if (this.publicMode) this.goPublic('/');
     else this.navigate(this.lastMain);
+  }
+
+  /**
+   * Navigate inside the public site: the URL is a pathname, so this pushes one
+   * and re-renders. `tgsPublic` on the history entry is how the shell knows it
+   * is on a pushed screen and shows `‹ Back` instead of the wordmark.
+   */
+  goPublic(path) {
+    if (path === '/') {
+      location.href = '/';
+      return;
+    }
+    history.pushState({ tgsPublic: true }, '', path);
+    this.render();
+  }
+
+  /**
+   * Open a node — the profile signed in, `/n/<node>` on a public page. The two
+   * screens are different code; every caller (post card header, mentions,
+   * node rows) goes through here so neither has to know which it is on.
+   */
+  openNode(username) {
+    if (this.publicMode) this.goPublic(publicPath({ name: 'node', username }));
+    else this.navigate(`#/node/${username}`);
+  }
+
+  /** Open a feed channel — §2.6 signed in, `/f/<channel>` on a public page. */
+  openChannel(username) {
+    if (this.publicMode) this.goPublic(publicPath({ name: 'channel', username }));
+    else this.navigate(`#/feed/${username}`);
   }
 
   onLeave(fn) {
@@ -193,8 +272,9 @@ class App {
   parseRoute() {
     // A public link is a pathname (PRODUCT §2.13). The hash wins whenever
     // there is one, so the signed-in app keeps routing exactly as before and
-    // navigating away from a public URL works without a page load.
-    if (!location.hash.startsWith('#/')) {
+    // navigating away from a public URL works without a page load. On a public
+    // page there is no hash router at all — the pathname is the route.
+    if (this.publicMode || !location.hash.startsWith('#/')) {
       const pub = parsePublicPath(location.pathname);
       if (pub) return { ...pub, params: {}, viaPath: true };
     }
@@ -216,7 +296,109 @@ class App {
 
   // ── render ───────────────────────────────────────────────────────────────
 
+  /**
+   * PRODUCT §2.13 — the public page. No TDLib, no repo, no tab bar; the
+   * topbar carries the wordmark (or `‹ Back` on a pushed screen) and a neutral
+   * `Public` pill, and the floating-bar slot carries the nag.
+   */
+  renderPublic() {
+    const route = this.parseRoute();
+    // a public tab can only ever be on a public URL; anything else (a hand-made
+    // history entry) is the app, so go there rather than render a half-screen
+    if (!['person', 'channel', 'node'].includes(route.name)) {
+      location.href = '/';
+      return;
+    }
+    for (const fn of this.leaveFns.splice(0)) {
+      try {
+        fn();
+      } catch (e) {
+        console.warn('[app] leave', e);
+      }
+    }
+    this.route = route;
+    this.currentView = `public:${route.name}`;
+    this.paintStatus();
+    closeViewer();
+    this.tabs.hidden = true;
+    this.mountNag();
+    // pushed screens (a channel opened from a person page) get `‹ Back`; the
+    // page the visitor landed on gets the wordmark, which goes to the app
+    const pushed = !!history.state?.tgsPublic;
+    replace(this.els.lead, pushed
+      ? button('‹ Back', { style: 'ghost', size: 'sm', ariaLabel: 'Back', onClick: () => this.back() })
+      : h('a.brand', { href: '/', 'aria-label': 'tgsocial home' }, 'tgsocial'));
+    replace(this.els.view, publicView.render(this, route));
+    window.scrollTo(0, 0);
+  }
+
+  /**
+   * §2.13 — the nag: one dismissible bar in the floating-bar slot on every
+   * public page. `Get It` goes to `/`; the × hides it for the session.
+   */
+  mountNag() {
+    if (this.nagDismissed()) {
+      if (this.nag) {
+        this.nag.remove();
+        this.nag = null;
+      }
+      this.updateDock();
+      return;
+    }
+    if (!this.nag) {
+      const close = h('button.nag-close', { type: 'button', 'aria-label': 'Dismiss' }, '×');
+      close.addEventListener('click', () => {
+        try {
+          sessionStorage.setItem(NAG_DISMISSED, '1');
+        } catch {
+          // private mode with storage off: the in-memory flag is the session
+        }
+        this.nagOff = true;
+        this.mountNag();
+      });
+      this.nag = h('div.nag', { role: 'note' },
+        h('span.nag-text', NAG_TEXT),
+        button(NAG_ACTION, { style: 'accent', size: 'sm', onClick: () => this.goPublic('/') }),
+        close,
+      );
+    }
+    if (!this.nag.isConnected) this.els.dock.append(this.nag);
+    this.updateDock();
+  }
+
+  nagDismissed() {
+    if (this.nagOff) return true;
+    try {
+      return sessionStorage.getItem(NAG_DISMISSED) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * §2.13 — `/u/<name>` for a reader who is signed in. The resolution is
+   * PUBLIC §4's, done with TDLib instead of the preview: the name is the node
+   * when its pinned message is a card, else the node its description backlinks.
+   * Either way the reader lands on the ordinary node profile.
+   */
+  renderPersonSignedIn(username) {
+    const root = h('div', h('div.card', h('p.muted', 'Loading…')));
+    this.busy(this.repo.readNode(username, { force: false }), `Reading card @${username}`)
+      .then(async (entry) => {
+        if (entry?.card) return this.navigate(`#/node/${entry.username || username}`, { replace: true });
+        const info = await this.repo.feedInfo(username).catch(() => null);
+        const back = /tgsocial:\s*@([A-Za-z0-9_]{4,32})/i.exec(info?.description ?? '');
+        if (back) return this.navigate(`#/node/${back[1]}`, { replace: true });
+        replace(root, h('div.card.empty', h('h2', 'Channel not found.'), h('p.muted', `@${username} is not a public channel.`)));
+      })
+      .catch(() => {
+        replace(root, h('div.card.empty', h('h2', 'Channel not found.'), h('p.muted', `@${username} is not a public channel.`)));
+      });
+    return root;
+  }
+
   render() {
+    if (this.publicMode) return this.renderPublic();
     const route = this.parseRoute();
     const stayOnSignin = !this.td.isReady && this.currentView === 'signin' && !this.fatal
       && !(this.repo?.myNode && (!this.td.authState || this.td.authState['@type'] === 'authorizationStateWaitTdlibParameters'));
@@ -311,7 +493,14 @@ class App {
       const dest = this.takePendingDest();
       const there = route.name === dest.name && usernameKey(route.username) === usernameKey(dest.username);
       if (!there) {
-        this.navigate(dest.name === 'node' ? `#/node/${dest.username}` : `#/feed/${dest.username}`, { replace: true });
+        // /u/<name> has no hash form: put the pathname back (which clears the
+        // hash Setup left behind) and let the router read it again
+        if (dest.name === 'person') {
+          history.replaceState(null, '', publicPath(dest));
+          this.render();
+        } else {
+          this.navigate(dest.name === 'node' ? `#/node/${dest.username}` : `#/feed/${dest.username}`, { replace: true });
+        }
         return;
       }
     }
@@ -323,7 +512,7 @@ class App {
       setLead(false);
     } else {
       // pushed screens keep the floating tab bar; Setup does not (PRODUCT §1)
-      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread';
+      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread' || route.name === 'person';
       setTabs(pushed, this.lastMain.replace('#/', ''));
       setLead(true);
     }
@@ -350,6 +539,10 @@ class App {
         break;
       case 'channel':
         el = channel.render(this, { username: route.username });
+        break;
+      case 'person':
+        // §2.13: signed in, /u/<name> resolves to the person's node profile
+        el = this.renderPersonSignedIn(route.username);
         break;
       case 'thread':
         el = thread.render(this, { username: route.username, serverId: route.serverId, compose: route.params.compose === '1' });
@@ -396,6 +589,21 @@ class App {
     window.addEventListener('hashchange', () => this.render());
     window.addEventListener('online', () => this.paintStatus());
     window.addEventListener('offline', () => this.paintStatus());
+    // the public site navigates by pathname, so Back/Forward are popstate
+    window.addEventListener('popstate', () => {
+      if (this.publicMode) this.render();
+    });
+
+    // PRODUCT §2.13 — a public link with no session on this device is a public
+    // page: rendered from Telegram's preview, with no TDLib booted at all. A
+    // reader who has signed in here falls through to the app on the same URL.
+    const pub = parsePublicPath(location.pathname);
+    if (pub && !hasLocalSession()) {
+      this.publicMode = true;
+      this.source = new PublicSource();
+      this.render();
+      return;
+    }
 
     try {
       const res = await fetch('/config.json', { cache: 'no-store' });
@@ -416,7 +624,7 @@ class App {
     // refuses every chat read before authorization, so a visitor with no
     // session signs in first; this remembers where they were going, and the
     // sign-in screen names it.
-    this.pendingDest = parsePublicPath(location.pathname);
+    this.pendingDest = pub;
     this.repo = new Repo(this.td, this.config);
     // a memory-pressure flush revokes every decoded picture the app is
     // holding; this is what paints them back afterwards (js/media.js)
@@ -449,6 +657,8 @@ window.__tgsocial = {
   app,
   td: app.td,
   get repo() { return app.repo; },
+  /** The public reader (PUBLIC.md), or null when this tab is the signed-in app. */
+  get source() { return app.source; },
   currentAudio,
   /** Player rows the audio dock is tracking vs. still in the document (test/flows.mjs). */
   audioRows: () => audioRowStats(),

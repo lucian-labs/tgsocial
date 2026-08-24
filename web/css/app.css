@@ -566,3 +566,47 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 }
 .status-value .pending-item { display: block; }
 .status-sheet .btn + .btn { margin-top: var(--hp-space-btn-row-gap); }
+
+/* ── the public nag (PRODUCT §2.13) ──────────────────────────────────────── */
+
+/* One dismissible bar in the floating-bar slot on every public page — the
+   same raised pill as the tab bar it stands in for: panel fill, 1pt line,
+   pill radius, the one card shadow. */
+.nag {
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-row-gap);
+  max-width: 100%;
+  min-height: var(--hp-space-touch-min);
+  padding: calc(var(--hp-space-card-gap) / 4) calc(var(--hp-space-card-gap) / 4) calc(var(--hp-space-card-gap) / 4) var(--hp-space-row-pad);
+  border: var(--hp-border-width) solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.nag-text {
+  font-size: var(--hp-type-small-size);
+  line-height: var(--hp-type-small-line);
+  color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* × dismiss: faint glyph, 40pt target (rule 6) */
+.nag-close {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: var(--hp-space-touch-min);
+  height: var(--hp-space-touch-min);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--faint);
+  font-family: var(--font-body);
+  font-size: var(--hp-type-body-size);
+  line-height: 1;
+  cursor: pointer;
+}
+.nag-close:hover { color: var(--ink); }
