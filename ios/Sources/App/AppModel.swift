@@ -1019,4 +1019,10 @@ final class AppModel {
         guard let url = DeepLink.url(string) else { return }
         UIApplication.shared.open(url)
     }
+
+    /// PRODUCT §2.6: `Copy Link` puts the public URL on the clipboard and says so.
+    func copyLink(_ string: String) {
+        UIPasteboard.general.string = string
+        showToast("Link copied.")
+    }
 }

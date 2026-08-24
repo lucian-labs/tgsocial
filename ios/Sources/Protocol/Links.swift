@@ -25,6 +25,18 @@ public enum DeepLink {
     }
 }
 
+/// The tgsocial web addresses (PRODUCT §2.13): every channel and node has one, always absolute.
+public enum PublicLink {
+    /// The canonical web host (PRODUCT §0).
+    public static let origin = "https://tgsocial.lucianlabs.ca"
+
+    /// `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies.
+    public static func feed(username: String) -> String { "\(origin)/f/\(username)" }
+
+    /// `https://tgsocial.lucianlabs.ca/n/<node>`
+    public static func node(username: String) -> String { "\(origin)/n/\(username)" }
+}
+
 public enum Backlink {
     public static let prefix = "tgsocial:"
 

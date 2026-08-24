@@ -3,7 +3,7 @@
  * createTextNode (the `h` helper never sets innerHTML).
  */
 import { h, button, pill, avatar, sectionMark, modal } from '../../vendor/house-pour.js';
-import { entityRuns, formatTime, formatExactTime, compactCount, channelLink, serverMessageId } from '../protocol.js';
+import { entityRuns, formatTime, formatExactTime, compactCount, serverMessageId } from '../protocol.js';
 import { userMessage } from '../repo.js';
 import { mediaBlocks } from '../media.js';
 
@@ -345,10 +345,6 @@ export function emptyCard(title, body, action) {
   const parts = [h('h2', title), h('p.muted', body)];
   if (action) parts.push(button(action.label, { style: 'accent', onClick: action.onClick }));
   return h('div.card.empty', parts);
-}
-
-export function openInTelegramButton(username) {
-  return button('Open in Telegram', { style: 'ghost', size: 'sm', onClick: () => openExternal(channelLink(username)) });
 }
 
 export function section(title, count) {

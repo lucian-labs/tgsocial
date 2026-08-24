@@ -84,6 +84,10 @@
   --space-column-side: 14px;
   --space-row-pad: 14px;
   --space-touch-min: 40px;
+  --space-kebab-dot: 4px;
+  --space-kebab-dot-gap: 3px;
+  --space-menu-width: 240px;
+  --space-menu-dismiss-drag: 40px;
   --space-avatar-row: 36px;
   --space-avatar-profile: 72px;
   --radius-input: 12px;
@@ -672,6 +676,117 @@ h3 .mark-count {
 .toggle[aria-checked='true']::before { background: var(--accent-soft); border-color: var(--accent); }
 .toggle[aria-checked='true']::after { left: calc(var(--toggle-w) - var(--toggle-knob) - 2 * var(--border-width)); }
 .toggle:disabled { opacity: 0.45; cursor: default; }
+
+/* ── HPKebabButton ───────────────────────────────────────────────────────── */
+
+/* A ghost 40pt hit box with three faint dots stacked vertically. The dots are
+   drawn here — three pill-radius squares in `faint` — so no icon font, emoji
+   or system glyph brings its own styling in. COMPONENTS.md sets the dot at 4
+   and the gap at 3; both come off the one border width, so nothing here is a
+   size the tokens don't already state. */
+.kebab {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(3 * var(--border-width));
+  width: var(--space-touch-min);
+  height: var(--space-touch-min);
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  cursor: pointer;
+}
+.kebab i {
+  display: block;
+  width: calc(4 * var(--border-width));
+  height: calc(4 * var(--border-width));
+  border-radius: var(--radius-pill);
+  background: var(--faint);
+  transition: background var(--motion-color) ease;
+}
+.kebab:hover i,
+.kebab[aria-expanded='true'] i { background: var(--muted); }
+
+/* ── HPMenu ──────────────────────────────────────────────────────────────── */
+
+/* The anchor: the menu hangs off this box, so it is the only positioned
+   ancestor between the button and the card. */
+.menu-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The menu itself is a panel card — card radius, one border, the one card
+   shadow — pinned under the button's right edge. It fades in; nothing else
+   about it animates. */
+.menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  min-width: calc(6 * var(--space-touch-min));
+  padding: calc(var(--space-card-gap) / 4) var(--space-card-pad);
+  border: var(--border-width) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity var(--motion-toast) ease;
+}
+.menu.show { opacity: 1; }
+
+/* Rows are HPListItem: body text in ink, 40pt tall, hairline between. */
+.menu button.list-item {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-height: var(--space-touch-min);
+  margin: 0;
+  padding: calc(var(--space-row-pad) / 2) 0;
+  justify-content: flex-start;
+  border: none;
+  border-bottom: var(--border-width) solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  font: var(--type-body);
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--motion-color) ease;
+}
+.menu button.list-item:last-child { border-bottom: none; }
+.menu button.list-item:hover { color: var(--accent); }
+
+/* Compact width (a phone): the same card, docked to the bottom edge over a
+   scrim. The scrim carries the fade so the card never animates on its own. */
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-column-side);
+  padding-bottom: calc(var(--space-column-side) + env(safe-area-inset-bottom, 0px));
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--motion-toast) ease;
+}
+.menu-scrim.show { opacity: 1; }
+.menu.sheet {
+  position: static;
+  width: 100%;
+  max-width: calc(var(--space-column-max) - 2 * var(--space-column-side));
+  opacity: 1;
+}
 
 /* ── HPModal ─────────────────────────────────────────────────────────────── */
 

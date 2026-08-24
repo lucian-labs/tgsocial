@@ -109,6 +109,14 @@ final class CardVectorTests: XCTestCase {
         }
     }
 
+    /// PRODUCT §2.6 / §2.13: `Copy Link` copies the absolute public URL for the channel.
+    func testPublicLinks() {
+        XCTAssertEqual(PublicLink.feed(username: "waveloop_devlog"),
+                       "https://tgsocial.lucianlabs.ca/f/waveloop_devlog")
+        XCTAssertEqual(PublicLink.node(username: "tgs_ana"),
+                       "https://tgsocial.lucianlabs.ca/n/tgs_ana")
+    }
+
     func testBacklinkVectors() throws {
         let v = try loadVectors()
         for c in v.backlink.cases {

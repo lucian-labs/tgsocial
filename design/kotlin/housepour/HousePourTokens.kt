@@ -122,6 +122,10 @@ object HPTokens {
     val btnRowGap = 10.dp
     val rowGap = 10.dp
     val touchMin = 40.dp
+    val kebabDot = 4.dp
+    val kebabDotGap = 3.dp
+    val menuWidth = 240.dp
+    val menuDismissDrag = 40.dp
     val avatarRow = 36.dp
     val avatarProfile = 72.dp
     val bottomSafe = 96.dp

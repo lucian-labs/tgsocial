@@ -285,6 +285,10 @@ ${typeVars}
   --space-column-side: ${T.space.columnSide}px;
   --space-row-pad: ${T.space.rowPad}px;
   --space-touch-min: ${T.space.touchMin}px;
+  --space-kebab-dot: ${T.space.kebabDot}px;
+  --space-kebab-dot-gap: ${T.space.kebabDotGap}px;
+  --space-menu-width: ${T.space.menuWidth}px;
+  --space-menu-dismiss-drag: ${T.space.menuDismissDrag}px;
   --space-avatar-row: ${T.space.avatarRow}px;
   --space-avatar-profile: ${T.space.avatarProfile}px;
   --radius-input: ${T.radius.input}px;

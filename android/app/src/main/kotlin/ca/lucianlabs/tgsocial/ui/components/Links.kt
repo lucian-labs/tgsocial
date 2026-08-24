@@ -1,5 +1,7 @@
 package ca.lucianlabs.tgsocial.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -18,4 +20,10 @@ fun shareLink(context: Context, url: String) {
         putExtra(Intent.EXTRA_TEXT, url)
     }
     runCatching { context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+}
+
+/** PRODUCT §2.6 / §2.13 — `Copy Link` puts the public URL on the clipboard. */
+fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    runCatching { clipboard.setPrimaryClip(ClipData.newPlainText(text, text)) }
 }

@@ -364,12 +364,102 @@ try {
   ok(kept.writeFailed && /follows: @tgs_ana$/m.test(kept.server) && !/tgs_dave/.test(kept.server), 'write: no fresh read, no write (server card untouched)');
   ok(kept.localFollows.join(' ') === 'tgs_ana', 'write: optimistic follow rolled back after the failed read');
 
-  // feed channel
+  // feed channel (PRODUCT §2.6): Verified pill top right, kebab beside it
   await page.click('#view .feed-row:has-text("ana_notes")');
   await waitText(/@ana_notes/);
   await page.waitForSelector('#view article.post', { timeout: 10000 });
   const chText = await text();
-  ok(/Ana's notes/.test(chText) && /Open in Telegram/i.test(chText) && /VERIFIED/.test(chText), 'channel: header with Verified + Open in Telegram');
+  ok(/Ana's notes/.test(chText) && /VERIFIED/.test(chText), 'channel: header with the Verified pill');
+  ok(await page.evaluate(() => {
+    const head = document.querySelector('#view .profile-head');
+    const corner = head?.querySelector('.head-actions');
+    if (!corner) return false;
+    const pillEl = corner.querySelector('.pill.gold');
+    const kebab = corner.querySelector('button.kebab');
+    if (!pillEl || !kebab) return false;
+    // the pill sits in the header's top-right corner, and the kebab is right of it
+    const h = head.getBoundingClientRect();
+    const p = pillEl.getBoundingClientRect();
+    const k = kebab.getBoundingClientRect();
+    return p.top < h.top + h.height / 2 && p.right > h.left + h.width / 2 && k.left >= p.right;
+  }), 'channel: Verified pill top-right, kebab immediately right of it');
+  // …and it reserves its own space: the corner never paints over the centred
+  // 72pt avatar. The 390pt default clears it by 2px, so the narrow widths that
+  // actually collide have to be measured explicitly.
+  const cornerClearsAvatar = async (w) => {
+    await page.setViewportSize({ width: w, height: 844 });
+    await page.waitForFunction(() => !!document.querySelector('#view .profile-head .head-actions'), null, { timeout: 5000 });
+    return page.evaluate(() => {
+      const head = document.querySelector('#view .profile-head');
+      const hits = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0 &&
+        Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0;
+      const av = head.querySelector('.avatar').getBoundingClientRect();
+      return [...head.querySelectorAll('.head-actions .pill, .head-actions button.kebab')]
+        .every((el) => !hits(el.getBoundingClientRect(), av));
+    });
+  };
+  ok(await cornerClearsAvatar(320), 'channel: at 320pt the header corner clears the avatar');
+  ok(await cornerClearsAvatar(375), 'channel: at 375pt the header corner clears the avatar');
+  await page.setViewportSize({ width: 390, height: 844 });
+  ok(await page.evaluate(() => {
+    const head = document.querySelector('#view .profile-head');
+    return ![...head.querySelectorAll('button')].some((b) => /Open in Telegram/i.test(b.textContent));
+  }), 'channel: Open in Telegram is no longer a standalone header button');
+  // the dots are drawn from tokens, not a glyph: three boxes in `faint`
+  ok(await page.evaluate(() => {
+    const dots = [...document.querySelectorAll('#view .head-actions button.kebab i')];
+    if (dots.length !== 3) return false;
+    const faint = getComputedStyle(document.documentElement).getPropertyValue('--faint').trim();
+    const probe = document.createElement('span');
+    probe.style.color = faint;
+    document.body.append(probe);
+    const want = getComputedStyle(probe).color;
+    probe.remove();
+    return dots.every((d) => getComputedStyle(d).backgroundColor === want) &&
+      document.querySelector('#view .head-actions button.kebab').textContent === '';
+  }), 'channel: the kebab is three faint token dots, no glyph');
+
+  // the menu: a panel card at the card radius with the one card shadow
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  ok(await page.evaluate(() => {
+    const m = document.querySelector('.menu[role="menu"]');
+    const rows = [...m.querySelectorAll('button.list-item')];
+    const cs = getComputedStyle(m);
+    const radius = getComputedStyle(document.documentElement).getPropertyValue('--radius').trim();
+    return rows.map((r) => r.textContent).join('|') === 'Open in Telegram|Copy Link' &&
+      cs.borderTopLeftRadius === radius &&
+      cs.boxShadow !== 'none' &&
+      rows.every((r) => r.getBoundingClientRect().height >= 40);
+  }), 'channel: kebab opens the House Pour menu — Open in Telegram, Copy Link, 40pt rows');
+  // the only thing that animates on appear is the fade, and it settles opaque
+  await page.waitForFunction(() => {
+    const m = document.querySelector('.menu[role="menu"]');
+    const fading = m.closest('.menu-scrim') ?? m;
+    return getComputedStyle(fading).opacity === '1';
+  }, null, { timeout: 5000 });
+  ok(true, 'channel: the menu fades in and settles opaque');
+  await snap('channel-menu');
+
+  // outside click dismisses
+  await page.mouse.click(4, 4);
+  await page.waitForFunction(() => !document.querySelector('.menu[role="menu"]'), null, { timeout: 5000 });
+  ok(true, 'channel: outside click dismisses the menu');
+
+  // Escape dismisses
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.menu[role="menu"]'), null, { timeout: 5000 });
+  ok(true, 'channel: Escape dismisses the menu');
+
+  // §2.13 Copy Link — the tgsocial URL, not the t.me one, signed in as well
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  await page.click('.menu[role="menu"] button.list-item:has-text("Copy Link")');
+  await waitToast(/Link copied\./);
+  ok((await page.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/ana_notes', 'channel: Copy Link copies the tgsocial URL and toasts');
+
   await snap('channel');
   await page.click('#topbar-lead .btn');
   await waitText(/Ana Iliovic/);
@@ -829,17 +919,21 @@ try {
       dest: window.__tgsocial.app.pendingDest,
       tabs: !document.querySelector('#dock .tabs').hidden,
       status: document.getElementById('status').textContent,
-      copyLink: [...document.querySelectorAll('#view .profile-head button')].some((b) => /Copy Link/i.test(b.textContent)),
+      kebab: !![...document.querySelectorAll('#view .head-actions button.kebab')].length,
+      headerTelegram: [...document.querySelectorAll('#view .profile-head button')].some((b) => /Open in Telegram/i.test(b.textContent)),
       comments: document.querySelectorAll('#view article.post .post-foot .btn').length,
     }));
     ok(landed.path === '/f/waveloop_devlog' && landed.dest === null, 'public: the link stays in the address bar and is spent once');
     ok(landed.tabs && landed.status !== 'Public', 'public: the normal shell — floating tab bar, the real status pill');
     ok(landed.comments > 0, 'public: the Comment button is on the card, like every other screen');
-    ok(landed.copyLink, 'public: Copy Link is in the channel header on a public route');
+    ok(landed.kebab && !landed.headerTelegram, 'public: the header carries the kebab, not a standalone Open in Telegram');
     await snapPage(pub, 'public-channel');
 
-    // §2.13 Sharing — Copy Link copies the tgsocial URL, not the t.me one
-    await pub.locator('#view .profile-head button:has-text("Copy Link")').click();
+    // §2.13 Sharing — Copy Link lives in the kebab menu and copies the
+    // tgsocial URL, not the t.me one
+    await pub.click('#view .head-actions button.kebab');
+    await pub.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await pub.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
     await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent)
       && document.getElementById('toast').classList.contains('show'), null, { timeout: 6000 });
     const copiedPublic = await pub.evaluate(() => navigator.clipboard.readText());

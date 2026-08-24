@@ -468,16 +468,27 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 
 /* ── profile head (PRODUCT §2.5) ─────────────────────────────────────────── */
 
-.profile-head { text-align: center; }
-/* Channel header actions (PRODUCT §2.6): Open in Telegram, the `Copy Link`
-   ghost on a public route (§2.13), and the Verified pill. They centre and wrap
-   as whole pills — a button label never breaks across two lines. */
+.profile-head { position: relative; text-align: center; }
+/* Node profile actions (PRODUCT §2.5): they centre and wrap as whole pills —
+   a button label never breaks across two lines. */
 .profile-head .row {
   flex-wrap: wrap;
   justify-content: center;
   row-gap: var(--hp-space-btn-row-gap);
 }
 .profile-head .row .btn { white-space: nowrap; }
+/* Channel header corner (PRODUCT §2.6): the `Verified` pill and, right of it,
+   the kebab. In flow as the header's first row so it reserves its own height —
+   absolute positioning took it out of flow and painted the gold pill over the
+   centred 72pt avatar on narrow phones (≤375pt), where the card is too tight
+   for a full-width pill and a centred avatar to share one line. */
+.head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--hp-space-tabs-pad);
+  margin-bottom: var(--hp-space-tabs-pad);
+}
 .profile-head .avatar { margin: 0 auto var(--hp-space-row-gap); }
 .profile-head h1, .profile-head h2 { margin-bottom: var(--hp-space-tabs-pad); }
 .profile-head .mono { display: block; margin-bottom: var(--hp-space-row-gap); }

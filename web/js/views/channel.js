@@ -1,17 +1,17 @@
 /* PRODUCT §2.6 Feed channel — header + that channel's posts, newest first.
  *
- * Doubles as the public-link screen (PRODUCT §2.13): the same screen, with a
- * `Copy Link` ghost sm in the header when the route came in as /f/<channel>.
+ * The header's top-right corner carries the `Verified` gold pill (only when
+ * the feed is backlinked, PROTOCOL §3) and, right of it, the kebab menu —
+ * `Open in Telegram` and `Copy Link` (§2.13) live in there and nowhere else
+ * on this screen.
  */
-import { h, button, pill, replace } from '../../vendor/house-pour.js';
-import { hasBacklink, publicFeedUrl } from '../protocol.js';
-import { avatarFor, postCard, emptyCard, openInTelegramButton } from './shared.js';
+import { h, kebabMenu, pill, replace } from '../../vendor/house-pour.js';
+import { hasBacklink, publicFeedUrl, channelLink } from '../protocol.js';
+import { avatarFor, postCard, emptyCard, openExternal } from './shared.js';
 
 const PAGE = 20;
 
 export function render(app, { username }) {
-  // the public lens: reached through /f/<channel> rather than a hash route
-  const isPublic = !!app.route?.viaPath;
   const root = h('div');
   const head = h('div.card.profile-head', h('p.muted', 'Loading…'));
   const list = h('div');
@@ -39,14 +39,13 @@ export function render(app, { username }) {
     const nodes = Object.values(app.repo.cards).filter((c) => c.card?.feeds?.some((f) => f.toLowerCase() === info.username.toLowerCase()));
     const verified = nodes.some((n) => hasBacklink(info.description, n.username));
     replace(head,
+      h('div.head-actions',
+        verified ? pill('Verified', 'gold') : null,
+        channelMenu(app, info.username)),
       avatarFor(app, info.title, info.photo, 'profile'),
       h('h2', info.title),
       h('span.mono', `@${info.username}`),
       info.description ? h('p.muted', info.description) : null,
-      h('div.row',
-        openInTelegramButton(info.username),
-        isPublic ? copyLinkButton(app, info.username) : null,
-        verified ? pill('Verified', 'gold') : null),
     );
 
     session = app.repo.feedSession([info.username]);
@@ -82,19 +81,23 @@ export function render(app, { username }) {
   return root;
 }
 
-/** PRODUCT §2.13 Sharing — copies the tgsocial public link, not the t.me one. */
-function copyLinkButton(app, username) {
-  return button('Copy Link', {
-    style: 'ghost',
-    size: 'sm',
-    ariaLabel: `Copy the link to @${username}`,
-    onClick: async () => {
-      try {
-        await navigator.clipboard.writeText(publicFeedUrl(username));
-        app.toast('Link copied.', 'good');
-      } catch {
-        app.toast("Couldn't copy the link.", 'bad');
-      }
+/**
+ * PRODUCT §2.6 — the header kebab. `Copy Link` copies the tgsocial public
+ * link (§2.13), not the t.me one, on public routes and signed-in alike.
+ */
+function channelMenu(app, username) {
+  return kebabMenu([
+    { label: 'Open in Telegram', onSelect: () => openExternal(channelLink(username)) },
+    {
+      label: 'Copy Link',
+      onSelect: async () => {
+        try {
+          await navigator.clipboard.writeText(publicFeedUrl(username));
+          app.toast('Link copied.', 'good');
+        } catch {
+          app.toast("Couldn't copy the link.", 'bad');
+        }
+      },
     },
-  });
+  ], { label: `More for @${username}` });
 }

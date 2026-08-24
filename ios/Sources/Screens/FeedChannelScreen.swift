@@ -25,15 +25,21 @@ struct FeedChannelScreen: View {
         Screen(back: true, refresh: { await load(reset: true) }) {
             if let feed {
                 VStack(alignment: .leading, spacing: 0) {
-                    NodeAvatar(photo: feed.photo, size: HPTokens.Space.avatarProfile, initial: String(feed.title.prefix(1)))
+                    // §2.6: avatar left; the Verified pill and the kebab menu in the top right corner.
+                    HStack(alignment: .top, spacing: HPTokens.Space.rowGap) {
+                        NodeAvatar(photo: feed.photo, size: HPTokens.Space.avatarProfile, initial: String(feed.title.prefix(1)))
+                        Spacer(minLength: HPTokens.Space.rowGap)
+                        HStack(spacing: HPTokens.Space.rowGap) {
+                            if verifiedFor != nil { HPPill("Verified", tone: .gold) }
+                            HPMenu(items: [
+                                HPMenuItem("Open in Telegram") { model.open(DeepLink.chat(username: feed.username)) },
+                                HPMenuItem("Copy Link") { model.copyLink(PublicLink.feed(username: feed.username)) },
+                            ])
+                        }
+                    }
                     HPH2(feed.title).padding(.top, HPTokens.Space.rowPad)
                     HPMono("@" + feed.username)
                     if !feed.description.isEmpty { HPMuted(feed.description).padding(.top, HPTokens.Space.rowGap) }
-                    HStack(spacing: HPTokens.Space.rowGap) {
-                        HPButton("Open in Telegram", style: .ghost, size: .small) { model.open(DeepLink.chat(username: feed.username)) }
-                        if verifiedFor != nil { HPPill("Verified", tone: .gold) }
-                    }
-                    .padding(.top, HPTokens.Space.rowGap)
                 }
                 .padding(.bottom, HPTokens.Space.cardGap)
                 LazyVStack(alignment: .leading, spacing: 0) {

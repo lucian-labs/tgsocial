@@ -156,6 +156,118 @@ export function media(src, aspect, { mini = null } = {}) {
   return el;
 }
 
+// ── HPKebabButton / HPMenu ─────────────────────────────────────────────────
+
+/** Fade-out grace before the menu leaves the DOM — matches --motion-toast. */
+const MENU_FADE_MS = 220;
+
+/**
+ * HPKebabButton: the vertical three-dot button. 40pt ghost hit box; the dots
+ * are three token-coloured boxes drawn by the stylesheet, never a glyph, so
+ * nothing system-styled leaks in. Icon-only, so the label is required in
+ * spirit — it becomes the accessible name.
+ */
+export function kebabButton({ label = 'More', onClick } = {}) {
+  const el = h('button.kebab', { type: 'button', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': 'false' }, h('i'), h('i'), h('i'));
+  if (onClick) el.addEventListener('click', onClick);
+  return el;
+}
+
+/** The app column width, in px, read off the token — the compact-width line. */
+function columnMax() {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-column-max'));
+  return Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * HPMenu: a panel card of HPListItem rows, anchored under `anchor` (absolute,
+ * right-aligned) — or, when the viewport is narrower than the app column, a
+ * bottom sheet over a scrim. Dismisses on outside click, Escape and scroll.
+ *
+ * menu(items, { anchor, label, onClose }) → { root, card, close }
+ * items: [{ label, onSelect }]
+ */
+export function menu(items, { anchor = null, label = 'Menu', onClose = null } = {}) {
+  const card = h('div.menu', { role: 'menu', 'aria-label': label });
+  for (const item of items) {
+    const row = h('button.list-item', { type: 'button', role: 'menuitem' }, item.label);
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      close();
+      if (item.onSelect) item.onSelect();
+    });
+    card.append(row);
+  }
+
+  const compact = window.innerWidth <= columnMax();
+  if (compact) card.classList.add('sheet');
+  const root = compact ? h('div.menu-scrim', card) : card;
+  const host = compact ? document.getElementById('modal') || document.body : anchor || document.body;
+  host.append(root);
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointerdown', onOutside, true);
+    window.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('resize', onScroll);
+    root.classList.remove('show');
+    setTimeout(() => root.remove(), MENU_FADE_MS);
+    if (onClose) onClose();
+  };
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    close();
+  };
+  // Anything outside the card — the scrim included — dismisses. The anchor is
+  // exempt so the button's own click can toggle rather than close-then-reopen.
+  const onOutside = (e) => {
+    if (card.contains(e.target)) return;
+    if (anchor && anchor.contains(e.target)) return;
+    close();
+  };
+  const onScroll = () => close();
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('pointerdown', onOutside, true);
+  window.addEventListener('scroll', onScroll, { passive: true, capture: true });
+  window.addEventListener('resize', onScroll);
+  requestAnimationFrame(() => root.classList.add('show'));
+  return { root, card, close };
+}
+
+/**
+ * HPKebabMenu: the button and its menu as one element. Returns the anchor —
+ * drop it wherever the corner is. el.closeMenu() dismisses programmatically.
+ */
+export function kebabMenu(items, { label = 'More' } = {}) {
+  const wrap = h('div.menu-anchor');
+  let open = null;
+  const btn = kebabButton({
+    label,
+    onClick: () => {
+      if (open) {
+        open.close();
+        return;
+      }
+      btn.setAttribute('aria-expanded', 'true');
+      open = menu(items, {
+        anchor: wrap,
+        label,
+        onClose: () => {
+          open = null;
+          btn.setAttribute('aria-expanded', 'false');
+        },
+      });
+    },
+  });
+  wrap.append(btn);
+  wrap.closeMenu = () => open?.close();
+  return wrap;
+}
+
 // ── icons (inline SVG, currentColor — no emoji in chrome) ──────────────────
 
 const ICON_PATHS = {

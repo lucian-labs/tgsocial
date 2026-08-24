@@ -149,6 +149,13 @@ public enum HPMetric {
     public static let stopGlyph: CGFloat = 10
     /// HPMedia blur-up radius while the minithumbnail stands in.
     public static let mediaBlur: CGFloat = 12
+    /// HPKebabButton (PRODUCT §2.6): three faint dots stacked inside the 40pt target.
+    public static let kebabDots: Int = 3
+    public static let kebabDot: CGFloat = 4
+    public static let kebabDotGap: CGFloat = 3
+    /// HPMenu: the anchored card's width, and the swipe-down distance that dismisses the sheet.
+    public static let menuWidth: CGFloat = 240
+    public static let menuDismissDrag: CGFloat = 40
 }
 
 // MARK: - Opacity steps used by the kit (documented in COMPONENTS.md)

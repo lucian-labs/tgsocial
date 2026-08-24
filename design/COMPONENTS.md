@@ -117,6 +117,37 @@ ring, initial set in `h2` (size 36) / `h1` (size 72) display serif, muted.
 **HPMedia(image, aspect)** — full width, `Radius.media`, `bg2` placeholder
 while loading, no border, no shadow.
 
+**HPKebabButton(label, action)** — the vertical three-dot button (PRODUCT
+§2.6). Ghost: no fill, no border, `Radius.pill`, three `faint` dots `pillY` (4)
+across stacked with a 3pt gap — an 18pt column of dots centred in a `touchMin`
+(40) hit box. The dots are drawn from tokens, never a glyph, icon font or
+emoji. The dots step up on interaction over `Motion.color` — ink while pressed
+(native), muted on hover and while the menu is open (web) — and the button
+carries the ghost press translate. Icon-only, so the label is the accessible
+name and defaults to `More`. Web:
+`.kebab` (three `<i>` boxes) inside `.menu-anchor`.
+
+**HPMenu(items)** — the menu a kebab opens (PRODUCT §2.6). The card is an
+`HPCard` surface: `panel`, 1pt `line`, `Radius.card`, the one card shadow
+(`Shadow.contact` + `Shadow.cast`). It holds one **HPMenuItem** per action —
+an `HPListItem` row, `body` text in ink, `touchMin` minimum height, hairline
+`line` between rows and none under the last. Two presentations, split at
+`columnMax` (540):
+
+- **Anchored** (wider than the column): hangs under the button, right edges
+  aligned, `rowGap` below it, `menuWidth` (240 = 6 × `touchMin`) wide — a
+  floor, not a cap, on the kits whose rows size to their text, and never wider
+  than `columnMax`. Flips above the button when it would fall off the bottom.
+- **Sheet** (at `columnMax` or narrower — every phone): the same card docked to
+  the bottom edge over the `scrim`, `columnSide` inset, `columnMax` at most.
+
+Only the surface fades (`Motion.toast`); it never slides, scales, or moves —
+rule 4 holds here too. Dismissal: a tap outside the card, `Escape` (web), the
+back gesture (Android), a swipe down past `menuDismissDrag` (40 — one hit
+target) on the sheet, or a scroll of the page behind it (web). Never the
+platform's own menu — SwiftUI `Menu` and Compose `DropdownMenu` both paint
+system chrome. Web: `.menu` anchored, `.menu.sheet` inside `.menu-scrim`.
+
 **HPStepper** — from upstream; not used in tgsocial v1 but kept in the kit.
 
 ## Composite (product-level, built from the above)
