@@ -154,7 +154,43 @@ channel:
 
 Name is the node card's `name` (falls back to `@username`), body 600, tap →
 node profile. The subheading is the channel: its title in mono small muted,
-tap → feed channel screen (2.6). Avatar 36pt = the node's photo.
+tap → feed channel screen (2.6).
+
+**The avatar is the source channel, 36pt.** A node is an *aggregate* — a
+person's channels merged into one stream — so the avatar's job on a post is
+to say *which channel this came from*. It is the only thing distinguishing
+two posts by the same person from different feeds, and on a person page that
+is the distinction that matters. The name beside it stays the person.
+
+Fallback chain, since any of these can be missing:
+
+1. the **source channel's** photo;
+2. else the node's own photo;
+3. else the initial, in the display serif.
+
+Telegram serves a **generated letter avatar** for a channel with no photo — a
+`data:image/svg+xml` image on a `bgcolorN` element. That is not a photo:
+treat it as absent and fall through, or every unphotographed channel renders
+Telegram's letter instead of ours. (Public pages read this from the preview;
+the app reads `chat.photo`, which is simply null in that case.)
+
+On a single-channel screen (§2.6) every post carries the same avatar, which
+is redundant but correct — the rule is one rule everywhere, not a special
+case per screen.
+
+**Header metrics.** The header is one row: avatar, then the name/channel
+stack, then the time and Share. The stack is **tight** — name at the body
+line height, channel directly under it at the mono-small line height, no
+extra leading between them — and the avatar is centred against that stack,
+not pinned above it. The whole header measures about one avatar tall; a
+header appreciably taller than its own avatar means something in it has been
+inflated.
+
+The 40pt hit target (`COMPONENTS.md` rule 6) is **an overlay, not a box**:
+extend the tappable area beyond the element's painted bounds, and never by
+growing the line box a text element occupies. Padding a 13pt subheading to
+40pt tall and pulling it back with a negative margin does satisfy the rule
+and does wreck the rhythm — it leaves a 47pt box around 19pt of text.
 
 **Time is relative.** `now` (<60 s), `5m ago`, `2h ago`, `3d ago`, `2w ago`
 (<8 w), `4mo ago` (<12 mo), `2y ago` — mono faint, top right. Derive, never
