@@ -642,6 +642,22 @@ try {
   // §2.3 attribution: the node the post reaches me through leads, the channel is the subheading
   ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].some((a) => a.querySelector('.post-title')?.textContent === 'Elijah Lucian' && a.querySelector('.post-sub')?.textContent === 'WaveLoop devlog')), 'feed: my feed attributes to me with the channel subheading');
   ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].some((a) => a.querySelector('.post-title')?.textContent === 'Ana Iliovic' && a.querySelector('.post-sub')?.textContent === "Ana's notes")), 'feed: followed node leads their feed\'s posts');
+  // §2.3 the avatar is the SOURCE CHANNEL: a node is an aggregate, so the face
+  // is the only thing telling two posts by the same person from different
+  // feeds apart. Same name, different channel ⇒ different face.
+  await page.waitForFunction(() => [...document.querySelectorAll('#view article.post .post-head .avatar')].every((a) => !!a.querySelector('img')), null, { timeout: 15000 });
+  const mineByFeed = await page.evaluate(() => {
+    const byFeed = {};
+    for (const a of document.querySelectorAll('#view article.post')) {
+      if (a.querySelector('.post-title')?.textContent !== 'Elijah Lucian') continue;
+      const feed = a.querySelector('.post-sub')?.textContent ?? '';
+      byFeed[feed] = a.querySelector('.post-head .avatar img')?.src ?? null;
+    }
+    return byFeed;
+  });
+  const feedFaces = Object.values(mineByFeed);
+  ok(Object.keys(mineByFeed).length >= 2 && feedFaces.every(Boolean) && new Set(feedFaces).size === feedFaces.length,
+    `feed: one person, ${Object.keys(mineByFeed).length} feeds, ${new Set(feedFaces).size} faces — the avatar is the source channel (${Object.keys(mineByFeed).join(', ')})`);
   ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post .post-time')].every((t) => /^(now|\d+(m|h|d|w|mo|y) ago)$/.test(t.textContent))), 'feed: relative time, largest unit only');
   ok(/❤ 14/.test(feedText) && /\d+ comments/.test(feedText), 'feed: footer counts — reactions · comments');
   ok(!/views/.test(feedText), 'feed: no views on the card face');
@@ -1164,12 +1180,19 @@ try {
           gif: post(crow, 3)?.album[0] ?? null,
           photo: post(crow, 4)?.album[0] ?? null,
           summary: post(crow, 5)?.album[0] ?? null,
+          // §2.3: the source channel's photo travels with every post it parses
+          face: crow.channel.photo?.url ?? null,
+          postFace: crow.posts[0]?.avatar?.url ?? null,
         },
         dank: {
           n: dank.posts.length,
           card: dank.card,
           isCard: dank.posts[0]?.isCard ?? null,
           title: dank.channel.title,
+          // no photo of its own: t.me answers with a GENERATED letter avatar,
+          // which is not a photo (§2.3)
+          face: dank.channel.photo,
+          postFace: dank.posts[0]?.avatar ?? null,
         },
         tg: {
           n: tg.posts.length,
@@ -1201,6 +1224,21 @@ try {
             tme: item('https://t.me/probe/1'),
             cdn: item('https://cdn4.telesco.pe/file/invoice.pdf'),
           };
+        })(),
+        // Telegram serves a channel with no photo a GENERATED letter avatar —
+        // a data:image/svg+xml on a bgcolorN element — so photographed and
+        // unphotographed channels differ only in the src. Read as a photo it
+        // would win §2.3's fallback chain and paint Telegram's letter where
+        // ours belongs, so it has to parse as ABSENT, by both routes.
+        letterAvatar: (() => {
+          const LETTER = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYwIi8+';
+          const REAL = 'https://cdn1.telesco.pe/file/real.jpg';
+          const page = (img, og) => `<html><head><meta property="og:image" content="${og}"></head><body>`
+            + `<main class="tgme_main"><div class="tgme_channel_info"><div class="tgme_page_photo">`
+            + `<i class="tgme_page_photo_image bgcolor1" data-content="E"><img src="${img}"></i>`
+            + `</div><div class="tgme_channel_info_header_title">Probe</div></div></main></body></html>`;
+          const face = (img, og) => parsePreview(page(img, og), 'probe').channel.photo?.url ?? null;
+          return { generated: face(LETTER, LETTER), real: face(REAL, ''), ogOnly: face(LETTER, REAL) };
         })(),
         garbage: parsePreview('<html><body>not telegram at all</body></html>', 'nope').unavailable
           && parsePreview('', 'nope').unavailable && parsePreview(null, 'nope').unavailable,
@@ -1239,6 +1277,14 @@ try {
       'preview: the card is extracted from the channel and parsed by parseCard');
     ok(parsed.dank.n === 1 && parsed.dank.isCard === true && parsed.dank.title === 'Elijah',
       'preview: the pinned-message service block is skipped, the card message is flagged');
+    ok(/^https:\/\/cdn\d*\.telesco\.pe\//.test(crow.face ?? '') && crow.postFace === crow.face,
+      'preview: the channel photo is parsed and carried onto every post as its source-channel face');
+    ok(parsed.dank.face === null && parsed.dank.postFace === null,
+      "preview: @tgs_dankcoin's generated letter avatar parses as no photo at all");
+    ok(parsed.letterAvatar.generated === null
+      && parsed.letterAvatar.real === 'https://cdn1.telesco.pe/file/real.jpg'
+      && parsed.letterAvatar.ogOnly === 'https://cdn1.telesco.pe/file/real.jpg',
+      'preview: a data: letter avatar is absent by either route; a real CDN photo is not');
     ok(parsed.tg.n === 20 && parsed.tg.nextBefore === 435 && parsed.tg.newestFirst,
       `preview: telegram parses 20 posts newest-first, next page before=${parsed.tg.nextBefore}`);
     ok(parsed.tg.kinds.includes('photo') && parsed.tg.kinds.includes('video') && parsed.tg.previews.length > 0
@@ -1373,6 +1419,97 @@ try {
     ok(person.title === 'Elijah' && person.sub === 'tastycrow',
       `public: attribution — the person leads (${person.title}), the channel follows (${person.sub})`);
     await snapPage(pub, 'public-person');
+
+    // ── §2.3 the avatar is the SOURCE CHANNEL, and the header is one row ────
+    // @tgs_dankcoin has no photo of its own, so the only face that can appear
+    // on these cards is @tastycrow's: the node's own head below shows the
+    // fallback initial, the post's shows the channel's CDN photo.
+    const faces = await pub.evaluate(() => {
+      const face = (av) => ({
+        img: av?.querySelector('img')?.getAttribute('src') ?? null,
+        initial: av?.querySelector('span')?.textContent ?? null,
+      });
+      return {
+        node: face(document.querySelector('#view .profile-head .avatar')),
+        post: face(document.querySelector('#view article.post .post-head .avatar')),
+      };
+    });
+    ok(faces.node.img === null && faces.node.initial === 'E',
+      'public: @tgs_dankcoin has no photo — its head falls through to the initial');
+    ok(/^https:\/\/cdn\d*\.telesco\.pe\//.test(faces.post.img ?? '') && faces.post.initial === null,
+      `public: the post avatar is the source channel's photo, not the node's letter (${faces.post.img?.slice(8, 28)}…)`);
+
+    /**
+     * The header, measured rather than eyeballed. Two things are being held
+     * apart here (§2.3): the ROW must be as tall as the name/channel stack
+     * needs and no taller, and every control in it must still expose a 40pt
+     * target. Those pull against each other, which is exactly why the target
+     * is an overlay — so the check for it cannot be `getBoundingClientRect` on
+     * the painted box. It walks out from each control's centre with
+     * elementFromPoint until a point stops resolving to that control, and
+     * bisects the last pixel; what comes back is the area a thumb actually
+     * lands on, overlaps with neighbours already resolved.
+     */
+    const header = await pub.evaluate(() => {
+      const post = document.querySelector('#view article.post');
+      post.scrollIntoView({ block: 'center' });
+      const head = post.querySelector('.post-head');
+      const box = (el) => el.getBoundingClientRect();
+      const line = (el) => Number.parseFloat(getComputedStyle(el).lineHeight);
+      const reach = (el, axis, dir) => {
+        const b = box(el);
+        const cx = b.left + b.width / 2;
+        const cy = b.top + b.height / 2;
+        const owns = (d) => {
+          const hit = axis === 'y'
+            ? document.elementFromPoint(cx, cy + dir * d)
+            : document.elementFromPoint(cx + dir * d, cy);
+          return !!hit && (hit === el || el.contains(hit));
+        };
+        if (!owns(0)) return 0;
+        let lo = 0;
+        while (lo < 80 && owns(lo + 1)) lo += 1;
+        let hi = lo + 1;
+        for (let i = 0; i < 14; i += 1) {
+          const mid = (lo + hi) / 2;
+          if (owns(mid)) lo = mid; else hi = mid;
+        }
+        return lo;
+      };
+      const hit = (el) => ({
+        v: +(reach(el, 'y', -1) + reach(el, 'y', 1)).toFixed(2),
+        h: +(reach(el, 'x', -1) + reach(el, 'x', 1)).toFixed(2),
+      });
+      const av = head.querySelector('.avatar');
+      const title = head.querySelector('.post-title');
+      const sub = head.querySelector('.post-sub');
+      const time = head.querySelector('.post-time');
+      const share = [...head.querySelectorAll('button.btn')].find((b) => /Share/i.test(b.textContent));
+      const n = (x) => +x.toFixed(2);
+      return {
+        head: n(box(head).height),
+        avatar: n(box(av).height),
+        stack: n(line(title) + line(sub)),
+        titleBox: n(box(title).height),
+        titleLine: n(line(title)),
+        subBox: n(box(sub).height),
+        subLine: n(line(sub)),
+        timeBox: n(box(time).height),
+        gap: n(box(sub).top - box(title).bottom),
+        offCentre: n(Math.abs((box(av).top + box(av).bottom) / 2 - (box(head).top + box(head).bottom) / 2)),
+        hits: { title: hit(title), sub: hit(sub), time: hit(time), share: hit(share) },
+      };
+    });
+    ok(Math.abs(header.head - header.stack) <= 1 && header.head - header.avatar <= 8,
+      `§2.3 header: ${header.head}px for a ${header.avatar}px avatar — the stack's own two lines (${header.stack}), about one avatar tall`);
+    ok(Math.abs(header.titleBox - header.titleLine) < 0.5 && Math.abs(header.subBox - header.subLine) < 0.5
+      && Math.abs(header.timeBox - header.subLine) < 0.5,
+      `§2.3 header: no inflated line boxes — name ${header.titleBox}/${header.titleLine}, channel ${header.subBox}/${header.subLine}, time ${header.timeBox}`);
+    ok(Math.abs(header.gap) < 0.5, `§2.3 header: the channel sits directly under the name, no extra leading (${header.gap}px)`);
+    ok(header.offCentre < 0.5, `§2.3 header: the avatar is centred against the stack, not pinned to its top (${header.offCentre}px off)`);
+    for (const [what, area] of Object.entries(header.hits)) {
+      ok(area.v >= 40 && area.h >= 40, `rule 6: ${what} still exposes a ${area.h}×${area.v} hit area past its painted bounds`);
+    }
 
     // Copy Link: /u/<name> on a person page, /f/<channel> on a channel page
     await pub.click('#view .head-actions button.kebab');

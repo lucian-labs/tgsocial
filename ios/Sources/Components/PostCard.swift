@@ -1,7 +1,7 @@
-// Components — PostCard (PRODUCT.md §2.3, COMPONENTS.md "Composite"). The header is the NODE the
-// post reaches you through (the person leads, the channel follows); time is relative; Share sits
-// right of the time; the footer is counts + Comment. Long-press opens the post sheet — the only
-// place Open in Telegram appears on a post.
+// Components — PostCard (PRODUCT.md §2.3, COMPONENTS.md "Composite"). The name is the NODE the post
+// reaches you through (the person leads, the channel follows) and the avatar is the SOURCE CHANNEL
+// the post came from; time is relative; Share sits right of the time; the footer is counts +
+// Comment. Long-press opens the post sheet — the only place Open in Telegram appears on a post.
 
 import SwiftUI
 
@@ -14,32 +14,16 @@ struct PostCard: View {
 
     var body: some View {
         HPCard {
-            header
+            // Rule 6's tiling half: the header does not own all of its own hit targets, so the card
+            // holds `PostHeaderBottomGap` clear of tap surfaces under it. See the modifier.
+            header.postHeaderBottomBand()
 
-            // Body text (tap → Thread screen, long-press → post sheet, PRODUCT §2.3). Plain
-            // gestures, not a Button: a child Button would claim the touch and the card's
-            // long-press could never fire over the dominant press surface. Mirrors Android's
-            // combinedClickable on the text (PostCard.kt).
             if !post.text.isEmpty || post.forwardedFrom?.isEmpty == false {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let from = post.forwardedFrom, !from.isEmpty {
-                        HPMuted("Forwarded from \(from)")
-                            .padding(.top, HPTokens.Space.rowPad)
-                    }
-                    if !post.text.isEmpty {
-                        RichTextView(text: post.text)
-                            .padding(.top, HPTokens.Space.rowPad)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { openThread() }
-                .onLongPressGesture { model.modal = .postSheet(post) }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(inThread ? "Post text" : "Open thread")
-                .accessibilityAction { openThread() }
-                .accessibilityAction(named: "Post details") { model.modal = .postSheet(post) }
+                PostTextBlock(text: post.text,
+                              forwardedFrom: post.forwardedFrom,
+                              label: inThread ? "Post text" : "Open thread",
+                              onOpen: { openThread() },
+                              onDetails: { model.modal = .postSheet(post) })
             }
 
             // Media (PRODUCT §2.11): everything opens or plays inside the app.
@@ -59,55 +43,29 @@ struct PostCard: View {
 
     /// Attributed → the node's name; else the channel title, no subheading.
     private var headerName: String { post.authorName ?? post.sourceTitle }
-    private var headerPhoto: PhotoRef? { post.authorUsername == nil ? post.sourcePhoto : post.authorPhoto }
+
+    /// PRODUCT §2.3: the avatar is the **source channel** — its photo first, the node's photo
+    /// second, the initial last. See `Attribution.avatarPhoto` for why a channel with no photo
+    /// arrives as nil rather than as Telegram's generated letter.
+    private var headerPhoto: PhotoRef? {
+        Attribution.avatarPhoto(sourcePhoto: post.sourcePhoto, nodePhoto: post.authorPhoto)
+    }
+
     private var headerInitial: String {
         let trimmed = headerName.hasPrefix("@") ? String(headerName.dropFirst()) : headerName
         return String(trimmed.prefix(1))
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
-                // Avatar + name are one 40pt-minimum target (COMPONENTS.md rule 6): the node's
-                // profile when attributed, the feed channel otherwise.
-                Button { openHeader() } label: {
-                    HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
-                        NodeAvatar(photo: headerPhoto, size: HPTokens.Space.avatarRow, initial: headerInitial)
-                        HPBody(headerName, strong: true)
-                            .lineLimit(1)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .frame(minHeight: HPTokens.Space.touchMin)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open \(headerName)")
-                Spacer(minLength: HPTokens.Space.rowGap)
-                // Relative time, mono faint, refreshed each minute while visible.
-                TimelineView(.everyMinute) { context in
-                    HPMonoSmall(PostTime.relative(unix: post.date, now: context.date), color: HPTokens.Colors.faint)
-                }
-                shareButton
-            }
-            // Subheading: the channel, mono small muted, tap → feed channel screen (§2.6).
-            if post.authorUsername != nil {
-                Button { onOpenFeed(post.sourceUsername) } label: {
-                    HPMonoSmall(post.sourceTitle)
-                        .lineLimit(1)
-                        .contentShape(Rectangle())
-                        // COMPONENTS.md rule 6: 40pt minimum hit target. The header stays
-                        // compact, so grow the tappable area with a clear overlay instead
-                        // of inflating the layout.
-                        .overlay {
-                            Color.clear
-                                .frame(height: HPTokens.Space.touchMin)
-                                .contentShape(Rectangle())
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open \(post.sourceTitle)")
-                .padding(.leading, HPTokens.Space.avatarRow + HPTokens.Space.rowGap)
-            }
+        PostHeader(name: headerName,
+                   // Unattributed posts fall back to the channel itself: channel photo + title,
+                   // no subheading (PRODUCT §2.3 "Attribution").
+                   channel: post.authorUsername == nil ? nil : post.sourceTitle,
+                   date: post.date,
+                   shareURL: DeepLink.url(post.deepLink),
+                   onOpenName: { openHeader() },
+                   onOpenChannel: { onOpenFeed(post.sourceUsername) }) {
+            NodeAvatar(photo: headerPhoto, size: HPTokens.Space.avatarRow, initial: headerInitial)
         }
     }
 
@@ -116,24 +74,6 @@ struct PostCard: View {
             model.path.append(.profile(username: author))
         } else {
             onOpenFeed(post.sourceUsername)
-        }
-    }
-
-    /// Share — ghost small button right of the time (§2.3): the system share sheet with the
-    /// post's t.me link.
-    @ViewBuilder private var shareButton: some View {
-        if let url = DeepLink.url(post.deepLink) {
-            ShareLink(item: url) {
-                Text("Share")
-                    .hpStyle(HPType.buttonSm, color: HPTokens.Colors.muted)
-                    .lineLimit(1)
-                    .padding(.vertical, HPTokens.Space.buttonSmY)
-                    .padding(.horizontal, HPTokens.Space.buttonSmX)
-                    .frame(minHeight: HPTokens.Space.touchMin)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(HPPressStyle())
-            .accessibilityLabel("Share")
         }
     }
 
@@ -196,6 +136,52 @@ struct PostCard: View {
 
     /// Up to this many distinct reactions render as emoji + count; more collapse to the sum.
     static let fewReactions = 3
+}
+
+/// The post's own text (PRODUCT §2.3): tap → Thread screen, long-press → post sheet. Plain
+/// gestures, not a Button: a child Button would claim the touch and the card's long-press could
+/// never fire over the dominant press surface. Mirrors Android's combinedClickable on the text
+/// (PostCard.kt).
+///
+/// **Its tap surface stops at its glyphs.** The `rowPad` gap above the text is applied outside the
+/// content shape, so the band between the header and the text belongs to the header's hit regions
+/// (COMPONENTS.md rule 6: regions tile, they never overlap). With the padding inside the shape this
+/// block claimed the band, and — being laid out after the header — took every touch in it: the
+/// channel subheading's region, the bottom of the avatar's and the bottom of Share's. A control's
+/// region is only worth the space its neighbours leave clear.
+///
+/// Split out of `PostCard` so `PostHeaderHitRegionTests` can host the real block against the real
+/// header without an `AppModel`; a hand-copied stand-in would only prove the copy.
+struct PostTextBlock: View {
+    let text: RichText
+    let forwardedFrom: String?
+    /// `Post text` on the Thread screen's own post, `Open thread` everywhere else.
+    let label: String
+    let onOpen: () -> Void
+    let onDetails: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HPTokens.Space.rowPad) {
+            if let forwardedFrom, !forwardedFrom.isEmpty {
+                HPMuted("Forwarded from \(forwardedFrom)")
+            }
+            if !text.isEmpty {
+                RichTextView(text: text)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .hpTouchRegion(PostCardRegion.text)
+        .onTapGesture { onOpen() }
+        .onLongPressGesture { onDetails() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(label)
+        .accessibilityAction { onOpen() }
+        .accessibilityAction(named: "Post details") { onDetails() }
+        // Outside the shape above, on purpose. See the note in this type's documentation.
+        .padding(.top, HPTokens.Space.rowPad)
+    }
 }
 
 /// The long-press post sheet (PRODUCT §2.3): a House Pour modal with the exact timestamp, views,

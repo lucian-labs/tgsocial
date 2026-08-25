@@ -3,6 +3,9 @@
 // Every value here is a token; nothing is typed by hand.
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// `HPTokens.Type` is the generated type ramp. Swift cannot spell a nested type named `Type` without
 /// backticks, so the kit refers to it through this alias everywhere.
@@ -101,10 +104,135 @@ public extension View {
         overlay(shape.strokeBorder(color, lineWidth: HPTokens.borderWidth))
     }
 
-    /// 40pt minimum hit target (COMPONENTS.md rule 6).
+    /// 40pt minimum hit target (COMPONENTS.md rule 6) as a *box*: the layout grows to the target.
+    /// Right for chrome that owns its space (a kebab, a toggle); wrong for a line of text — see
+    /// `hpTouchOverlay`.
     func hpTouchTarget() -> some View {
         frame(minWidth: HPTokens.Space.touchMin, minHeight: HPTokens.Space.touchMin)
             .contentShape(Rectangle())
+    }
+
+    /// 40pt minimum hit target as an **overlay, not a box** (PRODUCT §2.3 "Header metrics"). The
+    /// tappable area extends past the painted bounds; the laid-out size is untouched, so a 13pt
+    /// subheading stays 13pt tall and still answers to a 40pt touch.
+    ///
+    /// `anchor` pins the overlay to one edge of the label so stacked controls grow *away* from each
+    /// other: `.bottomLeading` grows the target upwards, `.topLeading` downwards. Two controls one
+    /// line apart can then each claim `touchMin` without either covering the other's glyphs.
+    ///
+    /// **A region only exists where its container leaves the space clear.** An overlay that reaches
+    /// past its own view's bounds lands on whatever else is laid out there, and between siblings the
+    /// one laid out *later* takes the touch — so an overlay grown into a neighbour's tap surface buys
+    /// the control nothing at all. The container owes the overhang: see `hpHitBandBelow` for the
+    /// band it holds clear, and assert the result with `hpMeasureTouchTargets` rather than trusting
+    /// the overlay's own reported size, which is the same 40pt whether or not anything reaches it.
+    func hpTouchOverlay(_ anchor: Alignment = .center, label: String = "") -> some View {
+        contentShape(Rectangle())
+            .overlay(alignment: anchor) { HPTouchOverlay(label: label) }
+    }
+
+    /// Reports this view's own rect through `HPTouchTargetKey` under `hpMeasureTouchTargets`, so a
+    /// test can prove a neighbouring control's region does not reach into this one's tap surface.
+    /// Never affects hit testing or layout; off in the app.
+    func hpTouchRegion(_ label: String) -> some View {
+        background { HPTouchProbe(label: label) }
+    }
+}
+
+public extension HPTextStyle {
+    /// The line box one line of this style actually paints into, at scale 1.
+    ///
+    /// SwiftUI takes a single line's height from the face's own metrics — the ramp's `lineHeight`
+    /// only spaces lines *apart* (`lineSpacing`) — so this asks the font rather than multiplying the
+    /// token the way Compose can (there the ramp sets an explicit line height and gets
+    /// `size × lineHeight`). A layout that has to reserve room around a line needs the height the
+    /// text will really occupy, not the one the ramp names.
+    var hpLineBox: CGFloat {
+        #if canImport(UIKit)
+        if let font = UIFont(name: HPFont.name(face: face, weight: weight), size: size) {
+            return font.lineHeight
+        }
+        #endif
+        return size * lineHeight
+    }
+}
+
+/// COMPONENTS.md rule 6, the **tiling** half — the band a `touchMin` region anchored to the top of
+/// `contentHeight` needs *below* it: everything of `min` the line box does not already provide.
+///
+/// An overlay is only as big as what will actually reach it. Between siblings the later-placed one
+/// takes every point the two share, so a sibling whose tap surface starts inside this band wins it
+/// and the control ships smaller than `min` however big the overlay measured — 40pt in a layout
+/// assertion, 14pt under a finger, with the missing 26pt firing the neighbour's action. Hold the
+/// band clear of anything tappable and the boundary between the two is a line, not an overlap.
+public func hpHitBandBelow(_ contentHeight: CGFloat, min: CGFloat = HPTokens.Space.touchMin) -> CGFloat {
+    Swift.max(0, min - contentHeight)
+}
+
+/// The clear `touchMin` × `touchMin` region `hpTouchOverlay` lays over a control.
+public struct HPTouchOverlay: View {
+    let label: String
+    public init(label: String = "") { self.label = label }
+    public var body: some View {
+        Color.clear
+            .frame(minWidth: HPTokens.Space.touchMin, minHeight: HPTokens.Space.touchMin)
+            .contentShape(Rectangle())
+            .hpTouchRegion(label)
+    }
+}
+
+/// Measures the rect of whatever it is attached to, in `HPTouch.space`, and reports it through
+/// `HPTouchTargetKey` when `hpMeasureTouchTargets` is on — so a test can assert the real hit area of
+/// a shipped screen *in the place it ships*, neighbours included. A hit target that only exists in a
+/// comment is a hit target nobody can check, and a target measured with no neighbours around it is a
+/// target nobody has hit-tested. The report is off in the app: it costs a preference per control and
+/// buys the app nothing. The geometry is identical either way.
+public struct HPTouchProbe: View {
+    @Environment(\.hpMeasureTouchTargets) private var measure
+    let label: String
+    public init(label: String) { self.label = label }
+    public var body: some View {
+        if measure {
+            GeometryReader { geo in
+                Color.clear.preference(key: HPTouchTargetKey.self,
+                                       value: [HPTouchRegion(label: label, rect: geo.frame(in: .named(HPTouch.space)))])
+            }
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+/// One measured region: which control, and the rect it covers in `HPTouch.space`.
+public struct HPTouchRegion: Equatable, Sendable {
+    public let label: String
+    public let rect: CGRect
+    public init(label: String, rect: CGRect) { self.label = label; self.rect = rect }
+}
+
+public enum HPTouch {
+    /// The coordinate space measured regions are reported in. A test harness marks its root with
+    /// `hpTouchSpace()`; rects from different controls are then directly comparable.
+    public static let space = "hpTouchTargets"
+}
+
+public extension View {
+    /// Roots the coordinate space `HPTouchProbe` reports in. Test harnesses only.
+    func hpTouchSpace() -> some View { coordinateSpace(name: HPTouch.space) }
+}
+
+/// Every hit region measured under `hpMeasureTouchTargets`, in tree order.
+public struct HPTouchTargetKey: PreferenceKey {
+    public static var defaultValue: [HPTouchRegion] = []
+    public static func reduce(value: inout [HPTouchRegion], nextValue: () -> [HPTouchRegion]) { value += nextValue() }
+}
+
+private struct HPMeasureTouchTargetsKey: EnvironmentKey { static let defaultValue = false }
+
+public extension EnvironmentValues {
+    /// Test seam (see `HPTouchProbe`). Never set by the app.
+    var hpMeasureTouchTargets: Bool {
+        get { self[HPMeasureTouchTargetsKey.self] }
+        set { self[HPMeasureTouchTargetsKey.self] = newValue }
     }
 }
 

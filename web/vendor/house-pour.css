@@ -563,6 +563,30 @@ label.field {
   text-decoration: none;
 }
 
+/* ── HPHitTarget (.hit-min): rule 6 as an OVERLAY, not as a taller box ────── */
+
+/* A pill button can simply BE 40pt tall — that is its drawn shape. A line of
+   text cannot: a name and a channel stacked in a post header (PRODUCT §2.3), a
+   timestamp, a small ghost button sharing that row. Growing their line boxes to
+   touchMin is what leaves a 13pt subheading sitting in a 47pt box, so those
+   controls paint at their natural size and carry the target as a transparent
+   pseudo-element that reaches PAST the painted bounds instead.
+
+   The region is at least touchMin on each axis and centred on the box.
+   `--hit-top` / `--hit-left` slide it: two controls stacked closer together
+   than 2 × touchMin have to TILE their regions (each keeps a full touchMin,
+   the boundary between them is a line, not an overlap) rather than fight over
+   the middle, where whichever paints last would swallow the other's half. */
+.hit-min { position: relative; }
+.hit-min::after {
+  content: '';
+  position: absolute;
+  width: max(100%, var(--space-touch-min));
+  height: max(100%, var(--space-touch-min));
+  top: var(--hit-top, calc((100% - max(100%, var(--space-touch-min))) / 2));
+  left: var(--hit-left, calc((100% - max(100%, var(--space-touch-min))) / 2));
+}
+
 /* ── HPButton ghost: transparent, muted, no border (neutral is the outline) ─ */
 
 .btn.ghost { border-color: transparent; }

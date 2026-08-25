@@ -206,7 +206,7 @@ export function postCard(app, post, { thread = true } = {}) {
   // channel is the subheading. Unattributed → the channel itself, no subheading.
   const attributed = !!post.node;
   const name = attributed ? post.nodeName || `@${post.node}` : post.title || `@${post.username}`;
-  const title = h('button.post-title', {
+  const title = h('button.post-title.hit-min', {
     type: 'button',
     'aria-label': attributed ? `Open ${name}` : `Open ${post.title} feed`,
     onclick: (e) => {
@@ -214,24 +214,41 @@ export function postCard(app, post, { thread = true } = {}) {
       if (attributed) app.openNode(post.node);
       else app.openChannel(post.username);
     },
-  }, name);
+    // the label truncates in its own span so the control can keep its
+    // overflow visible — a clipped control clips its .hit-min overlay away
+  }, h('span', name));
   const sub = attributed
-    ? h('button.post-sub', {
+    ? h('button.post-sub.hit-min', {
       type: 'button',
       'aria-label': `Open ${post.title || post.username} feed`,
       onclick: (e) => {
         e.stopPropagation();
         app.openChannel(post.username);
       },
-    }, post.title || `@${post.username}`)
+    }, h('span', post.title || `@${post.username}`))
     : null;
 
+  const share = button('Share', { style: 'ghost', size: 'sm', ariaLabel: 'Share this post', onClick: () => sharePost(app, post) });
+  // rule 6 without a taller row: Share paints at its own size here (see app.css)
+  share.classList.add('hit-min');
+
   const head = h('div.post-head',
-    avatarFor(app, name, attributed ? post.nodeAvatar : post.avatar, 'row'),
+    // §2.3 — the avatar is the SOURCE CHANNEL, not the person. A node is an
+    // aggregate of a person's channels, so the face is the only thing that
+    // tells two posts by the same person from different feeds apart; the name
+    // beside it stays the person. Fallback chain, since any of these can be
+    // missing: the source channel's photo → the node's own photo → the initial
+    // (which follows the name, because that is the identity the face degraded
+    // to). `post.avatar` is null when the channel has no photo — TDLib says
+    // chat.photo == null, the preview parser refuses Telegram's generated
+    // letter avatar (js/public/preview.js).
+    avatarFor(app, name, post.avatar ?? post.nodeAvatar, 'row'),
     h('div.post-head-text', title, sub),
     h('div.post-head-trail',
-      h('div.post-time', formatTime(new Date(post.date * 1000))),
-      button('Share', { style: 'ghost', size: 'sm', ariaLabel: 'Share this post', onClick: () => sharePost(app, post) }),
+      // the time is the handle for the long-press sheet, where the exact
+      // timestamp lives (§2.3), so it carries a target of its own
+      h('div.post-time.hit-min', formatTime(new Date(post.date * 1000))),
+      share,
     ),
   );
 

@@ -1,12 +1,10 @@
 package ca.lucianlabs.tgsocial.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -24,8 +22,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import ca.lucianlabs.housepour.HPAvatar
-import ca.lucianlabs.housepour.HPBody
 import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
@@ -40,9 +36,11 @@ import ca.lucianlabs.tgsocial.ui.media.MediaItems
 import kotlinx.coroutines.delay
 
 /**
- * PRODUCT §2.3 — the post card. The header is the attribution NODE (the person the post reaches you through);
- * the channel is the mono subheading. Time is relative, with Share right of it. The footer is counts +
- * `( Comment )` only — Views and `Open in Telegram` live in the long-press post sheet now.
+ * PRODUCT §2.3 — the post card. The header **name** is the attribution NODE (the person the post reaches you
+ * through) and the channel is the mono subheading, but the header **avatar is the source channel** — see
+ * [PostHeading] for the fallback chain and [PostHeader] for the metrics. Time is relative, with Share right of
+ * it. The footer is counts + `( Comment )` only — Views and `Open in Telegram` live in the long-press post
+ * sheet now.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -58,12 +56,14 @@ fun PostCard(
 ) {
     val context = LocalContext.current
     val link = remember(post.key) { DeepLink.post(post.sourceUsername, post.messageId) }
-    // Attribution (PRODUCT §2.3): the node when one attributes the post; else the channel, with no subheading.
-    val nodeUsername = post.nodeUsername
-    val headerName = if (nodeUsername != null) post.nodeName ?: "@$nodeUsername" else post.sourceTitle
-    val avatar = rememberTdImage(if (nodeUsername != null) post.nodePhoto else post.sourcePhoto, HPTokens.Space.avatarRow)
-    val initial = headerName.firstOrNull { it.isLetterOrDigit() }?.toString() ?: "·"
-    val openHeader = { if (nodeUsername != null) onOpenProfile(nodeUsername) else onOpenChannel(post.sourceUsername) }
+    // Attribution (PRODUCT §2.3): the name is the node when one attributes the post, else the channel with no
+    // subheading — but the avatar is always the source channel, falling back to the node's photo then the initial.
+    val heading = remember(post) { PostHeading.of(post) }
+    val avatar = rememberTdImage(heading.photo, HPTokens.Space.avatarRow)
+    val openHeader = {
+        val node = heading.nodeUsername
+        if (node != null) onOpenProfile(node) else onOpenChannel(post.sourceUsername)
+    }
     // Relative time re-derives on a minute ticker so an open feed never goes stale (PRODUCT §2.3: derive, never hand-format).
     var tick by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); tick++ } }
@@ -79,41 +79,20 @@ fun PostCard(
             onLongClick = onLongPress,
         ),
     ) {
-        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap)) {
-            HPAvatar(
-                avatar,
-                HPTokens.Space.avatarRow,
-                initial,
-                modifier = Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = openHeader),
-                contentDescription = headerName,
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                // The name is the node (tap → node profile); on fallback it is the channel title (tap → channel).
-                HPBody(
-                    headerName,
-                    strong = true,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = openHeader)
-                        .semantics { contentDescription = "Open $headerName" },
-                )
-                if (nodeUsername != null) {
-                    // Subheading = the channel title, mono small muted, tap → feed channel screen (§2.6).
-                    HPMonoSmall(
-                        post.sourceTitle,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) { onOpenChannel(post.sourceUsername) }
-                            .semantics { contentDescription = "Open ${post.sourceTitle}" },
-                    )
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap)) {
-                HPMonoSmall(timeText, color = HPTokens.Colors.faint, maxLines = 1)
-                HPButton("Share", { shareLink(context, link) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, contentDescription = "Share")
-            }
-        }
-        Spacer(Modifier.height(HPTokens.Space.rowGap))
+        PostHeader(
+            avatar = avatar,
+            name = heading.name,
+            initial = heading.initial,
+            channelTitle = heading.channelTitle,
+            time = timeText,
+            onOpenName = openHeader,
+            onOpenChannel = { onOpenChannel(post.sourceUsername) },
+            onShare = { shareLink(context, link) },
+        )
+        // Not `rowGap`: the channel subheading's hit target hangs below its line box and the first clickable
+        // sibling must not start inside it, or it wins those points and the channel ships under `touchMin`
+        // (COMPONENTS rule 6 tiling — see [PostHeaderBottomGap] and `PostCardHitRegionTest`).
+        Spacer(Modifier.height(PostHeaderBottomGap))
         if (post.forwardedFrom != null) {
             HPMuted("Forwarded from ${post.forwardedFrom}", maxLines = 1)
             Spacer(Modifier.height(HPTokens.Space.labelBottom))

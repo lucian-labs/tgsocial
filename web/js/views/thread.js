@@ -96,11 +96,13 @@ export function render(app, { username, serverId, compose = false }) {
     const header = h('div.post-head',
       avatarFor(app, comment.name, comment.avatar, 'row'),
       h('div.post-head-text',
-        h('button.post-title', {
+        h('button.post-title.hit-min', {
           type: 'button',
           'aria-label': `Open ${comment.name}`,
           onclick: () => app.navigate(`#/node/${comment.node}`),
-        }, comment.name),
+          // same shape as the post card's name (js/views/shared.js): the label
+          // truncates in its span, the control keeps its 40pt overlay
+        }, h('span', comment.name)),
         h('div.post-user', `@${comment.node}`),
       ),
       h('div.post-time', comment.pending ? '' : formatTime(new Date(comment.date * 1000))),

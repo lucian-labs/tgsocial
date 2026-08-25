@@ -152,10 +152,18 @@ system chrome. Web: `.menu` anchored, `.menu.sheet` inside `.menu-scrim`.
 
 ## Composite (product-level, built from the above)
 
-**PostCard** — see PRODUCT §2.3. `HPCard` → header row (`HPAvatar 36`,
-`HPBody` strong title, `HPMonoSmall` faint time) → `HPMonoSmall` muted
-username → body text with entities → `HPMedia` → footer row (`HPMonoSmall`
-faint counts, `HPButton ghost small "Open in Telegram"`).
+**PostCard** — see PRODUCT §2.3. `HPCard` → **one** header row: `HPAvatar 36`
+of the **source channel** (its photo → the node's photo → the initial), a tight
+stack of the person's name (`HPBody` strong) over the channel (`HPMonoSmall`
+muted) at their two natural line heights, then `HPMonoSmall` faint time and an
+`HPButton ghost small "Share"`. The avatar is centred against that stack and
+the row measures about one avatar tall; every control in it takes its 40pt from
+**HPHitTarget** (rule 6), never from a taller line box. Then body text with
+entities → `HPMedia` → footer row (`HPMonoSmall` faint counts, `HPButton ghost
+small "Comment"`). The channel's half of that target hangs *below* the header,
+so the card owes it `PostHeaderBottomGap` clear of tap surfaces before the first
+of those — and the body's tap surface starts at its glyphs, not at its padding,
+because padding inside the shape claims the band and swallows the subheading.
 
 **NodeRow** — `HPListItem`: `HPAvatar 36`, name (`HPBody` strong) over
 `HPMonoSmall` (`@username · n feeds`), optional `HPSmall` "Followed by n of
@@ -185,6 +193,39 @@ neutral.
    iOS; no `Material*` components on Android except `Text`, `BasicTextField`,
    layouts, and `LazyColumn`).
 6. Every interactive element has a 40pt minimum hit target and an
-   accessibility label.
+   accessibility label. The target is a **region, not a box**: a pill button
+   can simply *be* 40pt because that is its drawn shape, but a line of text
+   cannot — growing its line box to `touchMin` is what leaves a 13pt
+   subheading sitting in a 47pt box (PRODUCT §2.3). Those controls paint at
+   their natural size and take the target from **HPHitTarget** instead, which
+   extends past the painted bounds. Web: `.hit-min` (a transparent `::after`;
+   `--hit-top` / `--hit-left` slide it, and the host must not clip its own
+   overflow or it clips the region away). Two controls stacked closer together
+   than 2 × `touchMin` **tile** their regions — each keeps a full `touchMin`
+   and the boundary between them is a line, not an overlap, because whichever
+   region paints last would otherwise swallow the other's half. Tiling binds the **layout** as well as the pair: a
+   region that reaches past its own element is claimed by any later-placed
+   control it lands on, so a region is worth only the clear space its
+   neighbours leave it — a gap nothing else has made tappable.
+
+   So the **container owes the overhang**: whatever follows a stack holds a gap
+   the size of it before its first tappable thing. Whitespace counts — what the
+   band may not contain is another tap surface, which is why a block that pads
+   itself away from the stack keeps that padding *outside* its own content
+   shape. The one place this bites in tgsocial is the post card (PRODUCT §2.3):
+   the channel subheading's region hangs a whole `touchMin` minus one
+   mono-small line box below the header, and the card holds that band —
+   `PostHeaderBottomGap` on iOS and Android alike, 20.8dp there and ~26pt here,
+   because Compose sets the ramp's line height explicitly and SwiftUI paints a
+   shorter line box. Get it wrong and the target measures 40 and lives at 14,
+   its lower two thirds opening the thread instead of the feed.
+
+   A region only counts for what actually reaches it, so these get asserted on
+   the **assembled** screen — Android injects taps in 1dp steps over the card
+   (`PostCardHitRegionTest`); iOS measures every region in place, in one
+   coordinate space, against every neighbouring tap surface
+   (`hpMeasureTouchTargets` + `PostHeaderHitRegionTests`). Never by measuring a
+   control on its own: that reports the overlay a component drew, which is the
+   same 40pt whether or not anything can reach it.
 7. Dynamic Type (iOS) / font scale (Android) scale the ramp proportionally;
    clamp at 1.4× so the layout holds.

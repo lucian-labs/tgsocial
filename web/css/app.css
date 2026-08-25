@@ -132,8 +132,20 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
 
 /* ── post card (PRODUCT §2.3) ────────────────────────────────────────────── */
 
-.post-head { display: flex; align-items: flex-start; gap: var(--hp-space-row-gap); }
-.post-head-text { flex: 1; min-width: 0; }
+/* §2.3 header metrics. One row: avatar, the name/channel stack, the time and
+   Share. The stack is TIGHT — two natural line boxes, no padding, no negative
+   margins, no extra leading — and the avatar is CENTRED against it, so the
+   header measures one stack (43.2 = 24 + 19.2) against a 36 avatar rather than
+   the 59 that inflated line boxes used to make of it. Nothing in here may set
+   its own height: every 40pt target in this row is a .hit-min overlay. */
+.post-head { display: flex; align-items: center; gap: var(--hp-space-row-gap); }
+.post-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
 .post-title {
   appearance: none;
   background: none;
@@ -144,58 +156,81 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   color: var(--ink);
   cursor: pointer;
   text-align: left;
-  min-height: var(--hp-space-touch-min);
-  display: inline-flex;
-  align-items: center;
+  display: block;
+  max-width: 100%;
+  transition: color var(--motion-color) ease;
+}
+.post-title:hover { color: var(--accent); }
+/* The label truncates in its own box, never on the control. A control that
+   clips its overflow also clips the .hit-min overlay, which is the one thing
+   that has to reach past its painted bounds (§2.3). */
+.post-title > span,
+.post-sub > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.post-user {
+  font: var(--type-mono-small);
+  color: var(--muted);
+  /* the stack is a flex column now: without this a long handle hugs past the
+     column instead of ellipsising inside it */
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.post-title:hover { color: var(--accent); }
-.post-user {
-  font-family: var(--font-mono);
-  font-size: var(--hp-type-mono-small-size);
-  color: var(--muted);
-  line-height: var(--hp-type-mono-small-line);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* the channel subheading (§2.3): mono small muted, tap → feed channel screen;
-   padding + negative margin keeps the 40pt hit target without inflating the header */
+/* the channel subheading (§2.3): mono small muted, directly under the name at
+   its own line height, tap → feed channel screen. It sits in its 19.2 line box
+   and nothing else — the 40pt target is the .hit-min overlay below. */
 .post-sub {
   appearance: none;
   background: none;
   border: none;
-  font-family: var(--font-mono);
-  font-size: var(--hp-type-mono-small-size);
+  padding: 0;
+  margin: 0;
+  font: var(--type-mono-small);
   color: var(--muted);
-  line-height: var(--hp-type-mono-small-line);
   cursor: pointer;
   text-align: left;
   display: block;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: var(--hp-space-row-pad) 0;
-  margin: calc(-1 * var(--hp-space-row-pad)) 0;
   transition: color var(--motion-color) ease;
 }
 .post-sub:hover { color: var(--accent); }
+
+/* Rule 6 across the header stack, as overlays (COMPONENTS.md .hit-min). Two
+   centred touchMin regions cannot both fit around a 43.2 stack — 2 × 40 needs
+   80 — so the name and the channel TILE one 2 × touchMin window anchored at the
+   card's top padding edge: the name owns from that edge down to the midpoint,
+   the channel from the midpoint down. Each keeps a full 40, neither grows a
+   line box, and the boundary lands on the bottom of the name's glyph band. */
+.post-title:has(+ .post-sub) { --hit-top: calc(-1 * var(--hp-space-card-pad)); }
+.post-sub {
+  --hit-top: calc(
+    var(--hp-space-touch-min) - var(--hp-space-card-pad)
+      - var(--hp-type-body-strong-size) * var(--hp-type-body-strong-line)
+  );
+}
 .post-head-trail {
   flex: none;
   display: flex;
   align-items: center;
   gap: var(--hp-space-tabs-gap);
 }
+/* §2.3: the trailing group never sets the header's height. The ghost Share
+   paints at its own size (a pill button is normally 40 tall because that is its
+   drawn shape; here it would be the tallest thing in a 36pt row) and both it
+   and the time carry rule 6 as .hit-min overlays. */
+.post-head-trail .btn { min-height: 0; }
 .post-time {
   flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--hp-type-mono-small-size);
+  font: var(--type-mono-small);
   color: var(--faint);
-  line-height: var(--hp-space-touch-min);
+  /* the time's region grows towards the empty middle of the row, never right
+     into Share's */
+  --hit-left: calc(100% - max(100%, var(--hp-space-touch-min)));
 }
 .post-fwd { color: var(--muted); font-size: var(--hp-type-small-size); margin: var(--hp-space-row-gap) 0 0; }
 .post-body {

@@ -77,6 +77,13 @@ android {
     lint {
         abortOnError = false
     }
+
+    // The header metrics in PRODUCT §2.3 are asserted against a real Compose measure pass (Robolectric), not by eye.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -147,4 +154,11 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+
+    // Layout assertions run the real Compose measure pass on the JVM (PRODUCT §2.3 header metrics,
+    // COMPONENTS rule 6 hit targets).
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

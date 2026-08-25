@@ -393,6 +393,36 @@ export function backlinkNode(description) {
   return m ? m[1] : null;
 }
 
+/**
+ * A channel's own photo, or null — where "or null" includes the case Telegram
+ * makes hardest to see.
+ *
+ * A channel with no photo does not get an empty slot on `t.me/s/`: Telegram
+ * GENERATES a letter avatar and serves it as an image, so the markup for a
+ * photographed and an unphotographed channel differ only in the src. Measured
+ * live: `@tgs_dankcoin` returns
+ *   `<i class="tgme_page_photo_image bgcolor1" data-content="E"><img src="data:image/svg+xml;base64,…">`
+ * while `@tastycrow` returns an `<img src="https://cdn1.telesco.pe/file/….jpg">`.
+ * The `bgcolorN` class and the `data-content` letter are the tell; the `data:`
+ * URL is the one that is safe to test, because it is the payload itself.
+ *
+ * That letter is Telegram's fallback, not the channel's face. Taken as a photo
+ * it wins PRODUCT §2.3's fallback chain outright and every unphotographed
+ * channel paints Telegram's letter where ours belongs — so it is treated as
+ * ABSENT and the chain falls through. (The app side gets this for free:
+ * `chat.photo` is simply null there.)
+ *
+ * `safeUrl` would already drop a `data:` URL, since MEDIA_SCHEMES is http(s)
+ * only. This is deliberately not left to that: the scheme list is a security
+ * rule that may be widened one day, and this is a product rule that must not
+ * follow it.
+ */
+function channelPhoto(raw, base) {
+  const src = String(raw ?? '').trim();
+  if (/^data:/i.test(src)) return null;
+  return safeUrl(src, base, MEDIA_SCHEMES);
+}
+
 function metaContent(doc, property) {
   const el = doc.querySelector(`meta[property="${property}"], meta[name="${property}"]`);
   return el?.getAttribute('content') ?? '';
@@ -404,8 +434,11 @@ function channelInfo(doc, channel, base) {
   const title = text(info?.querySelector('.tgme_channel_info_header_title')) || metaContent(doc, 'og:title') || `@${channel}`;
   const usernameRaw = text(info?.querySelector('.tgme_channel_info_header_username')).replace(/^@/, '');
   const username = /^[A-Za-z0-9_]{4,32}$/.test(usernameRaw) ? usernameRaw : channel;
-  const photo = safeUrl(info?.querySelector('.tgme_page_photo_image img')?.getAttribute('src'), base, MEDIA_SCHEMES)
-    || safeUrl(metaContent(doc, 'og:image'), base, MEDIA_SCHEMES);
+  // `og:image` is the same picture by another route — empty on an
+  // unphotographed channel today, but "empty today" is not a contract, so it
+  // goes through the same refusal.
+  const photo = channelPhoto(info?.querySelector('.tgme_page_photo_image img')?.getAttribute('src'), base)
+    || channelPhoto(metaContent(doc, 'og:image'), base);
   const description = text(info?.querySelector('.tgme_channel_info_description')) || metaContent(doc, 'og:description');
   return {
     username,
@@ -463,6 +496,10 @@ function parseBlock(el, ctx) {
     chatId: null,
     username,
     title: ctx.title,
+    // §2.3: the card's avatar is the SOURCE CHANNEL's photo, so it travels with
+    // every post on the same path the subheading title does — including through
+    // the merge on /u/<name>, where posts from several channels share one node.
+    // Null when the channel has no photo of its own (channelPhoto()).
     avatar: ctx.photo,
     node: null,
     nodeName: null,

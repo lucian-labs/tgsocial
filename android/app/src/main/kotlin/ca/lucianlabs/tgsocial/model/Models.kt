@@ -178,6 +178,10 @@ data class Reaction(val emoji: String, val count: Int)
  * PRODUCT §2.3 — attribution: [nodeUsername]/[nodeName]/[nodePhoto] are the node the post reaches me through
  * (me for my feeds, else the followed node whose card lists the source feed). Null means no node attributes
  * it and the card header falls back to the channel itself, with no subheading.
+ *
+ * The header **name** is the node, but the header **avatar** is the source channel: [sourcePhoto] first, then
+ * [nodePhoto], then the initial. [sourcePhoto] is `chat.photo?.small` on the feed channel, so a channel with no
+ * photo arrives here as null — Telegram's generated letter avatar is not a photo and never travels this far.
  */
 @Serializable
 data class Post(

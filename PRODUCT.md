@@ -192,6 +192,18 @@ growing the line box a text element occupies. Padding a 13pt subheading to
 40pt tall and pulling it back with a negative margin does satisfy the rule
 and does wreck the rhythm — it leaves a 47pt box around 19pt of text.
 
+**The card owes the header a band.** An overlay only counts for what actually
+reaches it, and the channel's hangs *below* its own line box — 40pt of target
+over a 19pt line means 21pt of it lives under the header, and over the ~14pt
+line SwiftUI paints, 26pt does. The first tappable thing beneath the header
+therefore starts a full band down, not at the usual row gap: whatever is
+placed later wins every point the two share, so a body text pushed up against
+the header takes the bottom half of the channel's target and a mis-tap opens
+the thread. Padding is not enough on its own — padding *inside* the body's own
+tappable shape is still tappable, and takes the band just the same. Measure
+the header's controls on the **assembled card**, not on the header alone — the
+header alone always passes.
+
 **Time is relative.** `now` (<60 s), `5m ago`, `2h ago`, `3d ago`, `2w ago`
 (<8 w), `4mo ago` (<12 mo), `2y ago` — mono faint, top right. Derive, never
 hand-format; largest unit only, floor rounding. The exact timestamp lives in

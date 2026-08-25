@@ -31,10 +31,12 @@ fun rememberTdImage(ref: FileRef?, width: Dp, priority: Int = MediaRepo.PRIORITY
  */
 @Composable
 fun rememberTdImagePx(ref: FileRef?, px: Int, priority: Int = MediaRepo.PRIORITY_VISIBLE): ImageBitmap? {
-    val app = LocalContext.current.applicationContext as TgApp
-    var image by remember(ref?.uniqueId, px) { mutableStateOf(ref?.let { app.media.cached(it, px) }) }
+    // `as?`, not `as`: the layout tests boot the stock Application rather than TgApp (TDLib has no business in
+    // a measure pass), and no repo simply means no bitmap — the same state as a file that has not arrived yet.
+    val app = LocalContext.current.applicationContext as? TgApp
+    var image by remember(ref?.uniqueId, px) { mutableStateOf(ref?.let { app?.media?.cached(it, px) }) }
     LaunchedEffect(ref?.uniqueId, px) {
-        if (ref == null || image != null) return@LaunchedEffect
+        if (app == null || ref == null || image != null) return@LaunchedEffect
         // Cancellation (the row scrolled away) drops the decode with the composition; MediaRepo releases the
         // per-key load lock in a finally, so a cancelled load leaves nothing behind.
         image = runCatching { app.media.image(ref, px, priority) }.getOrNull()
