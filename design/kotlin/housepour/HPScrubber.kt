@@ -52,7 +52,6 @@ fun HPScrubber(
     playedColor: Color = HPTokens.Colors.accent,
     label: String = "Seek",
 ) {
-    var width by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
     var dragProgress by remember { mutableFloatStateOf(0f) }
     val seek by rememberUpdatedState(onSeek)
@@ -63,23 +62,33 @@ fun HPScrubber(
             .fillMaxWidth()
             .height(HPTokens.Space.touchMin)
             .semantics { contentDescription = label }
+            // Width from the pointer scope, not from the draw pass, and re-read on every event rather than
+            // hoisted out of the gesture — see HPSpectrogramStrip for why a snapshot survives a rotation.
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
-                detectTapGestures { p -> if (width > 0f) seek((p.x / width).coerceIn(0f, 1f)) }
+                detectTapGestures { p -> if (size.width > 0) seek((p.x / size.width).coerceIn(0f, 1f)) }
             }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectHorizontalDragGestures(
-                    onDragStart = { p -> dragging = true; dragProgress = (p.x / width.coerceAtLeast(1f)).coerceIn(0f, 1f) },
-                    onDragEnd = { dragging = false; seek(dragProgress) },
+                    onDragStart = { p ->
+                        val width = size.width
+                        if (width > 0) {
+                            dragging = true
+                            dragProgress = (p.x / width).coerceIn(0f, 1f)
+                        }
+                    },
+                    // Only commit a drag that actually started: a gesture that began on a zero-width
+                    // layout has no fraction, and committing its default would seek to 0.
+                    onDragEnd = { if (dragging) { dragging = false; seek(dragProgress) } },
                     onDragCancel = { dragging = false },
                 ) { change, _ ->
                     change.consume()
-                    dragProgress = (change.position.x / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    val width = size.width
+                    if (width > 0) dragProgress = (change.position.x / width).coerceIn(0f, 1f)
                 }
             }
             .drawBehind {
-                width = size.width
                 val y = size.height / 2
                 val stroke = HPTokens.BORDER_WIDTH.dp.toPx()
                 drawLine(trackColor, Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
@@ -104,64 +113,6 @@ fun HPScrubber(
                 .border(HPTokens.BORDER_WIDTH.dp, HPTokens.Colors.line2, CircleShape),
         )
     }
-}
-
-/**
- * Voice waveform: ink bars with the played part in gold, drawn from TDLib's waveform (values 0–1). Tap or drag to
- * seek. Bar width and gap derive from the available width so the sample count never forces a scroll.
- */
-@Composable
-fun HPWaveform(
-    samples: List<Float>,
-    progress: Float,
-    onSeek: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    barColor: Color = HPTokens.Colors.ink,
-    playedColor: Color = HPTokens.Colors.accent,
-    label: String = "Seek",
-) {
-    var width by remember { mutableFloatStateOf(0f) }
-    var dragging by remember { mutableStateOf(false) }
-    var dragProgress by remember { mutableFloatStateOf(0f) }
-    val seek by rememberUpdatedState(onSeek)
-    val shown = (if (dragging) dragProgress else progress).coerceIn(0f, 1f)
-    val bars = if (samples.isEmpty()) List(48) { 0.2f } else samples
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(HPTokens.Space.touchMin)
-            .semantics { contentDescription = label }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                detectTapGestures { p -> if (width > 0f) seek((p.x / width).coerceIn(0f, 1f)) }
-            }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                detectHorizontalDragGestures(
-                    onDragStart = { p -> dragging = true; dragProgress = (p.x / width.coerceAtLeast(1f)).coerceIn(0f, 1f) },
-                    onDragEnd = { dragging = false; seek(dragProgress) },
-                    onDragCancel = { dragging = false },
-                ) { change, _ ->
-                    change.consume()
-                    dragProgress = (change.position.x / width.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                }
-            }
-            .drawBehind {
-                width = size.width
-                val n = bars.size
-                val slot = size.width / n
-                val bar = (slot * 0.6f).coerceAtLeast(1f)
-                val minH = HPTokens.BORDER_WIDTH.dp.toPx() * 2
-                val playedX = size.width * shown
-                for (i in 0 until n) {
-                    val h = (minH + (size.height - minH) * bars[i].coerceIn(0f, 1f) * 0.8f)
-                    val x = i * slot + (slot - bar) / 2
-                    val color = if (x + bar / 2 <= playedX) playedColor else barColor
-                    drawRoundRect(color, Offset(x, (size.height - h) / 2), Size(bar, h), androidx.compose.ui.geometry.CornerRadius(bar / 2))
-                }
-            },
-    )
 }
 
 /**

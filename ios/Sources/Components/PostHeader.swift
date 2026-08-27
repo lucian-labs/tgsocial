@@ -56,6 +56,10 @@ enum PostCardRegion {
     static let channel = "channel"
     static let share = "share"
     static let text = "post text"
+    /// The audio player's spectrogram strip (PRODUCT §2.11.1). Its painted shape is taller than
+    /// `touchMin`, so unlike the header's controls it needs no overlay — but it still reports, so
+    /// the assembled-card test can prove the region is really there.
+    static let strip = "spectrogram strip"
 }
 
 struct PostHeader<Avatar: View>: View {

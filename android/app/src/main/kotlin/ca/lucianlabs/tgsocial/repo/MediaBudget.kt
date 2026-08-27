@@ -33,6 +33,49 @@ object MediaBudget {
     const val MIN_MINI_BYTES = 1L * 1024 * 1024
     const val MAX_MINI_BYTES = 4L * 1024 * 1024
 
+    /**
+     * Spectrogram strips (PRODUCT §2.11.1) get their own slice of the same heap ceiling, on the same
+     * derivation as everything else here. A strip is a bitmap — 480x128 ARGB is 245 KB — so it belongs in
+     * this accounting or it is unbounded retained memory the LMK gets to discover for us.
+     *
+     * A slice rather than a share of [IMAGE_FRACTION] because the two have opposite economics: a photo is
+     * re-decoded from a local file in milliseconds, while a strip costs a decode *and* a few thousand FFTs,
+     * so letting a fling through a photo-heavy feed evict every strip would buy 8 MB back and pay for it in
+     * seconds of re-analysis. 1/64 of the heap, floored at 1 MB (~4 strips, enough for a screenful) and
+     * capped at 6 MB (~24), which is more clips than a viewport has ever held.
+     */
+    const val STRIP_FRACTION = 64
+    const val MIN_STRIP_BYTES = 1L * 1024 * 1024
+    const val MAX_STRIP_BYTES = 6L * 1024 * 1024
+    const val STRIP_COUNT_LIMIT = 64
+
+    /**
+     * How many spectrogram analyses may be in flight at once.
+     *
+     * The *retained* cost of a strip is the 245 KB bitmap above; the *transient* cost is the decoded mono PCM
+     * it is computed from, which is far larger and, being a local rather than a cache entry, is the kind of
+     * allocation that gets discovered by the low-memory killer instead of by an eviction. At §2.11.1's
+     * ten-minute ceiling that transient is [pcmBytes] of `MAX_SAMPLES` = 36.6 MB — already more than a third
+     * of a 96 MB heap on its own, so **one at a time**. A feed is very good at asking for six: `Dispatchers.IO`
+     * hands out 64 threads, and three visible audio posts on a fling is three decodes with nothing between
+     * them and the heap ceiling.
+     *
+     * Serialising costs latency on the second strip and nothing else — the analysis is a decode plus a few
+     * thousand FFTs, and the row is already usable from its silhouette while it waits (§2.11.1: "The row is
+     * usable the moment it appears; the spectrum fills in").
+     */
+    const val STRIP_ANALYSIS_CONCURRENCY = 1
+
+    /** What decoded mono PCM of [samples] costs while an analysis holds it. `FloatArray`, so 4 bytes each. */
+    fun pcmBytes(samples: Int): Long = samples.coerceAtLeast(0).toLong() * Float.SIZE_BYTES
+
+    /**
+     * The worst case the audio path can have live at once for clips of [samples]: the transient PCM times
+     * [STRIP_ANALYSIS_CONCURRENCY]. This is the number that has to stay small next to the heap, and the
+     * reason callers size their decode from the clip's duration rather than from the cap.
+     */
+    fun peakAnalysisBytes(samples: Int): Long = pcmBytes(samples) * STRIP_ANALYSIS_CONCURRENCY
+
     /** Secondary guard only; bytes bind first. */
     const val IMAGE_COUNT_LIMIT = 160
     const val MINI_COUNT_LIMIT = 512
@@ -63,6 +106,9 @@ object MediaBudget {
 
     fun miniCacheBytes(maxMemoryBytes: Long): Long =
         (maxMemoryBytes / MINI_FRACTION).coerceIn(MIN_MINI_BYTES, MAX_MINI_BYTES)
+
+    fun stripCacheBytes(maxMemoryBytes: Long): Long =
+        (maxMemoryBytes / STRIP_FRACTION).coerceIn(MIN_STRIP_BYTES, MAX_STRIP_BYTES)
 
     /** What a decoded bitmap of this size actually costs. ARGB_8888 = 4 bytes/px, RGB_565 = 2. */
     fun bitmapBytes(width: Int, height: Int, bytesPerPixel: Int = 4): Long =

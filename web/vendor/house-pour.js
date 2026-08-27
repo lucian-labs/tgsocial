@@ -351,6 +351,241 @@ export function scrubber({ onSeek = null, label = 'Seek' } = {}) {
   return el;
 }
 
+// ── tokens read back out of CSS ────────────────────────────────────────────
+
+/**
+ * A token's computed value, for the two things CSS cannot paint by itself: a
+ * canvas and a bitmap. Rule 1 says zero raw hex in component code, and a
+ * canvas needs a concrete colour string — so the component asks the cascade
+ * for the token it would have used in a stylesheet. One source of truth, and a
+ * brand change still moves everything.
+ */
+export function tokenValue(el, name, fallback = '') {
+  try {
+    const v = getComputedStyle(el).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * The spectrogram ramp (PRODUCT §2.11.1) as parsed stops, straight out of the
+ * generated `--ramp-*` custom properties (design/tokens.json → build.mjs). The
+ * analysis colourises a bitmap pixel by pixel, so it needs numbers; reading
+ * them back from the cascade is what keeps the ramp ONE edit shared with iOS
+ * and Android instead of a second copy in JavaScript.
+ *
+ * Returns `[{ at, r, g, b, a }]` sorted by `at`, or [] when the stylesheet has
+ * not loaded (the caller then leaves the strip at its hairline fidelity).
+ */
+export function rampStops(root = document.documentElement) {
+  const count = parseInt(tokenValue(root, '--ramp-stops', '0'), 10);
+  if (!Number.isFinite(count) || count < 2) return [];
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    const raw = tokenValue(root, `--ramp-${i}`);
+    const at = parseFloat(tokenValue(root, `--ramp-${i}-at`, 'NaN'));
+    const m = /rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?\s*\)/.exec(raw);
+    if (!m || !Number.isFinite(at)) return [];
+    out.push({ at, r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// ── HPStrip ────────────────────────────────────────────────────────────────
+
+/** Progress fraction from a pointer's x, against an element's box. */
+function fractionIn(el, clientX) {
+  const r = el.getBoundingClientRect();
+  return r.width ? Math.max(0, Math.min(1, (clientX - r.left) / r.width)) : 0;
+}
+
+/**
+ * HPStrip — the audio scrubber (PRODUCT §2.11.1). Not a hairline: a
+ * spectrogram of the WHOLE clip with its one-pole amplitude envelope over it,
+ * on `bg2` at `radius-media`, and it IS the scrubber — you can see where the
+ * loud part is before you drag to it.
+ *
+ * Three fidelities, because §2.11.1 requires the row to be usable the moment
+ * it appears and the spectrum to fill in behind it. `data-fidelity` says which
+ * one is painted:
+ *
+ *   hair  the hairline of §2.11 — line2 track, gold played segment. What a
+ *         clip past the duration ceiling, or one that would not decode, keeps.
+ *   wave  the silhouette alone. A voice note gets this IMMEDIATELY from
+ *         Telegram's own waveform bytes, with no decode at all.
+ *   full  silhouette over spectrogram.
+ *
+ * Painted height is `--space-strip-height` (44), which is over `touchMin`, so
+ * the 40pt hit region of rule 6 is simply the strip's own drawn shape — no
+ * overlay reaching past it into a neighbour's band.
+ *
+ * strip({ onSeek, label }) → el with
+ *   el.set(fraction) · el.setSpectrum(url) · el.setEnvelope(values|null)
+ *   el.clearSpectrum() · el.fidelity · el.hasEnvelope
+ */
+export function strip({ onSeek = null, label = 'Seek' } = {}) {
+  const spectrum = h('img.strip-spectrum', { alt: '', 'aria-hidden': 'true', decoding: 'async' });
+  const wave = h('canvas.strip-wave', { 'aria-hidden': 'true' });
+  const played = h('div.strip-played');
+  const head = h('div.strip-head');
+  const el = h('div.strip', {
+    role: 'slider',
+    tabindex: 0,
+    'aria-label': label,
+    'aria-valuemin': '0',
+    'aria-valuemax': '100',
+    'aria-valuenow': '0',
+    'data-fidelity': 'hair',
+  }, h('div.strip-track'), played, spectrum, wave, head);
+
+  let fraction = 0;
+  let envelope = null;
+
+  const paintWave = () => {
+    const box = el.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(1, Math.round(box.width * dpr));
+    const hpx = Math.max(1, Math.round(box.height * dpr));
+    if (wave.width !== w || wave.height !== hpx) {
+      wave.width = w;
+      wave.height = hpx;
+    }
+    const ctx = wave.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, hpx);
+    const n = envelope?.length ?? 0;
+    if (n < 2) return;
+
+    // Colours and weights come from the cascade (see tokenValue): played is
+    // `accent`, ahead of the playhead the strip is `ink` at reduced opacity.
+    const playedColor = tokenValue(el, '--strip-played');
+    const unplayedColor = tokenValue(el, '--strip-unplayed');
+    const fillAlpha = parseFloat(tokenValue(el, '--strip-fill-alpha', '0.55'));
+    const dim = parseFloat(tokenValue(el, '--strip-unplayed-alpha', '0.35'));
+    const line = parseFloat(tokenValue(el, '--strip-ridge', '1.5')) * dpr;
+
+    const mid = hpx / 2;
+    const amp = mid * 0.92;
+    const stepX = w / (n - 1);
+    const yAt = (i) => mid - Math.max(0, Math.min(1, envelope[i])) * amp;
+
+    // Mirrored about the strip's centre and filled — LZWaveform's
+    // LZPointWave silhouette, closed against its reflection instead of
+    // against a baseline. Played and unplayed are separate runs that SHARE
+    // their boundary point, so the split is an Int compare and the outline
+    // stays continuous across the colour change.
+    const split = fraction <= 0 ? 0 : Math.max(1, Math.min(n - 1, Math.round(fraction * (n - 1))));
+    const runs = fraction <= 0
+      ? [[0, n - 1, false]]
+      : [[0, split, true], [split, n - 1, false]];
+    for (const [from, to, isPlayed] of runs) {
+      if (to <= from) continue;
+      const color = isPlayed ? playedColor : unplayedColor;
+      const alpha = isPlayed ? 1 : dim;
+      ctx.beginPath();
+      for (let i = from; i <= to; i += 1) {
+        const x = i * stepX;
+        if (i === from) ctx.moveTo(x, yAt(i));
+        else ctx.lineTo(x, yAt(i));
+      }
+      for (let i = to; i >= from; i -= 1) ctx.lineTo(i * stepX, mid + (mid - yAt(i)));
+      ctx.closePath();
+      ctx.globalAlpha = fillAlpha * alpha;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = line;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  const paint = (f) => {
+    fraction = Math.max(0, Math.min(1, f || 0));
+    const pct = `${Math.round(fraction * 1000) / 10}%`;
+    played.style.width = pct;
+    head.style.left = pct;
+    head.hidden = fraction <= 0;
+    el.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
+    if (envelope) paintWave();
+  };
+
+  const fidelity = () => {
+    if (spectrum.getAttribute('src')) return 'full';
+    return envelope ? 'wave' : 'hair';
+  };
+  const sync = () => el.setAttribute('data-fidelity', fidelity());
+
+  el.set = (f) => {
+    if (el.dataset.dragging) return;
+    paint(f);
+  };
+  el.setSpectrum = (url) => {
+    if (!url) return el.clearSpectrum();
+    spectrum.src = url;
+    sync();
+    return el;
+  };
+  el.clearSpectrum = () => {
+    spectrum.removeAttribute('src');
+    sync();
+    return el;
+  };
+  /** The silhouette: 0…1 per column. Null drops back to the hairline. */
+  el.setEnvelope = (values) => {
+    envelope = values && values.length > 1 ? values : null;
+    sync();
+    paint(fraction);
+    return el;
+  };
+  el.repaint = () => paint(fraction);
+  Object.defineProperty(el, 'fidelity', { get: fidelity });
+  Object.defineProperty(el, 'hasEnvelope', { get: () => !!envelope });
+
+  // a texture that failed to load must not leave the strip claiming `full`
+  spectrum.addEventListener('error', () => el.clearSpectrum());
+
+  // Tap or drag anywhere on the strip to seek (§2.11.1). Painting follows the
+  // finger; the seek itself lands on release, as HPScrubber does, so a drag
+  // across a card is one seek and not forty.
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.dataset.dragging = '1';
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      // a synthetic pointer with no capture support still drags fine
+    }
+    paint(fractionIn(el, e.clientX));
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (el.dataset.dragging) paint(fractionIn(el, e.clientX));
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!el.dataset.dragging) return;
+    delete el.dataset.dragging;
+    paint(fractionIn(el, e.clientX));
+    if (onSeek) onSeek(fraction);
+  });
+  el.addEventListener('pointercancel', () => {
+    delete el.dataset.dragging;
+    paint(fraction);
+  });
+  el.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 0.05 : e.key === 'ArrowLeft' ? -0.05 : null;
+    if (step === null) return;
+    e.preventDefault();
+    paint(fraction + step);
+    if (onSeek) onSeek(fraction);
+  });
+  head.hidden = true;
+  return el;
+}
+
 // ── HPRing ─────────────────────────────────────────────────────────────────
 
 /**
@@ -391,20 +626,28 @@ export function ring({ onCancel = null, label = 'Cancel download' } = {}) {
 
 /**
  * Audio / voice player row (PRODUCT §2.11): 40pt play circle (stepper style),
- * title + performer, serif elapsed/total, hairline progress with a gold played
- * segment — or waveform bars for voice (ink bars, gold played).
+ * title + performer, serif elapsed/total, and the scrubber underneath.
  *
- * playerRow({ title, sub, duration, waveform, onToggle, onSeek }) → el with
- * el.setPlaying(bool) · el.setTime(elapsedText, totalText) · el.set(fraction)
- * · el.setBusy(bool).
+ * The scrubber is normally an HPStrip (§2.11.1 — the spectrogram of the clip,
+ * which is also how you seek): the caller owns the analysis, so it builds the
+ * strip and hands it in as `track`. Without one the row falls back to the
+ * hairline HPScrubber, or to waveform bars when `waveform` values are given —
+ * the shapes a player row had before the strip existed, kept because a video's
+ * transport and the tests still use them.
+ *
+ * playerRow({ title, sub, duration, waveform, track, onToggle, onSeek }) → el
+ * with el.setPlaying(bool) · el.setTime(elapsedText, totalText) ·
+ * el.set(fraction) · el.setBusy(bool) · el.track.
  */
-export function playerRow({ title, sub = '', duration = '0:00', waveform = null, onToggle = null, onSeek = null, label = 'Play' } = {}) {
+export function playerRow({ title, sub = '', duration = '0:00', waveform = null, track: given = null, onToggle = null, onSeek = null, label = 'Play' } = {}) {
   const btn = h('button.player-btn', { type: 'button', 'aria-label': label }, icon('play'));
   const elapsed = h('span.player-time', '0:00');
   const total = h('span.player-time.player-total', duration);
   let track;
   let bars = [];
-  if (waveform && waveform.length) {
+  if (given) {
+    track = given;
+  } else if (waveform && waveform.length) {
     track = h('div.waveform', { role: 'presentation' });
     bars = waveform.map((v) => h('i', { style: { height: `${Math.round(18 + v * 82)}%` } }));
     append(track, bars);
@@ -447,6 +690,7 @@ export function playerRow({ title, sub = '', duration = '0:00', waveform = null,
     } else track.set(f);
   };
   el.setBusy = (busy) => el.classList.toggle('busy', !!busy);
+  el.track = track;
   return el;
 }
 

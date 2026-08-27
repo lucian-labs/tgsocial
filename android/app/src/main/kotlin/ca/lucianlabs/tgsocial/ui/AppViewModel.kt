@@ -993,6 +993,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         nodes.clear()
         commentRepo.clear()
         app.media.clear()
+        app.strips.clear()
         app.playback.release()
         app.activity.clear()
         _phone.value = ""

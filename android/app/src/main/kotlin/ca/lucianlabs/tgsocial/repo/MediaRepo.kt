@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.ImageBitmapConfig
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.FileProvider
+import ca.lucianlabs.tgsocial.audio.AudioStrip
 import ca.lucianlabs.tgsocial.model.FileRef
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import kotlinx.coroutines.Dispatchers
@@ -104,6 +105,27 @@ class MediaRepo(
         maxCount = MediaBudget.MINI_COUNT_LIMIT,
         sizeOf = { _, image -> costOf(image) },
     )
+
+    /**
+     * PRODUCT §2.11.1 — analysed spectrogram strips, in the same byte accounting as everything else this
+     * repo holds resident (see [MediaBudget.stripCacheBytes]). The cost charged is the strip's real pixel
+     * allocation plus its envelope floats, so one long clip's 512-column strip costs what it costs.
+     *
+     * The key is [ca.lucianlabs.tgsocial.audio.SpectrogramSpec.cacheKey]: the file's stable `uniqueId` plus
+     * the quantised geometry, and nothing about the screen it was drawn on — which is what makes the same
+     * clip in the feed and in a thread share one analysis.
+     */
+    private val strips = ByteLruCache<String, AudioStrip>(
+        maxBytes = MediaBudget.stripCacheBytes(maxMemoryBytes),
+        maxCount = MediaBudget.STRIP_COUNT_LIMIT,
+        sizeOf = { _, strip -> strip.bytes },
+    )
+
+    fun strip(key: String): AudioStrip? = strips[key]
+
+    fun putStrip(key: String, strip: AudioStrip) {
+        strips.put(key, strip)
+    }
 
     /** One in-flight decode per cache key. Refcounted so a finished (or cancelled) load does not leave the
      *  entry behind — an un-pruned map here is a slow leak keyed by every photo ever scrolled past. */
@@ -446,18 +468,21 @@ class MediaRepo(
     fun trimMemory(fraction: Float) {
         images.trimToBytes((images.maxBytes * fraction.coerceIn(0f, 1f)).toLong())
         minis.trimToBytes((minis.maxBytes * fraction.coerceIn(0f, 1f)).toLong())
+        strips.trimToBytes((strips.maxBytes * fraction.coerceIn(0f, 1f)).toLong())
     }
 
     /** Hard eviction: every decoded frame goes, download state stays. */
     fun evictImages() {
         images.evictAll()
         minis.evictAll()
+        strips.evictAll()
     }
 
     /** Status-sheet / logcat line: `images 12/160 · 21.4/48.0 MB · 143 evicted`. */
     fun cacheStats(): String {
         fun mb(v: Long) = String.format(Locale.ROOT, "%.1f", v / 1024.0 / 1024.0)
-        return "images ${images.count}/${images.maxCount} · ${mb(images.bytes)}/${mb(images.maxBytes)} MB · ${images.evictions} evicted"
+        return "images ${images.count}/${images.maxCount} · ${mb(images.bytes)}/${mb(images.maxBytes)} MB · ${images.evictions} evicted" +
+            " · strips ${strips.count}/${strips.maxCount} · ${mb(strips.bytes)}/${mb(strips.maxBytes)} MB"
     }
 
     fun clear() {

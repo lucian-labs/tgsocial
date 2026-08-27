@@ -16,6 +16,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync, mkdirSync, sta
 import { fileURLToPath } from 'node:url';
 import { dirname, extname, join, normalize } from 'node:path';
 import { createRequire } from 'node:module';
+import { analysisRate, axisMaxHz, rowForFrequency } from '../js/spectro.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const web = join(here, '..');
@@ -705,11 +706,416 @@ try {
   ok(/release-notes-\d+\.pdf/.test(feedText), 'feed: document file name');
   ok(/Bench loop/.test(feedText) && /3:32/.test(feedText), 'feed: audio title + duration');
   ok(await page.evaluate(() => !!document.querySelector('#view .player .player-btn')), 'feed: audio renders as a House Pour player row');
-  ok(await page.evaluate(() => !!document.querySelector('#view .waveform i')), 'feed: voice waveform bars');
   ok(/Poll · 3 options/.test(feedText), 'feed: poll summary');
   ok(/Lucian Labs/.test(feedText), 'feed: link preview row');
   ok(await page.evaluate(() => [...document.querySelectorAll('#view article.post')].every((a) => !/Pinned a message/.test(a.textContent))), 'feed: service messages skipped');
   await snap('feed');
+
+  // ── §2.11.1 the spectrogram strip ────────────────────────────────────────
+  //
+  // The audio scrubber is a spectrogram of the WHOLE clip with a one-pole
+  // envelope over it, and it IS the scrubber. The mock serves a real,
+  // decodable WAV for every audio and voice id (test/mock-tdweb.js): a steady
+  // 180 Hz tone, a sweep up to 5 kHz, then a silent last quarter — so what the
+  // strip claims about frequency and about silence is checkable in pixels.
+  ok(await page.evaluate(() => !!document.querySelector('#view .player .strip')),
+    'strip: the audio scrubber is a strip, not a hairline');
+  ok(await page.evaluate(() => !document.querySelector('#view .player .scrubber, #view .player .waveform')),
+    'strip: no player row kept the old hairline or the bar waveform');
+
+  // A voice note draws Telegram's own waveform bytes IMMEDIATELY — no decode,
+  // no wait — and the spectrum fills in behind it.
+  ok(await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#view .post-player')].filter((p) => /Voice message/.test(p.innerText));
+    return rows.length > 0 && rows.every((p) => {
+      const s = p.querySelector('.strip');
+      return s && s.hasEnvelope && s.dataset.fidelity !== 'hair';
+    });
+  }), 'strip: a voice note has its silhouette the moment the row appears, with no decode');
+
+  // Analysis never runs for a row that has not been played or scrolled into
+  // view: the count only moves when rows reach the observer.
+  const startedBefore = await page.evaluate(() => window.__tgsocial.strip().started);
+  const findFullStrip = () => page.evaluate(() => {
+    for (const p of document.querySelectorAll('#view .post-player')) {
+      const s = p.querySelector('.strip');
+      if (!/Bench loop/.test(p.innerText) || s?.dataset.fidelity !== 'full') continue;
+      for (const old of document.querySelectorAll('[data-test-strip]')) old.removeAttribute('data-test-strip');
+      p.setAttribute('data-test-strip', '1');
+      return true;
+    }
+    return false;
+  });
+  for (let i = 0; i < 16 && !(await findFullStrip()); i += 1) {
+    await page.evaluate(() => window.scrollBy(0, window.innerHeight * 0.9));
+    await page.waitForTimeout(350);
+  }
+  const painted = await findFullStrip();
+  ok(painted, 'strip: the spectrum arrives and the strip paints at full fidelity');
+  ok(await page.evaluate((n) => window.__tgsocial.strip().started > n, startedBefore),
+    'strip: and it only started once the row was scrolled into view');
+
+  if (painted) {
+    // Read the texture back: it is a bitmap, so the assertions are pixels.
+    // Image row 0 is the TOP of the strip and therefore the HIGHEST band —
+    // frequency runs bottom (low) to top (high) on a log axis.
+    const px = await page.evaluate(async () => {
+      const el = document.querySelector('[data-test-strip] .strip');
+      const img = el.querySelector('.strip-spectrum');
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      // The ramp's alpha saturates a third of the way up (transparent → line2 →
+      // muted → …), so alpha alone cannot rank a bright pixel against a
+      // brighter one. Premultiplied red IS monotone over the whole ramp —
+      // 38·0 → 38·0.2 → 113 → 164 → 201 — so that is the intensity here.
+      const lit = (x, y) => {
+        const o = (y * c.width + x) * 4;
+        return (d[o] * d[o + 3]) / 255;
+      };
+      const peakRow = (x) => {
+        let best = 0;
+        for (let y = 1; y < c.height; y += 1) if (lit(x, y) > lit(x, best)) best = y;
+        return best;
+      };
+      const columnMax = (x) => {
+        let m = 0;
+        for (let y = 0; y < c.height; y += 1) m = Math.max(m, lit(x, y));
+        return m;
+      };
+      const band = (from, to) => {
+        let m = 0;
+        for (let x = Math.round(c.width * from); x < Math.round(c.width * to); x += 1) m = Math.max(m, columnMax(x));
+        return m;
+      };
+      const rowMax = (y) => {
+        let m = 0;
+        for (let x = 0; x < c.width; x += 1) m = Math.max(m, lit(x, y));
+        return m;
+      };
+      const toneX = Math.round(c.width * 0.1);
+      const box = el.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      return {
+        w: c.width,
+        h: c.height,
+        rows: [...Array(c.height).keys()].map(rowMax),
+        paintedW: Math.round(box.width * dpr),
+        paintedH: Math.round(box.height * dpr),
+        toneRow: peakRow(toneX),
+        toneAlpha: columnMax(toneX),
+        sweepRow: peakRow(Math.round(c.width * 0.7)),
+        tail: band(0.85, 0.98),
+        clip: band(0.02, 0.7),
+      };
+    });
+    const pixels = await page.evaluate(() => window.__tgsocial.strip());
+    ok(px.w === pixels.cols && px.h === pixels.rows,
+      `strip: one column per strip pixel, one row per pixel of its height (${px.w}×${px.h})`);
+    ok(px.w <= px.paintedW && px.h <= px.paintedH,
+      `strip: one column per pixel and NO MORE (${px.w}×${px.h} into ${px.paintedW}×${px.paintedH} device px)`);
+    // Where the pure log axis says 180 Hz belongs, from the other side of the
+    // app. §2.11.1's axis runs to the ANALYSIS Nyquist, and the analysis rate
+    // now follows the clip's declared length (3:32 for this one), so this pins
+    // both: the axis clamp and the rate the plan picked for it.
+    const rate = analysisRate(212);
+    const expectedRow = px.h - 1 - rowForFrequency(180, px.h, axisMaxHz(rate));
+    ok(px.toneAlpha > 120 && px.toneRow > px.h / 2 && Math.abs(px.toneRow - expectedRow) <= 4,
+      `strip: the 180 Hz tone lands in the LOWER rows, where the log axis puts it (row ${px.toneRow}, expected ${expectedRow} of ${px.h} at ${axisMaxHz(rate)} Hz)`);
+    ok(px.sweepRow < px.toneRow,
+      `strip: and the sweep climbs above it (row ${px.sweepRow} vs ${px.toneRow})`);
+    // The axis ends at Nyquist rather than reserving rows above it, so the top
+    // of the strip is REACHABLE: the 5 kHz sweep gets into its top eighth
+    // instead of stopping a fifth of the way down a 20 kHz axis.
+    ok(Math.max(0, ...px.rows.slice(0, Math.round(px.h / 8))) > 0,
+      `strip: and the top of the strip carries data — no band reserved for what the decimation threw away`);
+    ok(px.tail < 30 && px.clip > 150,
+      `strip: the silent tail is dark (peak alpha ${px.tail}) while the clip is not (${px.clip})`);
+
+    // Rule 6 on the ASSEMBLED card, not on the component: 40pt of region, all
+    // of it actually reachable, and tiling with the play circle rather than
+    // overlapping it.
+    await page.evaluate(() => document.querySelector('[data-test-strip]').scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(200);
+    const hit = await page.evaluate(() => {
+      const row = document.querySelector('[data-test-strip]');
+      const s = row.querySelector('.strip');
+      const btn = row.querySelector('.player-btn');
+      const r = s.getBoundingClientRect();
+      const b = btn.getBoundingClientRect();
+      const probe = (x, y) => {
+        const el = document.elementFromPoint(x, y);
+        if (!el) return 'none';
+        if (el.closest('.strip')) return 'strip';
+        if (el.closest('.player-btn')) return 'btn';
+        return el.className || el.tagName;
+      };
+      return {
+        h: Math.round(r.height * 10) / 10,
+        btn: Math.round(Math.min(b.width, b.height) * 10) / 10,
+        overlaps: r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top,
+        lands: [
+          probe(r.left + r.width / 2, r.top + 1),
+          probe(r.left + r.width / 2, r.top + r.height / 2),
+          probe(r.left + r.width / 2, r.bottom - 1),
+          probe(r.left + 1, r.top + r.height / 2),
+          probe(r.right - 1, r.top + r.height / 2),
+        ],
+      };
+    });
+    ok(hit.h >= 40, `strip: the 40pt region is the strip's own drawn shape (${hit.h}pt tall)`);
+    ok(hit.btn >= 40 && !hit.overlaps, 'strip: it tiles with the 40pt play circle instead of overlapping it');
+    ok(hit.lands.every((x) => x === 'strip'), `strip: every point of the region reaches the strip (${hit.lands.join(', ')})`);
+
+    // Tap anywhere on the strip to seek.
+    await page.locator('[data-test-strip] .player-btn').click();
+    await page.waitForFunction(() => (window.__tgsocial.currentAudio()?.duration ?? 0) > 0, null, { timeout: 10000 });
+    const box = await page.locator('[data-test-strip] .strip').boundingBox();
+    await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+    const seek = await page.evaluate(() => {
+      const a = window.__tgsocial.currentAudio();
+      return a && a.duration ? a.currentTime / a.duration : -1;
+    });
+    ok(Math.abs(seek - 0.75) < 0.06, `strip: clicking at 75% of the strip seeks to 75% of the clip (${seek.toFixed(3)})`);
+    ok(await page.evaluate(() => Number(document.querySelector('[data-test-strip] .strip').getAttribute('aria-valuenow'))) === 75,
+      'strip: and the slider reports it');
+    await page.evaluate(() => window.__tgsocial.currentAudio()?.pause());
+  }
+
+  // §2.11.1: "a video note keeps its circular player and gets the strip as the
+  // transport underneath it." The circle stays the picture; the strip under it
+  // is the scrubber, and it replaces the hairline rather than sitting beside
+  // it. It arrives WITH the player, which is the gate iOS runs as well
+  // (InlineVideoView: `if mode.hasTransport, started`) — before the tap there
+  // is no element for a scrubber to drive, and a control that seeks nothing is
+  // a control that lies.
+  const findNote = () => page.evaluate(() => {
+    const el = document.querySelector('#view .post-video-note');
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
+    return { strip: !!el.querySelector('.strip'), play: !!el.querySelector('.media-play'), circle: !!el.querySelector('.post-media.video-note') };
+  });
+  let note = await findNote();
+  for (let i = 0; i < 24 && !note; i += 1) {
+    await page.evaluate(() => window.scrollBy(0, window.innerHeight * 0.9));
+    await page.waitForTimeout(250);
+    note = await findNote();
+  }
+  ok(!!note, 'strip: the feed carries a video note');
+  if (note) {
+    ok(note.circle && note.play && !note.strip,
+      'strip: an unplayed video note is the circle and a play glyph — no transport that would seek nothing');
+    await page.waitForTimeout(200);
+    await page.locator('#view .post-video-note .media-play').first().click();
+    await page.waitForSelector('#view .post-video-note .strip', { timeout: 15000 });
+    await page.waitForFunction(() => {
+      const v = document.querySelector('#view .post-video-note video');
+      return !!v && Number.isFinite(v.duration) && v.duration > 0;
+    }, null, { timeout: 15000 });
+    const noteBox = await page.locator('#view .post-video-note .strip').boundingBox();
+    await page.mouse.click(noteBox.x + noteBox.width * 0.75, noteBox.y + noteBox.height / 2);
+    const seeked = await page.evaluate(() => {
+      const v = document.querySelector('#view .post-video-note video');
+      return {
+        f: v.duration ? v.currentTime / v.duration : -1,
+        h: Math.round(document.querySelector('#view .post-video-note .strip').getBoundingClientRect().height * 10) / 10,
+        hairline: !!document.querySelector('#view .post-video-note .scrubber, #view .post-video-note .waveform'),
+      };
+    });
+    ok(Math.abs(seeked.f - 0.75) < 0.08,
+      `strip: the strip IS the video note's transport — a click at 75% seeks the player to 75% (${seeked.f.toFixed(3)})`);
+    ok(!seeked.hairline, 'strip: and it replaced the hairline scrubber rather than sitting beside it');
+    ok(seeked.h >= 40, `strip: the video note's strip keeps rule 6's 40pt region (${seeked.h}pt tall)`);
+
+    // The analyser reads the note's OWN container through its audio track (iOS
+    // does the same with AVAudioFile), so this is a spectrum and not a degrade.
+    const noteFidelity = await page.waitForFunction(() => {
+      const el = document.querySelector('#view .post-video-note .strip');
+      return el && el.dataset.fidelity !== 'hair' ? el.dataset.fidelity : false;
+    }, null, { timeout: 20000 }).then((handle) => handle.jsonValue()).catch(() => null);
+    ok(noteFidelity === 'full',
+      `strip: and the note's own audio track paints the spectrum (data-fidelity="${noteFidelity}")`);
+
+    // Hand the blob back before the eviction tests below: an inline player that
+    // keeps a src no cache is pinning is the one thing on this screen that
+    // cannot repaint after a revoke.
+    await page.evaluate(() => {
+      const v = document.querySelector('#view .post-video-note video');
+      if (!v) return;
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+    });
+  }
+
+  // §2.11.1 degrades rather than blocking. The first audio file the mock serves
+  // is not audio at all, so its decode fails; that row keeps a usable scrubber —
+  // the hairline of §2.11 — instead of an empty box, and nothing is logged as an
+  // error, because a clip the browser cannot decode is a fact about the clip.
+  await page.waitForFunction(() => (window.__tgsocial.strip().states.failed ?? 0) >= 1, null, { timeout: 20000 }).catch(() => null);
+  const degraded = await page.evaluate(() => {
+    const st = window.__tgsocial.strip();
+    const hairs = [...document.querySelectorAll('.strip[data-fidelity="hair"]')];
+    return {
+      failed: st.states.failed ?? 0,
+      ready: st.states.ready ?? 0,
+      worker: st.worker,
+      lastMs: st.lastMs,
+      hairSeekable: hairs.every((el) => {
+        const track = el.querySelector('.strip-track');
+        return !!track && getComputedStyle(track).display !== 'none';
+      }),
+    };
+  });
+  ok(degraded.failed >= 1 && degraded.ready >= 1,
+    `strip: an undecodable clip degrades while the others still paint (${degraded.failed} failed, ${degraded.ready} ready)`);
+  ok(degraded.hairSeekable, 'strip: a degraded strip keeps the §2.11 hairline, so the row is still seekable');
+  ok(degraded.worker === true, "strip: the analysis ran in a Worker, off the feed's thread");
+  console.log(`# strip: last analysis ${degraded.lastMs} ms`);
+
+  // §2.11.1's OTHER degrade, and the one only a real engine can answer: past
+  // the duration ceiling the spectrum is skipped but the clip is still decoded
+  // coarsely for the silhouette, so a 12 minute DJ set is a `wave` and not the
+  // §2.11 hairline. How coarsely is up to the browser — an OfflineAudioContext
+  // may refuse a rate — so the reachable band is probed here rather than
+  // assumed, and a runtime that cannot decode coarsely refuses instead of
+  // allocating 115 MB for one row.
+  const bands = await page.evaluate(async () => {
+    const spectro = await import('/js/spectro.js');
+    const strip = await import('/js/strip.js');
+    const envelopeRate = strip.envelopeDecodeRate();
+    const plan = (d) => spectro.analysisPlan(d, { envelopeRate }).mode;
+    return {
+      envelopeRate,
+      budget: spectro.ENVELOPE_MAX_SAMPLES,
+      short: plan(212),
+      long: plan(12 * 60),
+      huge: plan(2 * 3600),
+      // the band must also be non-empty on a runtime whose OfflineAudioContext
+      // floor is the spec's own 8 kHz — this engine reaches 3 kHz, so that case
+      // is forced rather than probed (protocol.test.mjs pins the arithmetic)
+      spec8k: spectro.analysisPlan(12 * 60, { envelopeRate: 8000 }).mode,
+    };
+  });
+  ok(bands.short === 'spectrum' && bands.long === 'envelope' && bands.huge === 'none',
+    `strip: three bands — spectrum under the ceiling, silhouette past it, nothing past the hard cap (at ${bands.envelopeRate} Hz)`);
+  ok(bands.envelopeRate * 12 * 60 < bands.budget,
+    `strip: and the silhouette's own decode stays inside its working-set ceiling (${bands.envelopeRate} Hz)`);
+  ok(bands.spec8k === 'envelope',
+    'strip: the silhouette band survives an engine that will not decode below 8 kHz');
+
+  // …and the band is not just planned, it runs: the real modules, a real
+  // decode, the real worker. A clip that DECLARES 12 minutes takes the
+  // silhouette path whatever its bytes are, which is also how the mock's audio
+  // declares 3:32 and serves six seconds.
+  const longClip = await page.evaluate(async () => {
+    const { ensureStrip } = await import('/js/strip.js');
+    const { strip } = await import('/vendor/house-pour.js');
+    const rate = 16000;
+    const n = rate * 2;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const view = new DataView(buf);
+    const ascii = (o, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(o + i, s.charCodeAt(i)); };
+    ascii(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    ascii(36, 'data'); view.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i += 1) {
+      const loud = i > n / 4 && i < n / 2 ? 1 : 0.05;
+      view.setInt16(44 + i * 2, Math.round(0.6 * 32767 * loud * Math.sin((2 * Math.PI * 440 * i) / rate)), true);
+    }
+    const el = strip({}); // never appended: this is the record's shape, not a screen
+    const app = { td: { putDerived: () => { throw new Error('a silhouette must never paint a texture'); }, derivedUrl: () => null } };
+    const record = ensureStrip(app, { file: { uniqueId: 'flows-long-set' }, duration: 12 * 60 }, el, async () => buf);
+    for (let i = 0; i < 120 && record.state === 'pending'; i += 1) await new Promise((r) => setTimeout(r, 50));
+    const values = record.envelope ? [...record.envelope] : [];
+    return {
+      state: record.state,
+      mode: record.mode,
+      key: record.key,
+      fidelity: el.dataset.fidelity,
+      columns: values.length,
+      peak: values.length ? Math.max(...values) : 0,
+      head: values.length ? Math.max(...values.slice(0, values.length / 8)) : 1,
+    };
+  });
+  ok(longClip.state === 'ready' && longClip.mode === 'envelope' && longClip.key === null,
+    `strip: a 12 minute clip resolves to the silhouette alone, with no texture (${longClip.state}/${longClip.mode})`);
+  ok(longClip.fidelity === 'wave',
+    `strip: and the row paints the §2.11.1 silhouette, not the §2.11 hairline (data-fidelity="${longClip.fidelity}")`);
+  ok(longClip.columns > 1 && longClip.peak > 0.99 && longClip.head < 0.3,
+    `strip: the silhouette is the shape of the take — ${longClip.columns} columns, quiet head ${longClip.head.toFixed(2)}, peak ${longClip.peak.toFixed(2)}`);
+
+  // A failure is a moment, not a property of the clip. A download that stalled
+  // or was cancelled while the row was off-screen used to pin that clip to the
+  // hairline for the life of the page: every later trigger — the play tap, the
+  // memory-pressure rebind — hit the same dead record and returned it.
+  const retries = await page.evaluate(async () => {
+    const { ensureStrip } = await import('/js/strip.js');
+    const { strip } = await import('/vendor/house-pour.js');
+    const rate = 16000;
+    const n = Math.round(rate * 0.5);
+    const buf = new ArrayBuffer(44 + n * 2);
+    const view = new DataView(buf);
+    const ascii = (o, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(o + i, s.charCodeAt(i)); };
+    ascii(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    ascii(36, 'data'); view.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i += 1) view.setInt16(44 + i * 2, Math.round(0.6 * 32767 * Math.sin((2 * Math.PI * 440 * i) / rate)), true);
+
+    const app = { td: { putDerived: () => ({ size: 1 }), derivedUrl: () => null } };
+    const settle = async (record) => {
+      for (let i = 0; i < 120 && record.state === 'pending'; i += 1) await new Promise((r) => setTimeout(r, 50));
+      return record.state;
+    };
+
+    // 1. a cancelled download, then the row comes back into view
+    let calls = 0;
+    const flaky = async () => {
+      calls += 1;
+      if (calls === 1) {
+        const e = new Error('Download cancelled.');
+        e.cancelled = true; // js/td.js DownloadCancelled
+        throw e;
+      }
+      return buf.slice(0);
+    };
+    const el = strip({});
+    const meta = { file: { uniqueId: 'flows-stalled-clip' }, duration: 10 };
+    const stalled = await settle(ensureStrip(app, meta, el, flaky));
+    const recovered = await settle(ensureStrip(app, meta, el, flaky));
+
+    // 2. a clip the browser genuinely cannot decode: a re-arm does NOT keep
+    //    re-downloading it, but the play tap — somebody waiting on the row —
+    //    does get another go
+    let junkCalls = 0;
+    const junk = async () => { junkCalls += 1; return new ArrayBuffer(64); };
+    const bad = { file: { uniqueId: 'flows-undecodable-clip' }, duration: 10 };
+    const el2 = strip({});
+    await settle(ensureStrip(app, bad, el2, junk));
+    const afterRearm = junkCalls;
+    await settle(ensureStrip(app, bad, el2, junk));
+    const afterQuietRearm = junkCalls;
+    await settle(ensureStrip(app, bad, el2, junk, { retry: true }));
+    return { stalled, recovered, calls, afterRearm, afterQuietRearm, afterTap: junkCalls };
+  });
+  ok(retries.stalled === 'failed' && retries.recovered === 'ready' && retries.calls === 2,
+    `strip: a cancelled download is retried on the next trigger, not remembered forever (${retries.stalled} → ${retries.recovered})`);
+  ok(retries.afterQuietRearm === retries.afterRearm && retries.afterTap === retries.afterRearm + 1,
+    `strip: an undecodable clip is not re-downloaded on every scroll, but a tap still gets another go (${retries.afterRearm} → ${retries.afterQuietRearm} → ${retries.afterTap})`);
+
+  // The strip's bytes go through the SAME budget as every picture, so a strip
+  // is evictable and the Status sheet can see it — never held outside the
+  // accounting (js/blobcache.js).
+  ok(await page.evaluate(() => window.__tgsocial.media.stats().bytes > 0 && window.__tgsocial.media.stats().bytes <= window.__tgsocial.media.stats().maxBytes),
+    'strip: its texture is charged to the media budget and the budget still holds');
+  await snap('strip');
+  await page.evaluate(() => window.scrollTo(0, 0));
 
   // ── §2.11 media: viewer, album swipe, now-playing dock ───────────────────
   // scroll until the animation post enters the visibility observer's range
@@ -723,6 +1129,12 @@ try {
   await page.locator('#view .player .player-btn').first().click();
   await page.waitForSelector('#dock .now-playing', { timeout: 8000 });
   ok(true, 'audio: now-playing row docks above the tab bar');
+  // The mock now serves real, playable audio (test/mock-tdweb.js — the
+  // spectrogram strip has to have something to analyse), so a clip left running
+  // would reach its own end partway through the dock assertions below and take
+  // the now-playing row with it. Pausing keeps the row docked, which is the
+  // state those assertions are about; the end is dispatched deliberately later.
+  await page.evaluate(() => window.__tgsocial.currentAudio()?.pause());
 
   // ── bottom inset while the now-playing dock is live (PRODUCT §1) ─────────
   await page.click('.tabs button:has-text("You")');
@@ -756,6 +1168,7 @@ try {
   // hides with the tab bar
   await page.evaluate(() => {
     const el = window.__tgsocial.currentAudio();
+    if (!el) return;
     Object.defineProperty(el, 'ended', { value: true, configurable: true });
     el.dispatchEvent(new Event('ended'));
   });
@@ -833,6 +1246,7 @@ try {
     await page.waitForTimeout(500);
   }
   ok(/That's everything\./.test(await text()), "feed: That's everything. at the end");
+
   const total = await page.locator('#view article.post').count();
   ok(total >= 40, `feed: ${total} posts after exhausting sources`);
   const linkOk = await page.evaluate(() => window.__tgsocial.repo.cachedFeed()[0].link);

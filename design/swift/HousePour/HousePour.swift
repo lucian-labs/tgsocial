@@ -265,6 +265,9 @@ public enum HPMetric {
     public static let tabLabelMinScale: CGFloat = 0.8
     /// HPScrubber knob (PRODUCT §2.11: "a 12pt panel knob with the contact shadow").
     public static let scrubberKnob: CGFloat = 12
+    /// HPSpectrogramStrip: the envelope's peak as a fraction of the half-height, so a full-scale
+    /// column's ridge stays inside the strip's rounded corners instead of being clipped by them.
+    public static let stripEnvelopeScale: CGFloat = 0.92
     /// HPWaveform bar geometry and the idle bar height when no samples are known.
     public static let waveformHeight: CGFloat = 28
     public static let waveformBar: CGFloat = 2
@@ -308,4 +311,12 @@ public enum HPAlpha {
     public static let toastTone: Double = 0.6
     /// Full-screen viewer backdrop (`ink` at 96%, PRODUCT §2.11).
     public static let viewerBackdrop: Double = 0.96
+    /// HPSpectrogramStrip (PRODUCT §2.11.1). The envelope is *overlaid* on the spectrum, so its
+    /// fill is a wash and not a block: at the 0.55 the family's bottom-anchored waveform uses, a
+    /// silhouette that is near its own peak for most of a take — which is most takes — paints over
+    /// the picture it is supposed to sit on. The ridge is what carries the shape; the fill only
+    /// says which side of the line is inside. Ahead of the playhead the silhouette is `ink` at
+    /// reduced opacity, and the played part is `accent`.
+    public static let stripFill: Double = 0.16
+    public static let stripAhead: Double = 0.4
 }

@@ -84,6 +84,7 @@
   --space-column-side: 14px;
   --space-row-pad: 14px;
   --space-touch-min: 40px;
+  --space-strip-height: 44px;
   --space-kebab-dot: 4px;
   --space-kebab-dot-gap: 3px;
   --space-menu-width: 240px;
@@ -97,6 +98,12 @@
   --shadow-cast: 0px 14px 34px -18px rgba(38, 35, 25, 0.18);
   --shadow-cast-modal: 0px 14px 34px -18px rgba(38, 35, 25, 0.27);
   --scrim: rgba(38, 35, 25, 0.4);
+  --ramp-stops: 5;
+  --ramp-0: rgba(38, 35, 25, 0); --ramp-0-at: 0;
+  --ramp-1: rgba(38, 35, 25, 0.2); --ramp-1-at: 0.28;
+  --ramp-2: rgba(113, 105, 90, 1); --ramp-2-at: 0.55;
+  --ramp-3: rgba(164, 129, 59, 1); --ramp-3-at: 0.82;
+  --ramp-4: rgba(201, 169, 97, 1); --ramp-4-at: 1;
   --motion-color: 150ms;
   --motion-toast: 200ms;
 }
@@ -1055,6 +1062,93 @@ h3 .mark-count {
   background: var(--ink);
 }
 .waveform i.played { background: var(--accent); }
+
+/* ── HPStrip: the spectrogram scrubber (PRODUCT 2.11.1) ──────────────────── */
+
+/* The strip sits on bg2 at radius-media: a DATA SURFACE inside the card, not a
+   second dark surface. Its painted height is a token and is over touchMin, so
+   rule 6's 40pt region is the strip's own drawn shape — nothing reaches past
+   its bounds into the band above it.
+
+   The canvas colours are declared here as custom properties rather than baked
+   into the script: a canvas needs a concrete colour string, and rule 1 says
+   component code carries no hex, so house-pour.js reads these back out of the
+   cascade (tokenValue). Played is accent; ahead of the playhead the strip is
+   ink at reduced opacity. */
+.strip {
+  --strip-played: var(--accent);
+  --strip-unplayed: var(--ink);
+  /* The silhouette is a WASH plus a ridge, not a slab: §2.11.1 overlays it ON
+     the spectrogram, so the fill has to stay light enough to read the picture
+     through. LZWaveform fills at 0.55 because it has nothing underneath. */
+  --strip-fill-alpha: 0.26;
+  --strip-unplayed-alpha: 0.4;
+  --strip-ridge: 1.5px;
+  position: relative;
+  width: 100%;
+  height: var(--space-strip-height);
+  margin-top: calc(var(--space-card-gap) / 4);
+  border-radius: var(--radius-media);
+  background: var(--bg-2);
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* The hairline of 2.11 is the floor the strip degrades to, so it is always
+   underneath: a clip past the duration ceiling, or one that would not decode,
+   keeps a usable scrubber instead of an empty box. */
+.strip-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--border-width);
+  background: var(--line-2);
+}
+.strip-played {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: var(--border-width);
+  width: 0;
+  background: var(--accent);
+}
+.strip[data-fidelity='wave'] .strip-track,
+.strip[data-fidelity='wave'] .strip-played,
+.strip[data-fidelity='full'] .strip-track,
+.strip[data-fidelity='full'] .strip-played { display: none; }
+
+/* One texture, blitted — never a path re-emitted per frame (WakeFFT.swift's
+   waterfall comment: the path draw was O(bars x history) and had to go). */
+.strip-spectrum,
+.strip-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.strip-spectrum { object-fit: fill; }
+.strip[data-fidelity='hair'] .strip-spectrum,
+.strip[data-fidelity='wave'] .strip-spectrum { display: none; }
+.strip[data-fidelity='hair'] .strip-wave { display: none; }
+
+/* The playhead is a 1pt accent rule (2.11.1) — no knob on the strip. */
+.strip-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--border-width);
+  background: var(--accent);
+  pointer-events: none;
+}
+.strip-head[hidden] { display: none; }
+
+/* The viewer paints on charcoal, where ink-on-ink would vanish. */
+.viewer-slide .strip { background: transparent; }
+.viewer-slide .strip { --strip-unplayed: var(--viewer-text); }
 
 /* ── HPRing: determinate gold download progress, tap to cancel ───────────── */
 

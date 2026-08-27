@@ -117,6 +117,25 @@ ring, initial set in `h2` (size 36) / `h1` (size 72) display serif, muted.
 **HPMedia(image, aspect)** — full width, `Radius.media`, `bg2` placeholder
 while loading, no border, no shadow.
 
+**HPSpectrogramStrip(content, progress, onSeek)** — the audio scrubber
+(PRODUCT §2.11.1). A spectrogram of the *whole clip* on `bg2` at
+`Radius.media`, its one-pole envelope mirrored about the centre and filled
+over the top, a 1pt `accent` playhead, played in `accent` and ahead of the
+head in `ink` at reduced opacity. Time is the x axis end to end, so the strip
+**is** the scrubber: tap or drag anywhere on it to seek. It is `stripHeight`
+(44) tall, so its painted shape simply is its 40pt target — rule 6's first
+case, no overlay, nothing owed by the container. Two ingredients ship with
+it: **HPRamp**, the interpolation of the `ramp` token set (transparent →
+`line2` → `muted` → `accent`, topping out at `accent2` — the only gradient in
+the look that carries data, and the only place a colour is computed rather
+than named), and **HPMirrorWave**, the connected-line-through-peaks
+silhouette with played/unplayed runs keyed on an `Int`. The spectrum arrives
+as a **bitmap**, never a path: a full-width strip is ~1400 columns, and
+re-emitting that per frame is the O(columns × rows) blowup the texture
+exists to avoid. Analysis is the app's job, not the kit's. Currently iOS
+only; the ramp tokens are generated for all three so the other two match
+when they land.
+
 **HPKebabButton(label, action)** — the vertical three-dot button (PRODUCT
 §2.6). Ghost: no fill, no border, `Radius.pill`, three `faint` dots `pillY` (4)
 across stacked with a 3pt gap — an 18pt column of dots centred in a `touchMin`

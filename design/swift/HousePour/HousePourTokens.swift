@@ -13,6 +13,17 @@ public struct HPShadow {
 
 public enum HPFace { case display, brand, mono, body }
 
+/// One stop of the spectrogram ramp (PRODUCT 2.11.1). at is 0...1 along the ramp;
+/// the channels are straight (non-premultiplied) sRGB.
+public struct HPRampStop {
+    public let at: CGFloat
+    public let r: Double
+    public let g: Double
+    public let b: Double
+    public let a: Double
+    public var color: Color { Color(red: r, green: g, blue: b, opacity: a) }
+}
+
 public struct HPTextStyle {
     public let face: HPFace
     public let size: CGFloat
@@ -123,6 +134,7 @@ public enum HPTokens {
     public static let btnRowGap: CGFloat = 10
     public static let rowGap: CGFloat = 10
     public static let touchMin: CGFloat = 40
+    public static let stripHeight: CGFloat = 44
     public static let kebabDot: CGFloat = 4
     public static let kebabDotGap: CGFloat = 3
     public static let menuWidth: CGFloat = 240
@@ -175,6 +187,17 @@ public enum HPTokens {
     public static let input = HPTextStyle(face: .body, size: 16, weight: 400, lineHeight: 1.3, tracking: 0, uppercase: false)
     public static let mono = HPTextStyle(face: .mono, size: 14.4, weight: 400, lineHeight: 1.5, tracking: 0, uppercase: false)
     public static let monoSmall = HPTextStyle(face: .mono, size: 12.8, weight: 400, lineHeight: 1.5, tracking: 0, uppercase: false)
+    }
+    /// PRODUCT 2.11.1 — the spectrogram strip's data ramp. Interpolation is hand-written
+    /// (HPRamp); only the stops are generated, so all three platforms share them exactly.
+    public enum Ramp {
+        public static let stops: [HPRampStop] = [
+        HPRampStop(at: 0, r: 0.149, g: 0.137, b: 0.098, a: 0),  // line2
+        HPRampStop(at: 0.28, r: 0.149, g: 0.137, b: 0.098, a: 0.2),  // line2
+        HPRampStop(at: 0.55, r: 0.443, g: 0.412, b: 0.353, a: 1),  // muted
+        HPRampStop(at: 0.82, r: 0.643, g: 0.506, b: 0.231, a: 1),  // accent
+        HPRampStop(at: 1, r: 0.788, g: 0.663, b: 0.38, a: 1),  // accent2
+        ]
     }
     public enum Motion {
         public static let color: Double = 0.15

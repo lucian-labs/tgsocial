@@ -443,8 +443,17 @@ waterfall, in House Pour's palette, and sized to a player row.
 scrubber: you can see where the loud part is before you drag to it.
 
 - **Spectrum.** A short-time FFT across the clip. Frequency runs bottom
-  (low) to top (high) on a **log** axis over 20 Hz–20 kHz, because that is
-  how pitch is spaced; magnitude in dB, not linear. Column count follows the
+  (low) to top (high) on a **log** axis, because that is how pitch is
+  spaced; magnitude in dB, not linear. The axis runs from 20 Hz to the
+  **analysis Nyquist**, ceilinged at 20 kHz — the strip is analysed
+  decimated (below), so in practice its top is 8 kHz for a clip under five
+  minutes and slides to 4 kHz at the ten-minute cap. It follows the rate
+  rather than reserving rows for a band the decimation discarded before the
+  FFT saw it: a literal 20 kHz top leaves 13% of a 44pt strip permanently
+  dark at a 16 kHz analysis and 23% at 8 kHz, and moves the height of that
+  dead band around with the clip's *length*, which is the one thing a fixed
+  axis was meant to prevent. Painting rows for frequencies the decode threw
+  away is drawing a floor and calling it silence. Column count follows the
   strip's pixel width — one column per pixel, no more; row count follows its
   height. Normalise with a rolling peak (an AGC) rather than absolute dBFS,
   so a quiet recording still fills the strip instead of reading as silence.
@@ -466,19 +475,33 @@ second dark surface.
 
 **Cost is bounded, and it degrades rather than blocking.** Analysis is
 off the main thread, at a decimated sample rate (8–16 kHz is plenty for a
-strip this size), and capped: past a duration ceiling (about 10 minutes) or
+strip this size — 16 kHz up to about five minutes, sliding to 8 kHz at the
+cap so the decoded buffer stays bounded), and capped: past a duration
+ceiling (about 10 minutes) or
 on any decode failure, fall back to the amplitude-only silhouette — for a
 voice note that is Telegram's own waveform bytes, which need no decode at
 all and should be drawn immediately while the spectrum computes behind it.
-The row is usable the moment it appears; the spectrum fills in.
+Past the ceiling the silhouette is still *decoded*, far coarser (a follower
+over sample magnitudes needs no frequency resolution), so a 12-minute set
+gets a silhouette rather than a hairline; past a second, much higher ceiling
+(an hour) there is no strip at all, because even that pass has to read the
+whole file to draw a few hundred numbers. The row is usable the moment it
+appears; the spectrum fills in.
 
 **Interaction.** Tap or drag anywhere on the strip to seek. The strip keeps
 the 40pt hit region of any control (`COMPONENTS.md` rule 6), taller than its
 painted height if need be. Analysis never runs for a row that has not been
 played or scrolled into view.
 
-Voice notes and video notes use the same strip. Video keeps its poster and
-transport; this replaces the audio scrubber only.
+Voice notes and video notes use the same strip — a video note keeps its
+circular player and gets the strip as the transport underneath it. Video
+*messages* keep their poster and hairline scrubber; this replaces the audio
+scrubber only.
+
+*Port state:* all three builds clamp the axis to the analysis Nyquist as
+above. iOS and web give a video note the strip as its transport; **Android
+still draws the circle with no transport at all** and is the one build that
+does not yet meet the sentence above.
 
 Player rules (all platforms):
 

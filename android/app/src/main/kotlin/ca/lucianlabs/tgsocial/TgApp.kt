@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import ca.lucianlabs.tgsocial.repo.ActivityRegistry
+import ca.lucianlabs.tgsocial.repo.AudioStripRepo
 import ca.lucianlabs.tgsocial.repo.CommentRepo
 import ca.lucianlabs.tgsocial.repo.DiscoveryRepo
 import ca.lucianlabs.tgsocial.repo.FeedRepo
@@ -43,6 +44,8 @@ class TgApp : Application() {
         private set
     lateinit var playback: PlaybackHub
         private set
+    lateinit var strips: AudioStripRepo
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -59,6 +62,9 @@ class TgApp : Application() {
         // this process, pixel sizes from the geometry below (MediaBudget documents the arithmetic).
         media = MediaRepo(tg, activity, columnMediaWidthPx(), resources.displayMetrics.widthPixels)
         playback = PlaybackHub(this, tg)
+        // PRODUCT §2.11.1 — the spectrogram analyser. It keeps nothing itself: strips land in MediaRepo's
+        // byte-bounded cache, so they trim with everything else under memory pressure.
+        strips = AudioStripRepo(media, tg.scope)
         feed.displayWidthPx = resources.displayMetrics.widthPixels
         comments.displayWidthPx = resources.displayMetrics.widthPixels
         tg.start()

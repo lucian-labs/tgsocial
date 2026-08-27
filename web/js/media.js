@@ -10,6 +10,15 @@
  * Nothing here hands off to Telegram or the browser; only link previews and
  * the explicit Open in Telegram button do (shared.js).
  *
+ * The audio scrubber is the spectrogram strip of PRODUCT §2.11.1, not a
+ * hairline: js/strip.js computes it (off the main thread, at a decimated rate,
+ * capped by duration) and the row below arms that analysis on visibility and on
+ * the play tap, never on render. A voice note draws Telegram's own waveform
+ * bytes as its silhouette immediately, with no decode, and the spectrum fills
+ * in behind it. A video NOTE gets the same strip as its transport under the
+ * circle (videoNoteBlock); a video MESSAGE keeps its poster and hairline, which
+ * is the line §2.11.1 draws — the strip replaces the audio scrubber only.
+ *
  * Memory: every picture on this screen goes through td.imageUrl(), which
  * decodes at the size the card paints and caches the result under a byte
  * bound (js/blobcache.js). Nothing here calls URL.createObjectURL, nothing
@@ -17,7 +26,8 @@
  * an element registers itself so a memory-pressure flush can repaint it
  * instead of leaving a hole (watchMedia / releaseMedia below).
  */
-import { h, replace, button, media, pill, icon, ring, scrubber, playerRow, nowPlaying, viewer } from '../vendor/house-pour.js';
+import { h, replace, button, media, pill, icon, ring, scrubber, strip, playerRow, nowPlaying, viewer } from '../vendor/house-pour.js';
+import { ensureStrip, releaseStrip, stripPixels } from './strip.js';
 import { formatDuration } from './protocol.js';
 import { pickPhotoSize } from './repo.js';
 import { cardWidthPx, viewerWidthPx } from './decode.js';
@@ -186,6 +196,10 @@ export function releaseMedia(root) {
   if (root.tagName === 'VIDEO' || root.tagName === 'AUDIO') players.push(root);
   for (const el of players) releasePlayer(el);
   for (const b of [...bindings]) if (b.el === root || root.contains?.(b.el)) bindings.delete(b);
+  // a strip whose row is going away must stop being a repaint target, or the
+  // analysis record holds the trimmed card the way the row registry used to
+  if (root.querySelectorAll) for (const el of root.querySelectorAll('.strip')) releaseStrip(el);
+  if (root.classList?.contains('strip')) releaseStrip(root);
   pruneAudioRows(root);
   if (root.querySelectorAll) for (const el of root.querySelectorAll('*')) unwatchVisible(el);
   unwatchVisible(root);
@@ -322,6 +336,22 @@ export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto 
   }
   if (auto) whenVisible(container, () => start(1));
   return { start, reload };
+}
+
+/**
+ * The clip's raw bytes, for the strip's analysis (js/strip.js). Priority is the
+ * caller's: 1 for a row that merely scrolled into view, 32 for one that was
+ * tapped, as §2.11 requires of every media fetch. The Blob is the SAME one the
+ * player will use, already in the media cache under the file key, so analysing
+ * a row and then playing it is one download and not two.
+ */
+function bytesFor(app, slim, kind, mime, priority) {
+  const direct = directUrl(slim);
+  if (direct) return fetch(direct).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`Fetch ${r.status}`))));
+  if (!slim?.id) return Promise.reject(new Error('File is empty.'));
+  return app.td
+    .fileBlobOrThrow(fullFile(slim), { priority, label: labelFor(kind), mime })
+    .then((blob) => blob.arrayBuffer());
 }
 
 /** Resolve a slim file to a playable URL at tap priority; rejects on cancel/failure. */
@@ -748,32 +778,102 @@ function audioMeta(post, item, kind) {
   };
 }
 
+/** Values for the silhouette a voice note has before anything is decoded. */
+function voiceEnvelope(meta, cols) {
+  const values = decodeWaveform(meta.waveform, Math.max(2, Math.min(cols, 160)));
+  return values && values.length > 1 ? Float32Array.from(values) : null;
+}
+
 function audioBlock(app, post, item, kind) {
   const meta = audioMeta(post, item, kind);
+  const { cols } = stripPixels();
+  // The scrubber IS the spectrogram (§2.11.1): tap or drag anywhere on it to
+  // seek, and its painted height is over touchMin so the 40pt region of rule 6
+  // is its own drawn shape.
+  const track = strip({ onSeek: (f) => seekAudio(app, meta, f), label: `Seek ${meta.title}` });
+  // Telegram already shipped the shape of a voice note. Draw it NOW — the row
+  // is usable the moment it appears, and the spectrum arrives behind it.
+  if (kind === 'voice') {
+    const bytes = voiceEnvelope(meta, cols);
+    if (bytes) track.setEnvelope(bytes);
+  }
+  // Priority 32 is the tap (§2.11), and a tap is also the signal that somebody
+  // is waiting on this row: it jumps the decode queue and it retries an
+  // analysis that failed, instead of inheriting a stalled download for good.
+  const analyse = (priority) => ensureStrip(app, meta, track, () => bytesFor(app, meta.file, meta.kind, meta.mime, priority), { retry: priority > 1 });
   const row = playerRow({
     title: meta.title,
     sub: meta.sub,
     duration: formatDuration(meta.duration),
-    waveform: kind === 'voice' ? decodeWaveform(meta.waveform) : null,
-    onToggle: () => toggleAudio(app, meta),
-    onSeek: (f) => seekAudio(app, meta, f),
+    track,
+    onToggle: () => {
+      analyse(32);
+      toggleAudio(app, meta);
+    },
     label: `Play ${meta.title}`,
   });
   detachedAudio.rows.add({ row, key: meta.key });
   const wrap = h('div.post-player', row);
   wrap.addEventListener('click', stop);
+  // "Analysis never runs for a row that has not been played or scrolled into
+  // view" (§2.11.1) — this and the play tap above are its only two triggers
+  whenVisible(wrap, () => analyse(1));
+  // A strip is cache bytes like any picture, so a memory-pressure flush can
+  // take it; this is what puts it back, the same binding the photos use
+  bind(track, () => analyse(1));
   // rebind state when the feed re-renders mid-playback
   if (detachedAudio.key === meta.key) paintAudio(app);
   return wrap;
 }
 
-/** Circular inline player for video notes. */
+/**
+ * Circular inline player for video notes, with the spectrogram strip as its
+ * transport underneath — §2.11.1: "Voice notes and video notes use the same
+ * strip — a video note keeps its circular player and gets the strip as the
+ * transport underneath it." The sentence after that one is where the line
+ * falls: a video MESSAGE keeps its poster and hairline scrubber
+ * (`mountInlineVideo`), because this replaces the audio scrubber only.
+ *
+ * The transport arrives with the player, not before it, which is the same gate
+ * iOS runs (`InlineVideoView.body`: `if mode.hasTransport, started`). Until the
+ * circle is tapped there is no <video> for a strip to drive, and a scrubber
+ * that seeks nothing is a control that lies. It also keeps §2.11's fetch rules
+ * honest: an audio ROW is a transport from the moment it renders and therefore
+ * analyses at priority 1 on visibility, while a video note is a poster until
+ * somebody plays it — arming it on visibility would download every round video
+ * in a scrolled feed to draw a strip nobody asked for. iOS refuses the same
+ * way, from the other end: `SpectrogramScrubber.analyse` bails unless the file
+ * is ALREADY local and never starts a download of its own.
+ *
+ * The strip drives this block's OWN <video>, not the shared audio player: a
+ * video note is not part of the one-audio-at-a-time set the now-playing row
+ * docks for, so `onSeek` and the playhead both go through the element — again
+ * as iOS does, handing `SpectrogramScrubber` its `transport:` instead of the
+ * audio model.
+ *
+ * The analysis reads the note's own mp4: `decodeAudioData` opens an MPEG-4
+ * container and hands back its audio track, so `bytesFor` gets the same file
+ * the player is already streaming and there is one download, not two. A
+ * container the engine will not decode degrades like any other failure — the
+ * strip keeps the §2.11 hairline and the row stays seekable.
+ */
 function videoNoteBlock(app, post, item) {
   const box = mediaBox('1 / 1', item.mini);
   box.classList.add('video-note');
   if (item.thumb?.file?.id) autoLoad(app, box, item.thumb.file, { kind: 'photo', showRing: false, decodeWidth: THUMB_PX, onUrl: (url) => box.setImage(url) });
   const play = h('button.media-play', { type: 'button', 'aria-label': 'Play video note' }, h('span.disc', icon('play')));
   box.append(play);
+  const wrap = h('div.post-video-note', box);
+  wrap.addEventListener('click', stop);
+
+  const meta = {
+    key: `${post.key}:${item.file?.uniqueId ?? item.file?.id}`,
+    kind: 'videoNote',
+    duration: item.duration,
+    file: item.file,
+    mime: item.mime,
+  };
+
   play.addEventListener('click', async (e) => {
     stop(e);
     play.remove();
@@ -798,9 +898,32 @@ function videoNoteBlock(app, post, item) {
       if (video.paused) video.play().catch(() => null);
       else video.pause();
     });
+
+    // The transport, now that there is something to transport. The row is
+    // usable the moment it appears (§2.11.1) — the hairline is under the strip
+    // from the start and the spectrum fills in behind it.
+    const track = strip({
+      onSeek: (f) => {
+        if (video.duration) video.currentTime = f * video.duration;
+      },
+      label: 'Seek video note',
+    });
+    wrap.append(track);
+    video.addEventListener('timeupdate', () => {
+      track.set(video.duration ? video.currentTime / video.duration : 0);
+    });
+    // Priority 32, because this IS the tap (§2.11) — and a tap is also what
+    // retries an analysis that failed, exactly as the audio row's does.
+    const analyse = (priority) => ensureStrip(app, meta, track, () => bytesFor(app, meta.file, meta.kind, meta.mime, priority), { retry: priority > 1 });
+    analyse(32);
+    // A strip is cache bytes like any picture, so a memory-pressure flush can
+    // take it; this is what puts it back, the same binding the photos use
+    bind(track, () => analyse(1));
+
     video.play().catch(() => null);
   });
-  return box;
+
+  return wrap;
 }
 
 const VIEWABLE_DOC = /^(application\/pdf|image\/|text\/|application\/json|audio\/|video\/)/;

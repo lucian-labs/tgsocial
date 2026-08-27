@@ -94,9 +94,14 @@ fun HPTime(text: String, modifier: Modifier = Modifier, color: Color = HPTokens.
 
 /**
  * PRODUCT §2.11 — the audio / voice player row: play-pause circle 40pt, title (body) + subtitle (mono), serif
- * elapsed / total, and below them either the hairline scrubber (audio) or the waveform (voice). Sits on `bg2`
- * with the media radius like the other attachment rows. [progressOverlay] draws determinate download progress
- * (0–1) under the title while the file is fetched; null when nothing is downloading.
+ * elapsed / total, and below them **the spectrogram strip** (§2.11.1), which is the scrubber. Audio and voice
+ * take the same strip; a voice note simply arrives with its envelope already filled in from TDLib's waveform
+ * bytes while the spectrum computes behind it. Sits on `bg2` with the media radius like the other attachment
+ * rows. [downloadProgress] draws determinate download progress (0–1) under the title while the file is
+ * fetched; null when nothing is downloading.
+ *
+ * [onStripVisible] forwards the strip's pixel geometry the first time it is laid out on screen — the caller
+ * uses it to key and start the analysis, which §2.11.1 forbids running for a row nobody has seen.
  */
 @Composable
 fun HPPlayerRow(
@@ -109,9 +114,10 @@ fun HPPlayerRow(
     onToggle: () -> Unit,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
-    waveform: List<Float>? = null,
+    strip: HPStrip? = null,
     downloadProgress: Float? = null,
     enabled: Boolean = true,
+    onStripVisible: (widthPx: Int, heightPx: Int) -> Unit = { _, _ -> },
 ) {
     val shape = RoundedCornerShape(HPTokens.Radius.media)
     Column(
@@ -137,11 +143,7 @@ fun HPPlayerRow(
             HPProgressBar(downloadProgress)
         }
         Spacer(Modifier.height(HPTokens.Space.labelBottom))
-        if (waveform != null) {
-            HPWaveform(waveform, progress, onSeek, enabled = enabled)
-        } else {
-            HPScrubber(progress, onSeek, enabled = enabled)
-        }
+        HPSpectrogramStrip(strip, progress, onSeek, enabled = enabled, onVisible = onStripVisible)
     }
 }
 

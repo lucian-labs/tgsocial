@@ -70,6 +70,7 @@ import ca.lucianlabs.housepour.HPPillTone
 import ca.lucianlabs.housepour.HPPlayCircle
 import ca.lucianlabs.housepour.HPPlayerRow
 import ca.lucianlabs.housepour.HPScrubber
+import ca.lucianlabs.housepour.HPStrip
 import ca.lucianlabs.housepour.HPSmall
 import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTime
@@ -579,6 +580,36 @@ private fun InlineVideoNote(key: String, media: PostMedia.VideoNote, onTap: () -
     }
 }
 
+/**
+ * PRODUCT §2.11.1 — the strip's pixel geometry and the analysed result for one clip, requested only once the
+ * strip has actually been laid out on screen.
+ *
+ * The `version` counter is what re-reads the cache: the strip itself lives in [MediaRepo]'s byte-bounded
+ * store, so an eviction under memory pressure really does free it and the next read simply finds nothing and
+ * asks again. Holding the strip in composition state instead would pin every strip a scroll ever produced.
+ */
+@Composable
+private fun rememberStrip(file: FileRef, durationSeconds: Int, fallbackEnvelope: FloatArray? = null): Pair<HPStrip?, (Int, Int) -> Unit> {
+    val app = rememberTgApp()
+    val version by app.strips.ready.collectAsStateWithLifecycle()
+    var geometry by remember(file.uniqueId) { mutableStateOf(0 to 0) }
+    val analysed = remember(file.uniqueId, geometry, version) {
+        if (geometry.first <= 0) null else app.strips.strip(file.uniqueId, geometry.first, geometry.second)
+    }
+    LaunchedEffect(file.uniqueId, geometry) {
+        if (geometry.first > 0) app.strips.request(file, durationSeconds, geometry.first, geometry.second)
+    }
+    val strip = remember(analysed, fallbackEnvelope) {
+        when {
+            analysed != null -> HPStrip(analysed.spectrum, analysed.envelope.takeIf { it.size >= 2 } ?: fallbackEnvelope)
+            fallbackEnvelope != null -> HPStrip(null, fallbackEnvelope)
+            else -> null
+        }
+    }
+    val onVisible: (Int, Int) -> Unit = remember(file.uniqueId) { { w, h -> geometry = w to h } }
+    return strip to onVisible
+}
+
 @Composable
 private fun AudioRow(key: String, media: PostMedia.Audio) {
     val app = rememberTgApp()
@@ -586,6 +617,7 @@ private fun AudioRow(key: String, media: PostMedia.Audio) {
     val state = rememberFileState(media.file)
     val isThis = now?.key == key
     val title = media.title.ifBlank { media.fileName.ifBlank { "Audio" } }
+    val (strip, onStripVisible) = rememberStrip(media.file, media.durationSeconds)
     HPPlayerRow(
         title = title,
         subtitle = media.performer.takeIf { it.isNotBlank() },
@@ -598,7 +630,9 @@ private fun AudioRow(key: String, media: PostMedia.Audio) {
             if (isThis) app.playback.seekAudio(fraction)
             else app.playback.toggleAudio(key, title, media.file, media.mimeType, media.durationSeconds)
         },
+        strip = strip,
         downloadProgress = state?.takeIf { it.active && !it.done }?.progress,
+        onStripVisible = onStripVisible,
     )
 }
 
@@ -608,10 +642,14 @@ private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice) {
     val now by app.playback.now.collectAsStateWithLifecycle()
     val state = rememberFileState(media.file)
     val isThis = now?.key == key
+    // PRODUCT §2.11.1 — TDLib ships a voice note's waveform, so the silhouette is drawn IMMEDIATELY, with no
+    // decode at all, and the spectrum fills in behind it. 128 points: enough to read as a shape at strip
+    // width, few enough that the resample is free.
     val samples = remember(media.waveform) {
         val raw = media.waveform?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
-        resample(Waveform.decode(raw ?: ByteArray(0)), 48)
+        resample(Waveform.decode(raw ?: ByteArray(0)), 128).toFloatArray().takeIf { it.size >= 2 }
     }
+    val (strip, onStripVisible) = rememberStrip(media.file, media.durationSeconds, samples)
     HPPlayerRow(
         title = sourceTitle,
         subtitle = null,
@@ -624,8 +662,9 @@ private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice) {
             if (isThis) app.playback.seekAudio(fraction)
             else app.playback.toggleAudio(key, sourceTitle, media.file, media.mimeType, media.durationSeconds)
         },
-        waveform = samples,
+        strip = strip,
         downloadProgress = state?.takeIf { it.active && !it.done }?.progress,
+        onStripVisible = onStripVisible,
     )
 }
 

@@ -48,6 +48,19 @@ function parseColor(v) {
 const f3 = (x) => (Math.round(x * 1000) / 1000).toString();
 const hex2 = (n) => n.toString(16).padStart(2, '0').toUpperCase();
 
+/** PRODUCT 2.11.1 — the spectrogram ramp. Stops name a `color` key so no hex is retyped here; `alpha`
+ *  overrides the named token's own alpha absolutely (stop 0 is the ink at alpha 0). One list, three
+ *  platforms, identical stops. */
+function rampStops() {
+  return (T.ramp?.stops ?? []).map((stop) => {
+    const named = T.color[stop.color];
+    if (!named) throw new Error(`ramp stop references unknown colour token: ${stop.color}`);
+    const c = parseColor(named);
+    const a = stop.alpha === undefined ? c.a : stop.alpha;
+    return { at: stop.at, token: stop.color, r: c.r, g: c.g, b: c.b, a };
+  });
+}
+
 // ── Swift ──────────────────────────────────────────────────────────────────
 
 function swift() {
@@ -89,6 +102,10 @@ function swift() {
     .map(([k, s]) => `    public static let ${k} = HPTextStyle(face: .${s.face}, size: ${s.size}, weight: ${s.weight}, lineHeight: ${s.lineHeight}, tracking: ${s.tracking}, uppercase: ${!!s.uppercase})`)
     .join('\n');
 
+  const ramp = rampStops()
+    .map((k) => `        HPRampStop(at: ${k.at}, r: ${f3(k.r / 255)}, g: ${f3(k.g / 255)}, b: ${f3(k.b / 255)}, a: ${f3(k.a)}),  // ${k.token}`)
+    .join('\n');
+
   return `${HEADER('swift')}
 import SwiftUI
 
@@ -101,6 +118,17 @@ public struct HPShadow {
 }
 
 public enum HPFace { case display, brand, mono, body }
+
+/// One stop of the spectrogram ramp (PRODUCT 2.11.1). at is 0...1 along the ramp;
+/// the channels are straight (non-premultiplied) sRGB.
+public struct HPRampStop {
+    public let at: CGFloat
+    public let r: Double
+    public let g: Double
+    public let b: Double
+    public let a: Double
+    public var color: Color { Color(red: r, green: g, blue: b, opacity: a) }
+}
 
 public struct HPTextStyle {
     public let face: HPFace
@@ -132,6 +160,13 @@ ${fontNames}
     }
     public enum \`Type\` {
 ${type}
+    }
+    /// PRODUCT 2.11.1 — the spectrogram strip's data ramp. Interpolation is hand-written
+    /// (HPRamp); only the stops are generated, so all three platforms share them exactly.
+    public enum Ramp {
+        public static let stops: [HPRampStop] = [
+${ramp}
+        ]
     }
     public enum Motion {
         public static let color: Double = ${T.motion.colorMs / 1000}
@@ -167,6 +202,9 @@ function kotlin() {
     .filter(([k]) => !k.startsWith('$'))
     .map(([k, s]) => `    val ${k} = HPTextStyle(HPFace.${s.face.toUpperCase()}, size = ${s.size}f, weight = ${s.weight}, lineHeight = ${s.lineHeight}f, tracking = ${s.tracking}f, uppercase = ${!!s.uppercase})`)
     .join('\n');
+  const ramp = rampStops()
+    .map((k) => `        HPRampStop(${k.at}f, 0x${hex2(Math.round(k.a * 255))}${hex2(k.r)}${hex2(k.g)}${hex2(k.b)}.toInt()), // ${k.token}`)
+    .join('\n');
   const resNames = fontResNames();
   const fontRes = Object.entries(resNames).map(([file, res]) => `    const val ${camel(res).toUpperCase()} = "${res}" // ${file}.ttf`).join('\n');
 
@@ -180,6 +218,14 @@ import androidx.compose.ui.unit.dp
 data class HPShadow(val color: Color, val x: Dp, val y: Dp, val blur: Dp, val spread: Dp)
 
 enum class HPFace { DISPLAY, BRAND, MONO, BODY }
+
+/**
+ * One stop of the spectrogram ramp (PRODUCT 2.11.1). [at] is 0..1 along the ramp; [argb] is straight
+ * (non-premultiplied) 8-bit ARGB, which is what both the interpolator and Bitmap.setPixels want.
+ */
+data class HPRampStop(val at: Float, val argb: Int) {
+    val color: Color get() = Color(argb)
+}
 
 /** size in sp, tracking in em, lineHeight multiplier. */
 data class HPTextStyle(
@@ -213,6 +259,16 @@ ${fontRes}
     }
     object Type {
 ${type}
+    }
+    /**
+     * PRODUCT 2.11.1 — the spectrogram strip's data ramp, the one gradient in the look that carries data.
+     * Interpolation is hand-written (HPRamp); only the stops are generated, so all three platforms share
+     * them exactly.
+     */
+    object Ramp {
+        val stops: List<HPRampStop> = listOf(
+${ramp}
+        )
     }
     object Motion {
         const val COLOR_MS = ${T.motion.colorMs}
@@ -263,6 +319,11 @@ const shadowCss = (s, color = s.color) => `${s.x}px ${s.y}px ${s.blur}px ${s.spr
 
 async function css() {
   const base = await readFile(join(root, 'web', 'house-pour.base.css'), 'utf8');
+  // PRODUCT 2.11.1 — `--ramp-*`, so the ramp is one edit for the web too.
+  const stops = rampStops();
+  const rampVars = [`  --ramp-stops: ${stops.length};`]
+    .concat(stops.map((k, i) => `  --ramp-${i}: rgba(${k.r}, ${k.g}, ${k.b}, ${f3(k.a)}); --ramp-${i}-at: ${k.at};`))
+    .join('\n');
   const components = await readFile(join(root, 'web', 'house-pour.components.css'), 'utf8');
   const typeVars = Object.entries(T.type)
     .filter(([k]) => !k.startsWith('$'))
@@ -285,6 +346,7 @@ ${typeVars}
   --space-column-side: ${T.space.columnSide}px;
   --space-row-pad: ${T.space.rowPad}px;
   --space-touch-min: ${T.space.touchMin}px;
+  --space-strip-height: ${T.space.stripHeight}px;
   --space-kebab-dot: ${T.space.kebabDot}px;
   --space-kebab-dot-gap: ${T.space.kebabDotGap}px;
   --space-menu-width: ${T.space.menuWidth}px;
@@ -298,6 +360,7 @@ ${typeVars}
   --shadow-cast: ${shadowCss(T.shadow.cast)};
   --shadow-cast-modal: ${shadowCss(T.shadow.cast, scaleAlpha(T.shadow.cast.color, 1.5))};
   --scrim: ${T.color.scrim};
+${rampVars}
   --motion-color: ${T.motion.colorMs}ms;
   --motion-toast: ${T.motion.toastMs}ms;
 }

@@ -47,6 +47,36 @@ import {
 import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
 import { readImageHeader } from '../js/decode.js';
 import { Td } from '../js/td.js';
+import { decodeWaveform } from '../js/media.js';
+import { rampStops } from '../vendor/house-pour.js';
+import {
+  analyse,
+  analysisPlan,
+  analysisRate,
+  axisMaxHz,
+  bandCentreHz,
+  DURATION_CAP_S,
+  ENVELOPE_CAP_S,
+  ENVELOPE_MAX_SAMPLES,
+  ENVELOPE_RATE,
+  envelopeColumns,
+  ENVELOPE_ATTACK_MS,
+  ENVELOPE_RELEASE_MS,
+  F_MAX,
+  FFT_SIZE,
+  followEnvelope,
+  framePlan,
+  logBandEdges,
+  MAX_FFT_SIZE,
+  MAX_FRAMES,
+  MAX_SAMPLES,
+  MIN_RATE,
+  onePoleCoefficient,
+  paintStrip,
+  rampColorAt,
+  rowForFrequency,
+  TARGET_RATE,
+} from '../js/spectro.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(await readFile(join(here, '..', '..', 'docs', 'card-vectors.json'), 'utf8'));
@@ -719,4 +749,376 @@ test('feed window: pagination survives the trim', () => {
   assert.equal(window.length, MAX);
   assert.equal(window[window.length - 1].id, id(111), 'the last post loaded is still in the window');
   assert.equal(new Set(window.map((p) => p.key)).size, MAX, 'no duplicates re-enter on a trim');
+});
+
+// ── PRODUCT §2.11.1 — the spectrogram strip ────────────────────────────────
+//
+// The pure half of the strip: the follower, the log axis, the AGC, the ramp,
+// the caps and the fallback. Everything below runs under node with no DOM and
+// no AudioContext, which is the whole reason js/spectro.js knows nothing about
+// either. The assembled behaviour — a real clip decoded, painted, seeked and
+// measured on the card — is test/flows.mjs.
+
+/** The generated `--ramp-*` tokens, read the way vendor/house-pour.js reads them. */
+async function generatedRamp() {
+  const css = await readFile(join(here, '..', 'vendor', 'house-pour.css'), 'utf8');
+  const values = new Map();
+  for (const m of css.matchAll(/(--ramp-[\w-]+)\s*:\s*([^;]+);/g)) values.set(m[1], m[2].trim());
+  globalThis.getComputedStyle = () => ({ getPropertyValue: (n) => values.get(n) ?? '' });
+  return rampStops({});
+}
+
+test('strip: the one-pole follower rises at the attack rate and decays at the release rate', () => {
+  const rate = TARGET_RATE;
+  // A time constant is defined by where the step lands after exactly τ: one
+  // 1/e of the way there going up, one 1/e of the way back coming down. If the
+  // coefficient is derived wrongly from the rate, this is what moves.
+  const attackSamples = Math.round((ENVELOPE_ATTACK_MS / 1000) * rate);
+  const releaseSamples = Math.round((ENVELOPE_RELEASE_MS / 1000) * rate);
+
+  const step = new Float32Array(attackSamples + releaseSamples);
+  step.fill(1, 0, attackSamples);
+  const y = followEnvelope(step, rate);
+  assert.ok(Math.abs(y[attackSamples - 1] - (1 - 1 / Math.E)) < 0.01,
+    `after one attack τ the follower is at 1 − 1/e (got ${y[attackSamples - 1].toFixed(4)})`);
+
+  const held = new Float32Array(releaseSamples * 2);
+  held.fill(1, 0, releaseSamples * 8); // stays 1 for the whole first half
+  const settled = followEnvelope(held, rate);
+  assert.ok(settled[releaseSamples * 2 - 1] > 0.99, 'a long step settles at the input');
+
+  // decay: hold 1 long enough to settle, then drop to 0 for exactly one release τ
+  const decay = new Float32Array(releaseSamples * 20 + releaseSamples);
+  decay.fill(1, 0, releaseSamples * 20);
+  const d = followEnvelope(decay, rate);
+  assert.ok(Math.abs(d[d.length - 1] - 1 / Math.E) < 0.01,
+    `after one release τ the follower is at 1/e (got ${d[d.length - 1].toFixed(4)})`);
+
+  // attack is fast, release is slow — the shape §2.11.1 asks for, not the reverse
+  assert.ok(onePoleCoefficient(ENVELOPE_ATTACK_MS, rate) > onePoleCoefficient(ENVELOPE_RELEASE_MS, rate) * 10,
+    'attack is more than an order of magnitude faster than release');
+});
+
+test('strip: the follower produces one normalised value per column, spanning the strip', () => {
+  const rate = TARGET_RATE;
+  const n = rate * 2;
+  const samples = new Float32Array(n);
+  // loud in the middle third, silent either side
+  for (let i = 0; i < n; i += 1) {
+    const loud = i > n / 3 && i < (2 * n) / 3;
+    samples[i] = loud ? 0.4 * Math.sin((2 * Math.PI * 220 * i) / rate) : 0;
+  }
+  const env = envelopeColumns(samples, rate, 64);
+  assert.equal(env.length, 64);
+  assert.ok(Math.max(...env) > 0.99, 'the silhouette is normalised to span the strip');
+  assert.ok(env[32] > 0.8, 'the loud middle is tall');
+  assert.ok(env[2] < 0.05, 'the silent opening is flat');
+});
+
+test('strip: a bin centre frequency lands on its own row of the log axis', () => {
+  const rows = 88;
+  // §2.11.1: the axis runs 20 Hz to the ANALYSIS NYQUIST, ceilinged at 20 kHz.
+  // It follows the rate rather than reserving rows for a band the decimation
+  // discarded — the same clamp iOS (`SpectrogramSpec.axisMax`) and Android
+  // (`effectiveFMax`) make, so one clip is one picture on all three.
+  const fMax = axisMaxHz(TARGET_RATE);
+  assert.equal(fMax, TARGET_RATE / 2, 'the axis tops out at Nyquist when the declared span is higher');
+  assert.equal(axisMaxHz(96000), F_MAX, 'and at the declared span when Nyquist is higher');
+  // the rate slides with the clip's length, so the top of the strip does too
+  assert.equal(axisMaxHz(analysisRate(30)), TARGET_RATE / 2, 'a short clip tops out at 8 kHz');
+  assert.equal(axisMaxHz(analysisRate(DURATION_CAP_S)), MIN_RATE / 2, 'and a clip at the cap tops out at 4 kHz');
+  for (let i = 0; i < rows; i += 1) {
+    assert.equal(rowForFrequency(bandCentreHz(i, rows, fMax), rows, fMax), i, `row ${i} round-trips through its centre frequency`);
+  }
+  // low at the bottom, high at the top, and log — not linear — in between
+  assert.equal(rowForFrequency(20, rows, fMax), 0);
+  assert.equal(rowForFrequency(fMax, rows, fMax), rows - 1);
+  const geometricMiddle = Math.sqrt(20 * fMax);
+  assert.equal(rowForFrequency(geometricMiddle, rows, fMax), Math.floor(rows / 2),
+    'the GEOMETRIC mean sits at the middle row, which a linear axis would not do');
+  assert.ok(rowForFrequency((20 + fMax) / 2, rows, fMax) > rows * 0.85, 'while the ARITHMETIC mean is crowded up near the top');
+  // both ends clamp rather than running off the array
+  assert.equal(rowForFrequency(1, rows, fMax), 0);
+  assert.equal(rowForFrequency(96000, rows, fMax), rows - 1);
+});
+
+test('strip: the log band edges cover the axis without gaps and stay inside the bins', () => {
+  const rows = 88;
+  // Every rate the plan can pick, because the axis follows the rate: no rate
+  // may leave a row of the strip with nothing to peak-pick.
+  for (const rate of [TARGET_RATE, analysisRate(300), analysisRate(DURATION_CAP_S)]) {
+    const { lo, hi, fMax } = logBandEdges(rows, rate, FFT_SIZE);
+    assert.equal(fMax, axisMaxHz(rate), `${rate} Hz: the axis ends at its own Nyquist`);
+    for (let i = 0; i < rows; i += 1) {
+      assert.ok(hi[i] > lo[i], `${rate} Hz: band ${i} holds at least one bin`);
+      assert.ok(hi[i] <= FFT_SIZE / 2, `${rate} Hz: band ${i} stays inside the N/2 magnitude bins`);
+      if (i > 0) assert.ok(lo[i] >= lo[i - 1], 'bands ascend');
+    }
+  }
+  // …and a caller that insists on a top ABOVE Nyquist gets empty bands up
+  // there, never the top real bin clamped upward into a bright false ceiling.
+  const wide = logBandEdges(rows, TARGET_RATE, FFT_SIZE, F_MAX);
+  const dead = [...wide.lo.keys()].filter((i) => wide.hi[i] === wide.lo[i]);
+  assert.ok(dead.length > 0 && dead.every((i) => 20 * (F_MAX / 20) ** (i / rows) >= TARGET_RATE / 2),
+    'the empty bands are exactly the ones above Nyquist');
+});
+
+test('strip: the AGC normalises, so a quiet clip still spans the strip', () => {
+  const rate = TARGET_RATE;
+  const rows = 64;
+  const cols = 32;
+  const tone = (amp) => {
+    const n = rate; // one second at 1 kHz — the tilt pivot, so tilt is 1× here
+    const s = new Float32Array(n);
+    for (let i = 0; i < n; i += 1) s[i] = amp * Math.sin((2 * Math.PI * 1000 * i) / rate);
+    return s;
+  };
+  const loud = analyse({ samples: tone(0.5), rate, cols, rows });
+  const quiet = analyse({ samples: tone(0.005), rate, cols, rows }); // −46 dBFS
+  const peak = (r) => Math.max(...r.mag);
+  assert.ok(peak(loud) > 0.99, 'a loud clip reaches the top of the range');
+  assert.ok(peak(quiet) > 0.99, 'a clip 40 dB quieter reaches the same top — the AGC is a ROLLING PEAK, not dBFS');
+  assert.ok(Math.abs(peak(loud) - peak(quiet)) < 1e-6, 'and reads identically, because normalisation is relative');
+
+  // true digital silence is the one thing that stays dark: the AGC floor is
+  // what stops it from opening until the nothing fills the strip
+  const silence = analyse({ samples: new Float32Array(rate), rate, cols, rows });
+  assert.equal(Math.max(...silence.mag), 0, 'silence is dark, not blown up to full brightness');
+});
+
+test('strip: a tone lands on the row its frequency maps to, low at the bottom', () => {
+  const rate = TARGET_RATE;
+  const rows = 64;
+  const cols = 16;
+  const n = rate;
+  const hz = 200;
+  const samples = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) samples[i] = 0.5 * Math.sin((2 * Math.PI * hz * i) / rate);
+  const { mag } = analyse({ samples, rate, cols, rows });
+  const column = 8;
+  let best = 0;
+  for (let b = 1; b < rows; b += 1) if (mag[column * rows + b] > mag[column * rows + best]) best = b;
+  const expected = rowForFrequency(hz, rows, axisMaxHz(rate));
+  assert.ok(Math.abs(best - expected) <= 1, `a ${hz} Hz tone peaks at row ${expected} (got ${best})`);
+  assert.ok(best < rows / 2, 'and that row is in the LOWER half — frequency runs bottom to top');
+});
+
+test('strip: the frame budget is a function of the strip, not of the file', () => {
+  const rate = TARGET_RATE;
+  const short = framePlan(rate * 30);
+  assert.equal(short.fftSize, FFT_SIZE, 'a 30 s clip needs no wider window than the default');
+  assert.equal(short.hop, FFT_SIZE / 2, 'a 30 s clip runs at the ~50% overlap §2.11.1 asks for');
+  assert.ok(short.frames < MAX_FRAMES, `a 30 s clip needs ${short.frames} frames, under the ceiling`);
+  const long = framePlan(rate * DURATION_CAP_S);
+  assert.ok(long.frames <= MAX_FRAMES, `a ${DURATION_CAP_S} s clip is still ${long.frames} frames`);
+  assert.ok(long.hop > FFT_SIZE / 2, 'past the ceiling the hop opens rather than the frame count growing');
+  assert.ok(long.fftSize > FFT_SIZE, 'and the WINDOW opens with it');
+});
+
+test('strip: the STFT never skips audio — the window opens with the hop, so the windows still abut', () => {
+  // The bug this pins: growing the hop ALONE past the window leaves a stretch
+  // between one frame and the next that nothing ever looks at. At a 3 minute
+  // clip that gap was 23 ms wide and a quarter of the audio fell in it, so a
+  // transient landing there lit no column at all.
+  // every sample count the caps can actually hand to `analyse` — the decode is
+  // capped at MAX_SAMPLES, so that is the longest clip this ever sees
+  for (const n of [TARGET_RATE * 5, TARGET_RATE * 30, TARGET_RATE * 90, TARGET_RATE * 180, MAX_SAMPLES]) {
+    const plan = framePlan(n);
+    assert.ok(plan.hop <= plan.fftSize, `${n} samples: hop ${plan.hop} never opens past the ${plan.fftSize} window`);
+    assert.ok(plan.frames <= MAX_FRAMES, `${n} samples: ${plan.frames} frames stays inside the budget`);
+    assert.ok(plan.fftSize <= MAX_FFT_SIZE, `${n} samples: the window stays inside its own ceiling`);
+    // every sample is inside a window: the frames tile the clip with no hole
+    const covered = (plan.frames - 1) * plan.hop + plan.fftSize;
+    assert.ok(covered >= n, `${n} samples: the frames cover the whole clip (${covered} covered)`);
+  }
+  // and past anything the caps allow, coverage still wins over the frame budget
+  const beyond = framePlan(TARGET_RATE * 1200);
+  assert.ok(beyond.hop <= beyond.fftSize, 'even off the end of the window ceiling the windows abut rather than gapping');
+  assert.ok(beyond.frames > MAX_FRAMES, 'and it is the FRAME budget that gives, not the coverage');
+  // and a burst in what USED to be the gap now lands in a window: 3 kHz for
+  // 23 ms, dropped one hop past the first frame of a 180 s clip
+  const rate = TARGET_RATE;
+  const n = rate * 180;
+  const plan = framePlan(n);
+  const samples = new Float32Array(n);
+  const at = plan.fftSize + Math.floor(plan.hop / 2);
+  for (let i = at; i < at + Math.round(0.023 * rate); i += 1) samples[i] = Math.sin((2 * Math.PI * 3000 * i) / rate);
+  const { mag } = analyse({ samples, rate, cols: 64, rows: 88 });
+  assert.ok(Math.max(...mag) > 0.5, 'a burst between two frames still lights the strip');
+
+  // …and the acceptance bar is not one position in one clip: a burst ANYWHERE
+  // in a clip at the duration cap must light a column. One `analyse` over the
+  // longest clip the caps allow, carrying sixteen 23 ms bursts — one per column
+  // region, each at a different phase of the hop, so every part of the stride
+  // the old plan was blind to is represented. Under the bug the ones landing in
+  // the gap read exactly 0.000, which is what the dark-column assertion below
+  // measures on the columns that really are empty.
+  const capRate = analysisRate(DURATION_CAP_S);
+  const capN = Math.round(DURATION_CAP_S * capRate);
+  const capPlan = framePlan(capN);
+  const capCols = 64;
+  const capRows = 88;
+  const burst = Math.round(0.023 * capRate);
+  const wide = new Float32Array(capN);
+  const spots = [];
+  for (let j = 0; j < 16; j += 1) {
+    const at = Math.min(capN - burst - 1, Math.round((((j * 2 + 1) / 32) * capN) + (j / 16) * capPlan.hop));
+    for (let i = at; i < at + burst; i += 1) wide[i] = Math.sin((2 * Math.PI * 3000 * i) / capRate);
+    spots.push(at);
+  }
+  const capField = analyse({ samples: wide, rate: capRate, cols: capCols, rows: capRows }).mag;
+  const colPeak = (c) => {
+    let m = 0;
+    for (let b = 0; b < capRows; b += 1) if (capField[c * capRows + b] > m) m = capField[c * capRows + b];
+    return m;
+  };
+  // the column a burst lands in, ±1 for the frame that straddles the boundary
+  const colOf = (at) => Math.min(capCols - 1, Math.floor((Math.floor(at / capPlan.hop) * capCols) / capPlan.frames));
+  const near = new Set();
+  for (const at of spots) for (const d of [-1, 0, 1]) near.add(colOf(at) + d);
+  for (const at of spots) {
+    const c = colOf(at);
+    const peak = Math.max(colPeak(Math.max(0, c - 1)), colPeak(c), colPeak(Math.min(capCols - 1, c + 1)));
+    assert.ok(peak > 0.2, `a burst at sample ${at} of a ${DURATION_CAP_S} s clip lights column ${c} (${peak.toFixed(3)})`);
+  }
+  // and the strip is not simply lit everywhere: the columns with no burst in
+  // them are still exactly dark, so the assertion above is measuring the bursts
+  const empty = [...Array(capCols).keys()].filter((c) => !near.has(c));
+  assert.ok(empty.length > 8, 'there are columns with no burst in them to compare against');
+  assert.equal(Math.max(...empty.map(colPeak)), 0, 'and every one of them is dark');
+});
+
+test('strip: the plan splits at the duration ceiling — spectrum, then silhouette, then nothing', () => {
+  const under = analysisPlan(DURATION_CAP_S - 1);
+  assert.equal(under.mode, 'spectrum', 'under the ceiling, the whole strip');
+  assert.equal(analysisPlan(DURATION_CAP_S).mode, 'spectrum', 'at the ceiling, the whole strip');
+
+  // §2.11.1: "past a duration ceiling (about 10 minutes) … fall back to the
+  // amplitude-only silhouette". A 12 minute DJ set is a silhouette, not a
+  // hairline — the same band iOS runs (SpectrogramPlan.envelopeOnly).
+  const long = analysisPlan(12 * 60);
+  assert.equal(long.mode, 'envelope', 'past the ceiling, the silhouette alone');
+  assert.equal(long.rate, ENVELOPE_RATE, 'decoded coarse, because there is no spectrum to resolve');
+  assert.ok(long.rate * (12 * 60) < MAX_SAMPLES, 'and still inside the working-set ceiling');
+
+  assert.equal(analysisPlan(ENVELOPE_CAP_S + 1).mode, 'none', 'past the hard ceiling, nothing at all');
+  assert.equal(analysisPlan(4 * 3600).mode, 'none', 'a four-hour set is refused');
+  // a runtime that will not decode coarsely shrinks the band rather than
+  // allocating past the ceiling for a silhouette
+  assert.equal(analysisPlan(30 * 60, { envelopeRate: 8000 }).mode, 'none',
+    '30 minutes at 8 kHz is 14.4 M samples — refused rather than decoded');
+
+  // …SHRINKS it, though, never deletes it. The Web Audio spec only obliges an
+  // engine to decode at 8 kHz and up, so `envelopeDecodeRate` returning 8000 is
+  // the case the ladder exists for — and charging that pass against the
+  // SPECTRUM's ceiling (601 × 8000 = 4.808 M, already past 4.8 M) refused every
+  // clip from the first second past the cap, which is this whole band deleting
+  // itself on a conforming engine. It is charged against ENVELOPE_MAX_SAMPLES
+  // instead, so a 12 minute set is a silhouette on every runtime, not only on
+  // the ones that reach 3 kHz (headless Chrome does, which is why flows.mjs
+  // could never see this).
+  assert.equal(analysisPlan(DURATION_CAP_S + 1, { envelopeRate: 8000 }).mode, 'envelope',
+    'one second past the cap at 8 kHz is a silhouette, not a hairline');
+  assert.equal(analysisPlan(720, { envelopeRate: 8000 }).mode, 'envelope',
+    '12 minutes at 8 kHz is the silhouette iOS draws at the same duration');
+  assert.equal(analysisPlan(1200, { envelopeRate: 8000 }).mode, 'envelope',
+    '20 minutes lands exactly on the envelope budget, and is still inside it');
+  assert.equal(analysisPlan(1201, { envelopeRate: 8000 }).mode, 'none',
+    'and one second past it is refused — the budget is a real ceiling');
+  assert.equal(1200 * 8000, ENVELOPE_MAX_SAMPLES, 'which is where that boundary comes from');
+  // the coarse pass may decode more than the FFT's buffer holds, because
+  // decodeMono's box average caps the mono copy at MAX_SAMPLES independently
+  assert.ok(ENVELOPE_MAX_SAMPLES > MAX_SAMPLES, 'the two ceilings bound different buffers');
+
+  // an unknown length is not a refusal: the decode gets to be the one that fails
+  for (const d of [0, undefined, NaN]) assert.equal(analysisPlan(d).mode, 'spectrum');
+});
+
+test('strip: the decode is capped in samples, so one clip cannot cost more than the whole media budget', () => {
+  // iOS bounds this with maxSamples and an adaptive rate; without the same
+  // bound a 10 minute stereo clip is ~77 MB of AudioBuffer plus a 38 MB mono
+  // copy, none of it visible to the media cache and none of it evictable.
+  assert.equal(analysisRate(30), TARGET_RATE, 'a short clip runs at the top of §2.11.1\'s 8–16 kHz band');
+  assert.equal(analysisRate(DURATION_CAP_S), MIN_RATE, 'and at the duration cap the arithmetic lands on the floor');
+  for (const seconds of [1, 30, 212, 300, DURATION_CAP_S]) {
+    const rate = analysisRate(seconds);
+    assert.ok(rate >= MIN_RATE && rate <= TARGET_RATE, `${seconds} s stays inside the band (${rate} Hz)`);
+    assert.ok(Number.isInteger(rate), 'and is an integer, because it becomes an OfflineAudioContext sample rate');
+    assert.ok(seconds * rate <= MAX_SAMPLES + 1, `${seconds} s decodes to at most the ceiling (${Math.round(seconds * rate)})`);
+  }
+});
+
+test('strip: the fallback silhouette needs no decode — Telegram ships the bytes', () => {
+  // the voice note the mock TDLib serves (test/mock-tdweb.js)
+  const values = decodeWaveform('kqUqVaqlKlWqpSpVqqUqVQ==', 64);
+  assert.ok(Array.isArray(values) && values.length === 64, 'waveform bytes unpack to one value per column');
+  assert.ok(values.every((v) => v >= 0 && v <= 1), 'and are already 0…1, ready for the silhouette');
+  assert.ok(Math.max(...values) > 0.3, 'with something in them');
+  // no bytes, or bytes that are not base64, is the third fidelity: the hairline
+  assert.equal(decodeWaveform(null), null);
+  assert.equal(decodeWaveform(''), null);
+  assert.equal(decodeWaveform('!!!not base64!!!'), null);
+});
+
+test('strip: the ramp is the generated token set, and it interpolates', async () => {
+  const stops = await generatedRamp();
+  assert.equal(stops.length, 5, 'five stops: transparent → line2 → muted → accent → accent-2');
+  assert.equal(stops[0].a, 0, 'the quiet end is transparent, so the strip shows the bg2 it sits on');
+  assert.equal(stops[stops.length - 1].at, 1, 'the loud end tops out at 1');
+  for (let i = 1; i < stops.length; i += 1) assert.ok(stops[i].at > stops[i - 1].at, 'stops ascend');
+
+  // every stop is hit exactly at its own position
+  for (const s of stops) {
+    const c = rampColorAt(stops, s.at);
+    assert.ok(Math.abs(c.r - s.r) < 1e-6 && Math.abs(c.g - s.g) < 1e-6 && Math.abs(c.b - s.b) < 1e-6 && Math.abs(c.a - s.a) < 1e-6,
+      `stop at ${s.at} reproduces itself`);
+  }
+  // and between two stops the value is strictly between them
+  const mid = (stops[2].at + stops[3].at) / 2;
+  const c = rampColorAt(stops, mid);
+  const lo = Math.min(stops[2].r, stops[3].r);
+  const hi = Math.max(stops[2].r, stops[3].r);
+  assert.ok(c.r > lo && c.r < hi, 'a value between two stops lands between their colours');
+  assert.ok(Math.abs(c.r - (stops[2].r + stops[3].r) / 2) < 1e-6, 'and exactly halfway at the midpoint');
+
+  // both ends clamp
+  const bottom = rampColorAt(stops, -5);
+  const top = rampColorAt(stops, 5);
+  assert.deepEqual([bottom.r, bottom.g, bottom.b, bottom.a], [stops[0].r, stops[0].g, stops[0].b, stops[0].a], 'below the ramp clamps to the first stop');
+  assert.deepEqual([top.r, top.g, top.b, top.a], [stops[4].r, stops[4].g, stops[4].b, stops[4].a], 'above the ramp clamps to the last');
+  assert.deepEqual(rampColorAt(stops, NaN), rampColorAt(stops, 0), 'a non-number is the bottom of the ramp, not a hole');
+  assert.deepEqual(rampColorAt([], 0.5), { r: 0, g: 0, b: 0, a: 0 }, 'no stops paints nothing rather than throwing');
+});
+
+test('strip: the texture puts low frequencies at the bottom and silence at transparent', async () => {
+  const stops = await generatedRamp();
+  const cols = 4;
+  const rows = 8;
+  const mag = new Float32Array(cols * rows);
+  for (let c = 0; c < cols; c += 1) mag[c * rows + 0] = 1; // the LOWEST band, full
+  const px = paintStrip(mag, cols, rows, stops);
+  const at = (x, y) => {
+    const o = (y * cols + x) * 4;
+    return { r: px[o], g: px[o + 1], b: px[o + 2], a: px[o + 3] };
+  };
+  const bottom = at(0, rows - 1);
+  const top = at(0, 0);
+  assert.ok(bottom.a > 250, 'the loud low band is opaque at the BOTTOM row of the image');
+  assert.equal(top.a, 0, 'and the empty high band at the top is transparent');
+  const last = stops[stops.length - 1];
+  assert.ok(Math.abs(bottom.r - last.r) < 1.5 && Math.abs(bottom.g - last.g) < 1.5 && Math.abs(bottom.b - last.b) < 1.5,
+    'the top of the range is accent-2, straight off the ramp');
+  assert.equal(px.length, cols * rows * 4, 'the texture is exactly one RGBA pixel per column-row');
+});
+
+test('strip: the strip is charged to the media budget at its true decoded cost', () => {
+  // what td.putDerived hands MediaCache: a small PNG that paints cols × rows
+  const cols = 664;
+  const rows = 88;
+  const png = { size: 9 * 1024 };
+  assert.equal(costOf(png, cols, rows), cols * rows * 4,
+    'a compressed strip is charged for the surface it paints, not for its bytes on the wire');
+  const cache = new MediaCache({ maxBytes: 4 * MB, create: () => 'blob:strip', revoke: () => {} });
+  cache.put('u1#strip664x88', png, { width: cols, height: rows });
+  assert.equal(cache.stats().bytes, cols * rows * 4, 'and shows up in the same accounting as every picture');
 });

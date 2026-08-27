@@ -19,6 +19,52 @@
   const slow = params.get('mockslow') === '1' ? 1500 : 10;
 
   const err = (code, message) => ({ '@type': 'error', code, message });
+
+  /**
+   * A synthesised clip for the spectrogram strip (PRODUCT §2.11.1): 16-bit PCM
+   * mono WAV at 16 kHz, laid out so the strip's claims are checkable by eye and
+   * by pixel —
+   *
+   *   first quarter   a steady LOW tone (180 Hz), which must land in the LOWER
+   *                   rows, because frequency runs bottom to top on a log axis
+   *   middle half     a sweep up to 5 kHz, so the picture climbs
+   *   last quarter    SILENCE, which must stay dark rather than blooming as
+   *                   the AGC opens into it
+   *
+   * WAV so the decode is the browser's own PCM path and this test never
+   * depends on which codecs a headless build happened to ship.
+   */
+  function sweepWav(seconds, rate = 16000) {
+    const n = Math.round(seconds * rate);
+    const bytes = new ArrayBuffer(44 + n * 2);
+    const view = new DataView(bytes);
+    const ascii = (at, s) => { for (let i = 0; i < s.length; i += 1) view.setUint8(at + i, s.charCodeAt(i)); };
+    ascii(0, 'RIFF');
+    view.setUint32(4, 36 + n * 2, true);
+    ascii(8, 'WAVEfmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);          // PCM
+    view.setUint16(22, 1, true);          // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, 'data');
+    view.setUint32(40, n * 2, true);
+    const low = 180;
+    const high = 5000;
+    let phase = 0;
+    for (let i = 0; i < n; i += 1) {
+      const t = i / n;
+      let hz = low;
+      if (t >= 0.25 && t < 0.75) hz = low * (high / low) ** ((t - 0.25) / 0.5);
+      phase += (2 * Math.PI * hz) / rate;
+      const v = t >= 0.75 ? 0 : 0.6 * Math.sin(phase);
+      view.setInt16(44 + i * 2, Math.round(v * 32767), true);
+    }
+    return new Blob([bytes], { type: 'audio/wav' });
+  }
+
   const NOW = Math.floor(Date.now() / 1000);
   const CARD = 'tgsocial v1';
 
@@ -137,7 +183,7 @@
     else if (kind === 8) m = { ...text(id, chatId, 'Pinned a message', t), content: { '@type': 'messagePinMessage', message_id: 1 } };
     else if (kind === 9) m = { ...text(id, chatId, '', t), content: { '@type': 'messageAnimation', animation: { duration: 4, width: 480, height: 270, mime_type: 'video/mp4', file_name: 'loop.mp4', animation: { id: 8800 + i, remote: { unique_id: `an${i}` }, local: {} }, thumbnail: { width: 320, height: 180, file: { id: 8850 + i, remote: { unique_id: `ant${i}` }, local: {} } } }, caption: { '@type': 'formattedText', text: '', entities: [] } } };
     else if (kind === 10) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVoiceNote', voice_note: { duration: 9, waveform: 'kqUqVaqlKlWqpSpVqqUqVQ==', mime_type: 'audio/ogg', voice: { id: 8900 + i, remote: { unique_id: `vo${i}` }, local: {} } } } };
-    else if (kind === 11) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVideoNote', video_note: { duration: 12, length: 240, video: { id: 8950 + i, remote: { unique_id: `vn${i}` }, local: {} }, thumbnail: { width: 240, height: 240, file: { id: 8960 + i, remote: { unique_id: `vnt${i}` }, local: {} } } } } };
+    else if (kind === 11) m = { ...text(id, chatId, '', t), content: { '@type': 'messageVideoNote', video_note: { duration: 12, length: 240, video: { id: 9100 + i, remote: { unique_id: `vn${i}` }, local: {} }, thumbnail: { width: 240, height: 240, file: { id: 9200 + i, remote: { unique_id: `vnt${i}` }, local: {} } } } } };
     else if (kind === 12) m = { ...text(id, chatId, '', t), content: { '@type': 'messageSticker', sticker: { width: 512, height: 512, format: { '@type': 'stickerFormatWebp' }, sticker: { id: 8970 + i, remote: { unique_id: `st${i}` }, local: {} } } } };
     else if (kind === 13) m = { ...text(id, chatId, '', t), content: { '@type': 'messagePoll', poll: { question: { text: 'Which bank?' }, options: [{}, {}, {}] } } };
     else {
@@ -414,6 +460,22 @@
           return file;
         }
         case 'readFile': {
+          // Audio and voice ids get REAL, decodable audio — the spectrogram
+          // strip (PRODUCT §2.11.1) is the one thing in the app that reads the
+          // bytes rather than handing them to an element, so an SVG standing in
+          // for a song would only ever exercise the failure path.
+          // one audio file is deliberately NOT audio, so the flow test exercises
+          // the degrade §2.11.1 requires: the strip falls back rather than blocking
+          if (q.file_id === 8707) return { '@type': 'filePart', data: new Blob(['not audio at all'], { type: 'audio/mpeg' }) };
+          if (q.file_id >= 8700 && q.file_id < 8800) return { '@type': 'filePart', data: sweepWav(6) };
+          if (q.file_id >= 8900 && q.file_id < 8950) return { '@type': 'filePart', data: sweepWav(3) };
+          // A VIDEO NOTE's own bytes. §2.11.1 gives it the same strip as a voice
+          // note, and the analyser reads the note's own container through its
+          // audio track — so these have to be decodable too, or the one path the
+          // strip takes for a video note is the failure path. (The ids are out of
+          // the 89xx block on purpose: a video note's video and its thumbnail
+          // interleave, and the thumbnail must stay a picture.)
+          if (q.file_id >= 9100 && q.file_id < 9200) return { '@type': 'filePart', data: sweepWav(3) };
           const hue = (q.file_id * 37) % 360;
           const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="hsl(${hue} 30% 80%)"/><circle cx="160" cy="120" r="60" fill="hsl(${hue} 40% 55%)"/></svg>`;
           return { '@type': 'filePart', data: new Blob([svg], { type: 'image/svg+xml' }) };

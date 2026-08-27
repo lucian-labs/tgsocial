@@ -11,6 +11,14 @@ data class HPShadow(val color: Color, val x: Dp, val y: Dp, val blur: Dp, val sp
 
 enum class HPFace { DISPLAY, BRAND, MONO, BODY }
 
+/**
+ * One stop of the spectrogram ramp (PRODUCT 2.11.1). [at] is 0..1 along the ramp; [argb] is straight
+ * (non-premultiplied) 8-bit ARGB, which is what both the interpolator and Bitmap.setPixels want.
+ */
+data class HPRampStop(val at: Float, val argb: Int) {
+    val color: Color get() = Color(argb)
+}
+
 /** size in sp, tracking in em, lineHeight multiplier. */
 data class HPTextStyle(
     val face: HPFace,
@@ -122,6 +130,7 @@ object HPTokens {
     val btnRowGap = 10.dp
     val rowGap = 10.dp
     val touchMin = 40.dp
+    val stripHeight = 44.dp
     val kebabDot = 4.dp
     val kebabDotGap = 3.dp
     val menuWidth = 240.dp
@@ -168,6 +177,20 @@ object HPTokens {
     val input = HPTextStyle(HPFace.BODY, size = 16f, weight = 400, lineHeight = 1.3f, tracking = 0f, uppercase = false)
     val mono = HPTextStyle(HPFace.MONO, size = 14.4f, weight = 400, lineHeight = 1.5f, tracking = 0f, uppercase = false)
     val monoSmall = HPTextStyle(HPFace.MONO, size = 12.8f, weight = 400, lineHeight = 1.5f, tracking = 0f, uppercase = false)
+    }
+    /**
+     * PRODUCT 2.11.1 — the spectrogram strip's data ramp, the one gradient in the look that carries data.
+     * Interpolation is hand-written (HPRamp); only the stops are generated, so all three platforms share
+     * them exactly.
+     */
+    object Ramp {
+        val stops: List<HPRampStop> = listOf(
+        HPRampStop(0f, 0x00262319.toInt()), // line2
+        HPRampStop(0.28f, 0x33262319.toInt()), // line2
+        HPRampStop(0.55f, 0xFF71695A.toInt()), // muted
+        HPRampStop(0.82f, 0xFFA4813B.toInt()), // accent
+        HPRampStop(1f, 0xFFC9A961.toInt()), // accent2
+        )
     }
     object Motion {
         const val COLOR_MS = 150

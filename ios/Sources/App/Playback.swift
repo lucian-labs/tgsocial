@@ -77,7 +77,10 @@ final class AudioPlayback {
 
     func isCurrent(_ key: String) -> Bool { current?.key == key }
 
-    func play(_ item: Item, url: URL) {
+    /// `startAt` is a 0…1 fraction of the clip — a drag on the spectrogram strip of a row that was
+    /// not playing (PRODUCT §2.11.1) starts it there rather than at zero. The seek is issued before
+    /// `play()` so the first audible sample is already at the target.
+    func play(_ item: Item, url: URL, startAt: Double = 0) {
         AudioSession.activate()
         onWillPlay?()
         resources.release()
@@ -87,6 +90,11 @@ final class AudioPlayback {
         duration = Double(item.duration)
         elapsed = 0
         loadingKey = nil
+        if startAt > 0, duration > 0 {
+            let target = min(max(startAt, 0), 1) * duration
+            elapsed = target
+            p.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        }
         resources.timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
                                                            queue: .main) { [weak self] time in
             guard let self else { return }

@@ -24,6 +24,7 @@ import { Repo } from './repo.js';
 import { Activity } from './activity.js';
 import { normaliseUsername, parsePublicPath, publicPath, usernameKey } from './protocol.js';
 import { audioRowStats, closeViewer, currentAudio, watchMedia } from './media.js';
+import { stripStats } from './strip.js';
 import { PublicSource } from './public/source.js';
 import { openStatusSheet } from './views/status.js';
 import * as publicView from './views/public.js';
@@ -662,6 +663,8 @@ window.__tgsocial = {
   currentAudio,
   /** Player rows the audio dock is tracking vs. still in the document (test/flows.mjs). */
   audioRows: () => audioRowStats(),
+  /** Spectrogram-strip introspection (PRODUCT §2.11.1) for test/flows.mjs. */
+  strip: () => stripStats(),
   /** Media-memory introspection for the Status sheet and test/flows.mjs. */
   media: {
     stats: () => app.td.mediaStats(),

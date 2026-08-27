@@ -100,6 +100,9 @@ final class AppModel {
     let audio = AudioPlayback()
     let video = VideoCoordinator()
     @ObservationIgnored private(set) var media: MediaLoader!
+    /// The audio scrubber's spectrogram strips (PRODUCT §2.11.1). Its own store because a strip
+    /// outlives the row that asked for it and is shared between the feed and a thread.
+    @ObservationIgnored private(set) var spectrograms: SpectrogramStore!
     @ObservationIgnored private(set) var nodes: NodeRepository!
     @ObservationIgnored private(set) var feed: FeedRepository!
     @ObservationIgnored private(set) var discovery: DiscoveryRepository!
@@ -205,7 +208,16 @@ final class AppModel {
         // starting or resuming audio pauses the audible inline video.
         audio.onWillPlay = { [weak self] in self?.video.pauseActive() }
         td = TDClient { [weak self] update in self?.handle(update) }
-        media = MediaLoader(td: td, activity: activity)
+        // ONE decoded-pixel budget (derived in ImageCache.swift), split — not two ceilings side by
+        // side. A spectrogram strip is a bitmap like any photo rendition, and the whole point of
+        // that derivation is that the app's decoded pixels have a single bound; giving strips their
+        // own full-size cache would quietly raise it by a quarter again. Photos get three quarters
+        // because a full-width card rendition is ~5 MB against a strip's ~0.7 MB.
+        let pixelBudget = ImageMemoryCache.budget(availableBytes: ImageMemoryCache.availableAppMemory())
+        let stripBudget = pixelBudget / 4
+        media = MediaLoader(td: td, activity: activity,
+                            images: ImageMemoryCache(byteLimit: pixelBudget - stripBudget))
+        spectrograms = SpectrogramStore(byteLimit: stripBudget)
         nodes = NodeRepository(td: td, store: store, sends: sends, activity: activity)
         feed = FeedRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         discovery = DiscoveryRepository(td: td, nodes: nodes)

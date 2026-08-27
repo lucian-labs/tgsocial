@@ -292,7 +292,13 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   background: var(--bg-2);
 }
 
-/* video note: circular inline player (PRODUCT §2.11) */
+/* video note: circular inline player (PRODUCT §2.11) with the spectrogram
+   strip as its transport underneath (§2.11.1 — "a video note keeps its
+   circular player and gets the strip as the transport underneath it"). The
+   circle stays centred at its own width; the transport spans the card, which
+   is what makes it read as a transport and not as a second picture. */
+.post-video-note { margin: var(--hp-space-row-gap) 0 0; }
+.post-video-note .post-media { margin-top: 0; }
 .post-media.video-note {
   width: 60%;
   margin-left: auto;

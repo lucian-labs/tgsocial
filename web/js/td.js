@@ -527,6 +527,26 @@ export class Td {
   }
 
   /**
+   * Store a bitmap DERIVED from a file rather than decoded from it — the
+   * spectrogram strip of an audio clip (PRODUCT §2.11.1), which is a picture
+   * of the sound and not the sound — charged at its true decoded cost
+   * (width × height × 4) like any other rendition. The caller owns the key,
+   * because what makes a derivation unique is the caller's business; what is
+   * NOT negotiable is that derived bytes go through the SAME budget as
+   * everything else, since a strip held outside the accounting is a leak the
+   * Status sheet cannot see.
+   */
+  putDerived(key, blob, { width = 0, height = 0 } = {}) {
+    this.media.put(key, blob, { width, height });
+    return this.media.url(key);
+  }
+
+  /** The URL for a derived bitmap, or null when it was never made or has been evicted. */
+  derivedUrl(key) {
+    return this.media.url(key);
+  }
+
+  /**
    * Hold/release a cached file against eviction while it is on screen or
    * playing. Returns the key that was pinned, or null when there was nothing
    * cached under it — the caller must treat null as "not pinned" rather than

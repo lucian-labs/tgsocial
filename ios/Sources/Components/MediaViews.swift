@@ -123,7 +123,18 @@ struct PlayerLayerView: UIViewRepresentable {
 }
 
 struct InlineVideoView: View {
-    enum Mode { case video, animation, videoNote }
+    enum Mode {
+        case video, animation, videoNote
+
+        /// Which surfaces carry a transport row under them. A muted looping animation is the only
+        /// one that does not — it has no playhead a reader is meant to move (PRODUCT §2.11).
+        var hasTransport: Bool { self != .animation }
+
+        /// Which transport uses the spectrogram strip instead of the hairline. §2.11.1: "Voice
+        /// notes and video notes use the same strip"; a video MESSAGE is the sentence after it —
+        /// "video keeps its poster and transport; this replaces the audio scrubber only".
+        var usesSpectrogramStrip: Bool { self == .videoNote }
+    }
 
     @Environment(AppModel.self) private var model
     let id: String
@@ -148,7 +159,11 @@ struct InlineVideoView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             surface
-            if mode == .video, started {
+            // §2.11.1: "Voice notes and video notes use the same strip." A video note therefore
+            // needs the same transport row underneath it that a video message has — the circle is
+            // the picture, this is the scrubber. An animation is a muted loop with no transport
+            // at all, which is the one mode that keeps no row here.
+            if mode.hasTransport, started {
                 scrubberRow.padding(.top, HPTokens.Space.tabsPad)
             }
         }
@@ -253,7 +268,10 @@ struct InlineVideoView: View {
         case .videoNote:
             if starting {
                 HPProgressRing(progress: fileState.progress) { cancelStart() }
-            } else if !player.isPlaying {
+            } else if !started {
+                // Only before the first play, as with a video: once the transport row is under the
+                // circle, a second play glyph on top of it is two controls for one action. Tapping
+                // the circle still toggles.
                 HPPlayButton(state: .idle, label: "Play video note") { tapped() }
             }
         }
@@ -274,7 +292,20 @@ struct InlineVideoView: View {
                 if player.isPlaying { player.pause() } else { model.video.willPlay(id, pausing: model.audio); player.play() }
             }
             Text(PostTime.duration(seconds: Int(player.elapsed))).hpStyle(HPType.totals)
-            HPScrubber(progress: player.progress) { player.seek(toFraction: $0) }
+            // §2.11.1 draws the line here: a video NOTE gets the strip ("voice notes and video
+            // notes use the same strip"), a video MESSAGE keeps the hairline ("video keeps its
+            // poster and transport; this replaces the audio scrubber only"). Either way the
+            // transport underneath is this view's own AVPlayer, not the shared audio player.
+            if mode.usesSpectrogramStrip {
+                // The analyser reads the video note's own mp4 with `AVAudioFile`, which opens a
+                // QuickTime/MPEG-4 container with a video track and hands back its audio track —
+                // verified against a real h264+AAC mp4, not assumed. A container it cannot open
+                // degrades to the empty strip like any other decode failure.
+                SpectrogramScrubber(file: file, duration: duration, title: "Video note",
+                                    transport: player, label: "Video note progress")
+            } else {
+                HPScrubber(progress: player.progress) { player.seek(toFraction: $0) }
+            }
             Text(PostTime.duration(seconds: player.duration > 0 ? Int(player.duration) : duration))
                 .hpStyle(HPType.totals, color: HPTokens.Colors.muted)
         }
@@ -369,8 +400,8 @@ struct AudioRowView: View {
                     state: state,
                     buttonLabel: isCurrent && model.audio.isPlaying ? "Pause \(displayTitle)" : "Play \(displayTitle)",
                     onButton: tapped) {
-            HPScrubber(progress: isCurrent ? model.audio.progress : 0, knob: isCurrent,
-                       onSeek: isCurrent ? { model.audio.seek(toFraction: $0) } : nil)
+            SpectrogramScrubber(file: file, duration: duration, title: displayTitle,
+                                label: "\(displayTitle) progress")
         }
     }
 
@@ -401,9 +432,10 @@ struct VoiceRowView: View {
                     state: state,
                     buttonLabel: isCurrent && model.audio.isPlaying ? "Pause voice message" : "Play voice message",
                     onButton: tapped) {
-            HPWaveform(samples: WaveformCodec.decode(waveform),
-                       progress: isCurrent ? model.audio.progress : 0,
-                       onSeek: isCurrent ? { model.audio.seek(toFraction: $0) } : nil)
+            // §2.11.1: a voice note ships its own waveform bytes, so the silhouette is drawn
+            // IMMEDIATELY — no decode, nothing to wait for — and the spectrum fills in behind it.
+            SpectrogramScrubber(file: file, duration: duration, title: "Voice message",
+                                waveform: waveform, label: "Voice message progress")
         }
     }
 
@@ -412,12 +444,123 @@ struct VoiceRowView: View {
     }
 }
 
+// MARK: - The spectrogram scrubber (PRODUCT §2.11.1)
+
+/// The strip in the player row: it decides *when* an analysis is allowed to run, sizes it to the
+/// pixels it will be drawn at, and keeps whatever it already has while the rest arrives.
+///
+/// Two gates, both from §2.11.1. Analysis never runs for a row that has not been **played or
+/// scrolled into view** — `.task` is the second half of that, and the first is that the strip never
+/// starts a download of its own: it analyses the bytes that are already on disk (TDLib had the
+/// file, or the row has been played once) and otherwise draws its silhouette and waits. And the
+/// duration decides the plan before a byte is read, so a three-hour file costs a comparison.
+struct SpectrogramScrubber: View {
+    @Environment(AppModel.self) private var model
+    let file: FileRef
+    let duration: Int
+    let title: String
+    /// TDLib's 5-bit waveform samples, for a voice note. Empty for `messageAudio`.
+    var waveform: Data = Data()
+    /// The player this strip reads and drives, when it is not the shared audio player: a video
+    /// note plays through its own `AVPlayer` inside `InlineVideoView` (§2.11.1 — video notes use
+    /// the same strip, but not the same transport). nil for audio and voice rows.
+    var transport: InlinePlayerModel?
+    let label: String
+
+    @State private var render: SpectrogramRender?
+
+    private var key: String { file.uniqueId }
+    private var isCurrent: Bool { model.audio.isCurrent(key) }
+    private var progress: Double {
+        if let transport { return transport.progress }
+        return isCurrent ? model.audio.progress : 0
+    }
+    /// Whether the bytes are here yet. Read from the observable download state, so finishing a
+    /// download re-runs the task below rather than leaving the row silhouette-only for ever.
+    private var localPath: String? { model.media.localURL(file.fileId)?.path }
+
+    /// The silhouette to draw right now: a voice note's own bytes if it has them (they need no
+    /// decode and must not be replaced by the analysis — that is the whole point of drawing them),
+    /// otherwise the one-pole envelope once it lands.
+    private var envelope: [Double] {
+        let samples = WaveformCodec.decode(waveform)
+        return samples.isEmpty ? (render?.envelope ?? []) : samples
+    }
+
+    private var rows: Int {
+        min(max(Int((HPTokens.Space.stripHeight * ScreenPixels.scale).rounded()), 1), SpectrogramSpec.maxRows)
+    }
+
+    private func columns(_ width: CGFloat) -> Int {
+        min(max(Int((width * ScreenPixels.scale).rounded()), 1), SpectrogramSpec.maxColumns)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let cols = columns(geo.size.width)
+            HPSpectrogramStrip(content: HPSpectrogramStrip.Content(image: render?.image, envelope: envelope),
+                               progress: progress,
+                               label: label,
+                               regionLabel: PostCardRegion.strip,
+                               onSeek: seek)
+                .task(id: AnalysisKey(uniqueId: key, columns: cols, rows: rows, hasBytes: localPath != nil)) {
+                    await analyse(columns: cols)
+                }
+        }
+        .frame(height: max(HPTokens.Space.stripHeight, HPTokens.Space.touchMin))
+    }
+
+    /// Seeking anywhere on the strip works whether or not this row is the one playing: on a row
+    /// that is not current the drag *starts* it at that point, which is what "the strip is also the
+    /// scrubber" has to mean for a row you have not pressed play on yet.
+    private func seek(_ fraction: Double) {
+        if let transport {
+            // A video note is already loaded and playing by the time its strip exists, so a drag
+            // is a seek and never a "start it here" — that path belongs to the audio player.
+            transport.seek(toFraction: fraction)
+            return
+        }
+        if isCurrent {
+            model.audio.seek(toFraction: fraction)
+            return
+        }
+        AudioActions.tap(model: model, key: key, fileId: file.fileId, title: title,
+                         duration: duration, startAt: fraction)
+    }
+
+    private func analyse(columns: Int) async {
+        if let hit = model.spectrograms.cached(uniqueId: key, columns: columns, rows: rows) {
+            render = hit
+            return
+        }
+        guard duration > 0, let path = localPath else { return }
+        render = await model.spectrograms.strip(uniqueId: key, path: path, duration: Double(duration),
+                                                columns: columns, rows: rows)
+    }
+
+    /// What re-runs the analysis: the clip, the pixel size it is drawn at, and whether its bytes
+    /// have arrived. Not the playhead — the strip is static once computed.
+    private struct AnalysisKey: Equatable {
+        let uniqueId: String
+        let columns: Int
+        let rows: Int
+        let hasBytes: Bool
+    }
+}
+
 @MainActor
 enum AudioActions {
     /// Shared tap behaviour for audio and voice rows: toggle when current, cancel when loading,
     /// otherwise download at tapped priority and play (pausing whatever else was playing).
-    static func tap(model: AppModel, key: String, fileId: Int, title: String, duration: Int) {
-        if model.audio.isCurrent(key) { model.audio.toggle(); return }
+    /// `startAt` is the fraction a drag on the spectrogram strip landed on (§2.11.1) — 0 for a
+    /// press of the play button.
+    static func tap(model: AppModel, key: String, fileId: Int, title: String, duration: Int,
+                    startAt: Double = 0) {
+        if model.audio.isCurrent(key) {
+            if startAt > 0 { model.audio.seek(toFraction: startAt); return }
+            model.audio.toggle()
+            return
+        }
         if model.audio.loadingKey == key {
             model.media.cancel(fileId)
             model.audio.loadingKey = nil
@@ -429,7 +572,7 @@ enum AudioActions {
             guard model.audio.loadingKey == key else { return }
             guard let path else { model.audio.loadingKey = nil; return }
             model.audio.play(AudioPlayback.Item(key: key, title: title, duration: duration),
-                             url: URL(fileURLWithPath: path))
+                             url: URL(fileURLWithPath: path), startAt: startAt)
         }
     }
 }
