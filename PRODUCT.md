@@ -426,12 +426,59 @@ off to Telegram or the browser except the explicit `Open in Telegram` button.
 | Photo | `HPMedia` at the post width, minithumbnail blur until loaded | Full-screen viewer: ink 96% background, pinch-zoom + double-tap zoom, swipe down or `Close` to dismiss, `Save` (native) / `Download` (web) ghost buttons, caption below in `charcoalText` |
 | Video | Poster (thumbnail) with a centred play glyph and duration pill; tap plays inline, muted off, with a minimal House Pour scrubber | Full-screen player (same viewer chrome), native playback (`AVPlayer` / `ExoPlayer`-free `VideoView`/`MediaPlayer` / `<video>`), landscape allowed |
 | Animation (GIF / mp4 loop) | Autoplays muted and looped inline once downloaded | Full-screen viewer, loop continues |
-| Audio (`messageAudio`) | **Player row**: play/pause circle 40pt (`stepper` style), title + performer in body/mono, serif elapsed / total time, a hairline progress bar in `line2` with a gold played segment | Same row; no full-screen |
+| Audio (`messageAudio`) | **Player row** with the spectrogram strip (§2.11.1): play/pause circle 40pt, title + performer, serif elapsed / total, and the strip as the scrubber | Same row; no full-screen |
 | Voice / video note | Same player row with a waveform drawn from TDLib's waveform bytes (ink bars, gold played) | Video notes: circular inline player |
 | Document | Row: file glyph, name in body, size + type in mono | PDF, images, text, audio/video documents open in the in-app viewer; other types download then offer `Share` (native) / `Download` (web) |
 | Sticker | Rendered static (webp/png); animated stickers show their thumbnail | — |
 | Link preview | `linkPreview` title/description/thumbnail as a bordered row | Opens the link in the system browser (links are the one exception) |
 | Poll, location, contact, other | A muted one-line summary (`Poll · 3 options`, `Location`) | `Open in Telegram` |
+
+#### 2.11.1 The spectrogram strip
+
+The audio scrubber is not a hairline — it is a **spectrogram of the clip**
+with its amplitude envelope drawn over it. Same instrument as Wake's
+waterfall, in House Pour's palette, and sized to a player row.
+
+**What it shows.** The whole clip, left to right, so the strip is also the
+scrubber: you can see where the loud part is before you drag to it.
+
+- **Spectrum.** A short-time FFT across the clip. Frequency runs bottom
+  (low) to top (high) on a **log** axis over 20 Hz–20 kHz, because that is
+  how pitch is spaced; magnitude in dB, not linear. Column count follows the
+  strip's pixel width — one column per pixel, no more; row count follows its
+  height. Normalise with a rolling peak (an AGC) rather than absolute dBFS,
+  so a quiet recording still fills the strip instead of reading as silence.
+- **The envelope, overlaid.** A **one-pole** follower over the sample
+  magnitudes — fast attack, slow release, `y += (x > y ? attack : release) *
+  (x - y)` — drawn as a connected line through the column peaks, mirrored
+  about the strip's centre. One pole, not a peak-per-bin bar chart: the point
+  is a smooth silhouette that reads as the shape of the take.
+- **Played vs unplayed.** The played portion carries `accent`; ahead of the
+  playhead the strip is `ink` at reduced opacity. The playhead is a 1pt
+  `accent` rule.
+
+**Colour.** A House Pour ramp, not a rainbow: transparent → `line2` →
+`muted` → `accent`, with the top of the range at `accent-2`. It is a
+`--ramp-*` token set so the ramp is one edit, and it is the only place in
+the look where a gradient carries data rather than decoration. The strip
+sits on `bg2` at `radius-media`; it is a data surface inside the card, not a
+second dark surface.
+
+**Cost is bounded, and it degrades rather than blocking.** Analysis is
+off the main thread, at a decimated sample rate (8–16 kHz is plenty for a
+strip this size), and capped: past a duration ceiling (about 10 minutes) or
+on any decode failure, fall back to the amplitude-only silhouette — for a
+voice note that is Telegram's own waveform bytes, which need no decode at
+all and should be drawn immediately while the spectrum computes behind it.
+The row is usable the moment it appears; the spectrum fills in.
+
+**Interaction.** Tap or drag anywhere on the strip to seek. The strip keeps
+the 40pt hit region of any control (`COMPONENTS.md` rule 6), taller than its
+painted height if need be. Analysis never runs for a row that has not been
+played or scrolled into view.
+
+Voice notes and video notes use the same strip. Video keeps its poster and
+transport; this replaces the audio scrubber only.
 
 Player rules (all platforms):
 
