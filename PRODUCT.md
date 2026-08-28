@@ -503,11 +503,51 @@ above. iOS and web give a video note the strip as its transport; **Android
 still draws the circle with no transport at all** and is the one build that
 does not yet meet the sentence above.
 
+#### 2.11.2 The mini waveform
+
+The dock is not the place for a spectrogram. It carries a **single-line
+waveform**: one polyline through the envelope's column peaks — a line
+drawing, not the mirrored filled silhouette of the strip and not the
+spectrum. Hairline weight, `muted` ahead of the playhead and `accent`
+behind it, no fill under the curve.
+
+It is a **view of the analysis the strip already did** — the same envelope
+array, resampled to the dock's width. Playing a clip must never trigger a
+second analysis, and a clip whose strip degraded to the hairline shows a
+flat line rather than nothing.
+
+Tapping it seeks, like the strip. It keeps a 40pt hit region even though it
+paints thinner.
+
+#### 2.11.3 Photos: mosaic, then carousel
+
+A post with more than one photo is a **mosaic**, not a stack — an album is
+one thing, and reading it as one block is the point.
+
+| Photos | Layout |
+| --- | --- |
+| 2 | Two tiles side by side, equal width |
+| 3 | One tall tile leading, two stacked beside it |
+| 4 | Two by two |
+| 5+ | Two by two of the first four; the fourth carries a `+N` count in the `pill` style over a scrim |
+
+The mosaic is **responsive and aspect-aware**: tiles fill their cell
+(`cover`), the block keeps a sane overall ratio rather than letting one tall
+photo set the height, and it reflows at the narrow end rather than
+overflowing. `radius-media` on the outer corners only, so the mosaic reads
+as one object with hairline `line` gutters between tiles.
+
+Tapping any tile opens the **carousel** at that tile: the §2.11 full-screen
+viewer, paging between the album's items, with the same zoom, save and
+dismiss. The mosaic is the summary; the carousel is the reading.
+
 Player rules (all platforms):
 
 - One audio item plays at a time; starting another pauses the first. Playback
   continues while scrolling and across tabs; a slim **now-playing row** docks
-  above the floating tab bar (title, play/pause, elapsed) while audio plays.
+  above the floating tab bar while audio plays: play/pause, title, elapsed,
+  and a **mini waveform** (§2.11.2). Tapping the row anywhere but its
+  controls opens the post the audio came from.
 - Videos pause when scrolled off-screen and when another video starts.
 - Progress and time use the serif for the numerals; the scrubber is a
   hairline (1pt `line2`) with a gold played segment and a 12pt `panel` knob
@@ -545,6 +585,21 @@ COMMENTS · 3                                  (section mark, serif count)
 No comments from your network yet.            (empty, muted, full stop)
 ( Comment )                                   (btn primary — the screen's one gold action)
 ```
+
+**Comments in the carousel.** The viewer carries a `Comments` control. Opening
+it does not leave the media: the media **shrinks to a mini view** pinned at the
+top — the current item, still tappable to restore it full-screen — and the
+thread takes the rest of the sheet. Paging the carousel while comments are open
+moves the mini view and re-targets the thread to that item's post.
+
+Tapping any comment in the thread **selects it as the reply target**: it lifts
+into a quoted line above the composer and the composer's placeholder becomes
+`Reply to <name>.` Tapping it again, or the quote's `×`, clears the target and
+the reply goes to the post instead. This is the `re:` chain of `PROTOCOL §6.2`
+made direct — the target is whatever you tapped.
+
+The same selection behaviour applies on the Thread screen; the carousel just
+hosts it over the media.
 
 **Comment composer** (modal, same card as Compose): a muted quote line of
 the target ("re: WaveLoop devlog — 'Post text…'"), textarea placeholder
