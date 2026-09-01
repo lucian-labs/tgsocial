@@ -9,6 +9,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import ca.lucianlabs.tgsocial.model.FileRef
+import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.repo.MediaRepo
 import ca.lucianlabs.tgsocial.repo.TdDataSource
 import ca.lucianlabs.tgsocial.td.TelegramClient
@@ -36,6 +37,13 @@ class PlaybackHub(private val context: Context, private val tg: TelegramClient) 
         val playing: Boolean = false,
         val positionMs: Long = 0,
         val durationMs: Long = 0,
+        /**
+         * The clip's stable TDLib id. PRODUCT §2.11.2 — the dock draws the envelope the STRIP analysed, and
+         * this is what it looks that up by; the dock never knows (or asks for) a geometry of its own.
+         */
+        val uniqueId: String = "",
+        /** PRODUCT §2.11 — "tapping the row anywhere but its controls opens the post the audio came from". */
+        val post: Post? = null,
     ) {
         val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     }
@@ -79,7 +87,7 @@ class PlaybackHub(private val context: Context, private val tg: TelegramClient) 
     }
 
     /** Play or pause one audio/voice item. Starting a different item replaces the current one. */
-    fun toggleAudio(key: String, title: String, ref: FileRef, mimeType: String, durationSeconds: Int) {
+    fun toggleAudio(key: String, title: String, ref: FileRef, mimeType: String, durationSeconds: Int, post: Post? = null) {
         val p = audioPlayer()
         val current = _now.value
         if (current?.key == key) {
@@ -92,7 +100,7 @@ class PlaybackHub(private val context: Context, private val tg: TelegramClient) 
         }
         _activeVideo.value = null
         audioDurationMs = durationSeconds * 1000L
-        _now.value = NowPlaying(key, title, playing = true, durationMs = audioDurationMs)
+        _now.value = NowPlaying(key, title, playing = true, durationMs = audioDurationMs, uniqueId = ref.uniqueId, post = post)
         p.setMediaItem(mediaItem(ref, mimeType))
         p.prepare()
         p.play()

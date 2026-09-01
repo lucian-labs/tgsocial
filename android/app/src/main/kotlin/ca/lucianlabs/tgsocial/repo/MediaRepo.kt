@@ -56,10 +56,13 @@ class MediaRepo(
     columnWidthPx: Int = 1080,
     displayWidthPx: Int = columnWidthPx,
     maxMemoryBytes: Long = Runtime.getRuntime().maxMemory(),
-) {
+) : StripSource {
     companion object {
         const val PRIORITY_VISIBLE = 1
         const val PRIORITY_TAPPED = 32
+
+        /** A media download waits this long before giving up; the file itself keeps downloading. */
+        const val DOWNLOAD_TIMEOUT_MS = 300_000L
 
         /** Live download states are cheap but unbounded over a long scroll — keep the newest this many. */
         const val FILE_STATE_CAP = 512
@@ -80,6 +83,10 @@ class MediaRepo(
     var zoomWidthPx: Int = MediaBudget.zoomPx(displayWidthPx)
         private set
 
+    /** PRODUCT §2.11.3 — the mosaic tile rendition (see [MediaBudget.mosaicTilePx]); tracks the column too. */
+    var tileWidthPx: Int = MediaBudget.mosaicTilePx(columnWidthPx)
+        private set
+
     /**
      * New display geometry (rotation, multi-window resize, a folding device unfolding). Buckets keyed at the
      * old widths stay in the cache and age out through the LRU — they are still valid pixels for the
@@ -88,6 +95,7 @@ class MediaRepo(
     fun onDisplayChanged(columnWidthPx: Int, displayWidthPx: Int) {
         cardWidthPx = MediaBudget.cardPx(columnWidthPx)
         zoomWidthPx = MediaBudget.zoomPx(displayWidthPx)
+        tileWidthPx = MediaBudget.mosaicTilePx(columnWidthPx)
     }
 
     /**
@@ -121,9 +129,9 @@ class MediaRepo(
         sizeOf = { _, strip -> strip.bytes },
     )
 
-    fun strip(key: String): AudioStrip? = strips[key]
+    override fun strip(key: String): AudioStrip? = strips[key]
 
-    fun putStrip(key: String, strip: AudioStrip) {
+    override fun putStrip(key: String, strip: AudioStrip) {
         strips.put(key, strip)
     }
 
@@ -177,7 +185,7 @@ class MediaRepo(
     }
 
     /** The local path when the file is already complete on disk, else null. */
-    suspend fun localPath(ref: FileRef): String? {
+    override suspend fun localPath(ref: FileRef): String? {
         ref.localPath?.takeIf { File(it).exists() }?.let { return it }
         state(ref)?.path?.takeIf { File(it).exists() }?.let { return it }
         val f = tg.callOrNull(10_000L) { getFile(fileId = ref.id) } ?: return null
@@ -190,7 +198,7 @@ class MediaRepo(
      * (`Downloading photo`) and auto-clears after 30 s even though a large file keeps downloading — progress
      * stays visible on the media itself.
      */
-    suspend fun download(ref: FileRef, priority: Int = PRIORITY_VISIBLE, label: String = "Downloading file", timeoutMs: Long = 300_000L): String? {
+    override suspend fun download(ref: FileRef, priority: Int, label: String, timeoutMs: Long): String? {
         localPath(ref)?.let { return it }
         return activity.track(label) {
             val started = tg.callOrNull { downloadFile(fileId = ref.id, priority = priority, offset = 0L, limit = 0L, synchronous = false) }
@@ -233,8 +241,15 @@ class MediaRepo(
      * configuration change not delivered yet), and rounding that up to 2048 px costs about four times the
      * bytes the card draws, under a second cache key, for pixels nobody ever sees.
      */
-    private fun bucket(w: Int): Int =
-        if (w > cardWidthPx && w < zoomWidthPx) cardWidthPx else MediaBudget.bucket(w, cardWidthPx, zoomWidthPx)
+    private fun bucket(w: Int): Int = when {
+        // PRODUCT §2.11.3 — a mosaic tile, which asks for [tileWidthPx] by value like the viewer asks for
+        // [zoomWidthPx]. By value so that nothing else can land in the tile rendition by accident: a feed
+        // card in a column narrower than the one we last recorded is still a card and still wants card
+        // pixels, and rounding it down here would ship a soft photo and a second cache entry.
+        w == tileWidthPx -> tileWidthPx
+        w > cardWidthPx && w < zoomWidthPx -> cardWidthPx
+        else -> MediaBudget.bucket(w, cardWidthPx, zoomWidthPx)
+    }
 
     suspend fun image(ref: FileRef, targetWidthPx: Int, priority: Int = PRIORITY_VISIBLE): ImageBitmap? {
         val k = key(ref, targetWidthPx)

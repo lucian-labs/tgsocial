@@ -328,6 +328,50 @@ final class FFTAnalyzer {
     }
 }
 
+// MARK: - Reusing one envelope at another width (PRODUCT §2.11.2)
+
+/// The dock's mini waveform is "a view of the analysis the strip already did — the same envelope
+/// array, resampled to the dock's width" (§2.11.2). This is that resample, and it is the ONLY thing
+/// standing between the dock and a second decode.
+///
+/// It takes the **maximum** over each output column's span rather than a mean or a nearest sample.
+/// The envelope is already a peak-per-column series, and the dock is narrower than the strip — so
+/// every output column covers several input ones and a mean would quietly flatten exactly the
+/// transients the follower's fast attack exists to keep. Widening (a dock wider than the analysed
+/// strip) is linear interpolation between neighbours, because there is nothing between two peaks to
+/// take a maximum of.
+enum Envelope {
+    static func resample(_ peaks: [Double], to columns: Int) -> [Double] {
+        guard columns > 0 else { return [] }
+        guard peaks.count > 1 else {
+            // Nothing, or a single value: a flat line at whatever level is known.
+            return [Double](repeating: peaks.first ?? 0, count: columns)
+        }
+        if peaks.count == columns { return peaks }
+        if columns == 1 { return [peaks.max() ?? 0] }
+
+        if columns < peaks.count {
+            // Downsample: the peak of each span, so a transient survives the narrowing.
+            let span = Double(peaks.count) / Double(columns)
+            return (0..<columns).map { i in
+                let lo = Int((Double(i) * span).rounded(.down))
+                let hi = min(Int((Double(i + 1) * span).rounded(.up)), peaks.count)
+                guard lo < hi else { return peaks[min(lo, peaks.count - 1)] }
+                return peaks[lo..<hi].max() ?? 0
+            }
+        }
+        // Upsample: linear between the two neighbours the output column falls between.
+        let step = Double(peaks.count - 1) / Double(columns - 1)
+        return (0..<columns).map { i in
+            let x = Double(i) * step
+            let lo = min(Int(x.rounded(.down)), peaks.count - 1)
+            let hi = min(lo + 1, peaks.count - 1)
+            let t = x - Double(lo)
+            return peaks[lo] + (peaks[hi] - peaks[lo]) * t
+        }
+    }
+}
+
 // MARK: - The strip as data
 
 /// One analysed clip: the texture and the silhouette, both sized to the strip's pixels.

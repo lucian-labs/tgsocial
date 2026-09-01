@@ -59,8 +59,9 @@ enum Modal: Equatable {
     case signOut
     /// PRODUCT §2.10: opened by tapping the status pill.
     case status
-    /// PRODUCT §2.12: the comment composer, aimed at a post or another comment.
-    case comment(target: CommentTarget)
+    /// PRODUCT §2.12: the comment composer. It carries BOTH links — the post's and the selected
+    /// comment's — so the quote's × can drop the reply target without closing and reopening.
+    case comment(targeting: CommentTargeting)
     /// PRODUCT §2.12: `Delete this comment?` confirm.
     case deleteComment(Comment)
     /// PRODUCT §2.3: the long-press post sheet — Posted, Views, Feed, Open in Telegram.
@@ -968,17 +969,58 @@ final class AppModel {
         comments.comments(forTargets: commentTargets(for: post))
     }
 
-    /// The card's Comment button and the thread's gold action both land here.
-    func startComment(on post: Post) {
-        guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
-        let quote = post.text.plain.trimmingCharacters(in: .whitespacesAndNewlines)
-        modal = .comment(target: CommentTarget(link: post.deepLink, quoteTitle: post.sourceTitle, quoteText: quote))
+    /// The comments on a chosen set of links. The Thread screen passes every album item; the
+    /// carousel passes just the one it is showing, which is what "paging … re-targets the thread to
+    /// that item's post" means (PRODUCT §2.12).
+    func threadComments(targets: [String]) -> [Comment] {
+        comments.comments(forTargets: targets)
     }
 
-    /// `Reply` on a comment targets that comment's t.me link (PRODUCT §2.12).
-    func startReply(to comment: Comment) {
+    // MARK: The reply target (PRODUCT §2.12)
+
+    /// The comment a tap selected as the reply target. It lifts into the quoted line above the
+    /// composer and the placeholder becomes `Reply to <name>.`; tapping the same comment again, or
+    /// the quote's ×, clears it and the reply goes to the post. This is `PROTOCOL §6.2`'s `re:`
+    /// chain made direct — whatever is selected here is what the written comment's first line
+    /// points at, on the Thread screen and in the carousel alike.
+    var replySelection: Comment?
+
+    /// Tapping a comment toggles it, which is what makes "tapping it again clears the target" the
+    /// same gesture as selecting it.
+    func selectReply(_ comment: Comment) {
+        replySelection = replySelection?.id == comment.id ? nil : comment
+    }
+
+    func clearReply() { replySelection = nil }
+
+    /// Where a comment written now would point. `itemLink` is the album item the carousel is
+    /// showing (PRODUCT §2.12: "paging … re-targets the thread to that item's post"); without one
+    /// it is the post's own link.
+    func targeting(for post: Post, itemLink: String? = nil) -> CommentTargeting {
+        CommentTargeting.make(post: post, itemLink: itemLink, reply: replySelection)
+    }
+
+    /// The card's Comment button, the thread's gold action and the carousel's composer all land
+    /// here: the composer opens against whatever is selected right now.
+    func startComment(on post: Post, itemLink: String? = nil) {
         guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
-        modal = .comment(target: CommentTarget(link: comment.link, quoteTitle: comment.ownerTitle, quoteText: comment.body))
+        modal = .comment(targeting: targeting(for: post, itemLink: itemLink))
+    }
+
+    /// `Reply` on a comment targets that comment's t.me link (PRODUCT §2.12) — the same target a
+    /// tap on the comment selects, so the button and the tap cannot disagree.
+    func startReply(to comment: Comment, on post: Post) {
+        guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
+        replySelection = comment
+        modal = .comment(targeting: targeting(for: post))
+    }
+
+    /// Opens the post a docked clip came from (PRODUCT §2.11: "tapping the row anywhere but its
+    /// controls opens the post the audio came from").
+    func openPost(_ post: Post) {
+        viewer = nil
+        guard path.last != .thread(post: post) else { return }
+        path.append(.thread(post: post))
     }
 
     var suggestedRepliesUsername: String {

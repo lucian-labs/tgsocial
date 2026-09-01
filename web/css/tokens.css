@@ -74,6 +74,14 @@
   --hp-space-btn-row-gap: 10px;
   --hp-space-row-gap: 10px;
   --hp-space-touch-min: 40px;
+  --hp-space-strip-height: 44px;
+  --hp-space-mini-wave-width: 96px;
+  --hp-space-mini-wave-height: 20px;
+  --hp-space-viewer-mini-height: 120px;
+  --hp-space-kebab-dot: 4px;
+  --hp-space-kebab-dot-gap: 3px;
+  --hp-space-menu-width: 240px;
+  --hp-space-menu-dismiss-drag: 40px;
   --hp-space-avatar-row: 36px;
   --hp-space-avatar-profile: 72px;
   --hp-space-bottom-safe: 96px;

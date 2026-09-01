@@ -18,7 +18,9 @@ import ca.lucianlabs.tgsocial.model.SyncStatus
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CardFormat
 import ca.lucianlabs.tgsocial.protocol.CommentFormat
+import ca.lucianlabs.tgsocial.protocol.CommentTarget
 import ca.lucianlabs.tgsocial.protocol.FeedOrder
+import ca.lucianlabs.tgsocial.protocol.ReplyTarget
 import ca.lucianlabs.tgsocial.protocol.Username
 import ca.lucianlabs.tgsocial.repo.ActivityRegistry
 import ca.lucianlabs.tgsocial.repo.CardFullException
@@ -362,12 +364,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** PRODUCT §2.12 — tapping the text or the comments count opens the thread. */
-    fun openThread(post: Post) = push(Screen.Thread(post))
+    fun openThread(post: Post) {
+        // A target selected in one thread has no meaning in another; arriving at a thread aims at the post.
+        clearReplyTarget()
+        push(Screen.Thread(post))
+    }
 
     /** Returns false when there was nothing to pop (let the system handle back). */
     fun back(): Boolean {
-        if (_viewer.value != null) { closeViewer(); return true }
+        // Innermost first. The comment composer can now be opened from ON TOP of the viewer (§2.12), so the
+        // sheet has to come before it; comments over the media are then a layer of their own, and back closes
+        // them and leaves the media up.
         if (_sheet.value != null) { closeSheet(); return true }
+        if (_viewer.value?.commentsOpen == true) { toggleViewerComments(); return true }
+        if (_viewer.value != null) { closeViewer(); return true }
         if (_stack.value.size > 1) {
             _stack.update { it.dropLast(1) }
             // The pushed-screen state is single-slot; reload whatever is now on top.
@@ -385,7 +395,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         when (s) {
             is Sheet.Compose -> prepareCompose(s.feedUsername)
             Sheet.EditCard -> _editCard.value = EditCardUi(name = myCard?.name.orEmpty(), bio = myCard?.bio.orEmpty(), link = myCard?.link.orEmpty())
-            is Sheet.CommentComposer -> prepareCommentComposer(s.target)
+            is Sheet.CommentComposer -> prepareCommentComposer(s.post, s.target)
             Sheet.SignOut, Sheet.Status, is Sheet.DeleteComment, is Sheet.PostSheet -> Unit
         }
         _sheet.value = s
@@ -400,11 +410,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ viewer (PRODUCT §2.11)
 
     fun openViewer(post: Post, page: Int) {
+        clearReplyTarget()
         _viewer.value = ViewerUi(post, page)
     }
 
     fun closeViewer() {
         _viewer.value = null
+    }
+
+    /** PRODUCT §2.12 — paging the carousel moves the mini view and re-targets the thread to that item's post. */
+    fun setViewerPage(page: Int) {
+        _viewer.update { it?.copy(page = page) }
+    }
+
+    /**
+     * PRODUCT §2.12 — the viewer's `Comments` control, and the mini view's tap back to full screen. Opening
+     * refreshes the index for the visible target, exactly as the Thread screen does when it is pushed.
+     */
+    fun toggleViewerComments() {
+        val next = _viewer.value?.let { it.copy(commentsOpen = !it.commentsOpen) } ?: return
+        _viewer.value = next
+        if (next.commentsOpen) refreshComments()
     }
 
     // ------------------------------------------------------------------ feed
@@ -474,20 +500,63 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun targetForPost(post: Post): CommentTarget = CommentTarget(
-        link = ca.lucianlabs.tgsocial.protocol.DeepLink.post(post.sourceUsername, post.messageId),
-        title = post.sourceTitle,
-        excerpt = post.text?.text.orEmpty(),
-    )
+    fun targetForPost(post: Post): CommentTarget = ReplyTarget.forPost(post)
 
-    fun targetForComment(comment: Comment): CommentTarget =
-        CommentTarget(link = comment.link, title = comment.authorName, excerpt = comment.post.text?.text.orEmpty())
+    fun targetForComment(comment: Comment): CommentTarget = ReplyTarget.forComment(comment)
 
-    private fun prepareCommentComposer(target: CommentTarget) {
+    // ---- reply target (PRODUCT §2.12): tapping a comment aims the next reply at it
+
+    private val _replyTarget = MutableStateFlow<CommentTarget?>(null)
+
+    /**
+     * The comment the next reply points at, or null for the post — §2.12's `re:` chain made direct. It is
+     * one selection, not one per screen, because the carousel's comments and the Thread screen are the same
+     * thread: closing one over the media and opening the other must not change who you were replying to.
+     */
+    val replyTarget: StateFlow<CommentTarget?> = _replyTarget.asStateFlow()
+
+    /** A tap on a comment row: select it, or clear it if it was already the target (§2.12). */
+    fun toggleReplyTarget(comment: Comment) {
+        _replyTarget.value = ReplyTarget.toggle(_replyTarget.value, ReplyTarget.forComment(comment))
+    }
+
+    /** The quote's `×`, and every place a thread stops being the one on screen. */
+    fun clearReplyTarget() {
+        _replyTarget.value = null
+    }
+
+    /** What `( Comment )` sends against: the selected comment, else the post itself. */
+    fun composerTarget(post: Post): CommentTarget = ReplyTarget.resolve(_replyTarget.value, post)
+
+    /** `( Comment )` — against the selected comment if there is one, else against the post (§2.12). */
+    fun openCommentComposer(post: Post) = openSheet(Sheet.CommentComposer(post, composerTarget(post)))
+
+    /** `Reply` on a comment row: select it, then open the composer aimed at it. */
+    fun replyToComment(post: Post, comment: Comment) {
+        val target = ReplyTarget.forComment(comment)
+        _replyTarget.value = target
+        openSheet(Sheet.CommentComposer(post, target))
+    }
+
+    private fun prepareCommentComposer(post: Post, target: CommentTarget) {
         val needsChannel = myCard != null && myCard?.replies == null
         val suggested = _myNode.value?.username?.let { "${it}_r".take(32) }.orEmpty()
-        _commentComposer.value = CommentComposerUi(target = target, needsChannel = needsChannel, channelName = suggested)
+        _commentComposer.value = CommentComposerUi(
+            target = target,
+            postTarget = ReplyTarget.forPost(post),
+            needsChannel = needsChannel,
+            channelName = suggested,
+        )
         if (needsChannel && suggested.isNotEmpty()) checkReplyChannelName()
+    }
+
+    /**
+     * PRODUCT §2.12 — the quote's `×`: the reply goes to the post instead. It clears the selection behind the
+     * composer too, so the thread underneath stops showing a target the reader has just dismissed.
+     */
+    fun clearComposerTarget() {
+        clearReplyTarget()
+        _commentComposer.update { it.copy(target = it.postTarget ?: it.target) }
     }
 
     fun setCommentText(t: String) { _commentComposer.update { it.copy(text = t) } }
@@ -574,6 +643,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _commentComposer.update { it.copy(posting = true) }
             commentRepo.addPending(optimistic)
             _sheet.value = null
+            // The selection is spent the moment the reply is sent: §2.12's target is "whatever you tapped",
+            // and leaving it armed would aim the NEXT comment at a comment nobody chose.
+            _replyTarget.value = null
+            // PROTOCOL §6.2 — the first line is `re: ` + the target's own link, whether that target is the
+            // post or the comment the reader tapped.
             val text = CommentFormat.serialise(target.link, body)
             runCatching {
                 // The send is a Pending row while it runs (PRODUCT §2.10).

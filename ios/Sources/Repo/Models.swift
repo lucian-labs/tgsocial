@@ -200,11 +200,71 @@ struct Comment: Codable, Equatable, Hashable, Identifiable {
     var targetKey: String? { CommentCodec.targetKey(target) }
 }
 
-/// What a comment points at, carried into the composer (PRODUCT §2.12).
+/// What a comment points at, carried into the composer (PRODUCT §2.12). `link` is what becomes the
+/// `re: ` line (PROTOCOL §6.2); the other two are only what the quote line shows.
 struct CommentTarget: Equatable, Hashable {
     var link: String
     var quoteTitle: String
     var quoteText: String
+
+    /// The muted quote line above the composer: `re: <title> — 'body…'` (PRODUCT §2.12).
+    var quoteLine: String {
+        var quote = quoteText.replacingOccurrences(of: "\n", with: " ")
+        if quote.count > CommentTarget.quoteMax { quote = String(quote.prefix(CommentTarget.quoteMax)) + "\u{2026}" }
+        let head = "re: \(quoteTitle)"
+        return quote.isEmpty ? head : head + " \u{2014} '\(quote)'"
+    }
+
+    /// Characters of the target's own body the quote line shows before it elides.
+    static let quoteMax = 80
+}
+
+/// Where a comment being written will point (PRODUCT §2.12, PROTOCOL §6.2).
+///
+/// Two links, never one. `post` is the item the thread is about — on the carousel that is the album
+/// item you are looking at, which is why paging re-targets. `reply` is the comment a tap selected,
+/// and while it is set it WINS: "the target is whatever you tapped". Clearing it — tapping the same
+/// comment again, or the quote's × — drops back to `post`, and the `re:` line follows, because the
+/// `re:` line is written from `active.link` and from nothing else.
+///
+/// Flat rather than recursive on purpose: a target that could nest inside a target is a chain the
+/// composer would have to walk, and §6.2's chain lives in the messages, not in this value.
+struct CommentTargeting: Equatable, Hashable {
+    var post: CommentTarget
+    var reply: CommentTarget?
+
+    var active: CommentTarget { reply ?? post }
+    var isReply: Bool { reply != nil }
+
+    init(post: CommentTarget, reply: CommentTarget? = nil) {
+        self.post = post; self.reply = reply
+    }
+
+    /// The composer's placeholder: `Reply to <name>.` while a comment is selected, `Say it.`
+    /// otherwise (PRODUCT §2.12).
+    var placeholder: String {
+        guard let reply else { return "Say it." }
+        return "Reply to \(reply.quoteTitle)."
+    }
+
+    /// The message this would write (PROTOCOL §6.2): `re: ` + the ACTIVE target's own t.me link,
+    /// then the body. The same serialiser `CommentRepository.post` runs, from the same link — which
+    /// is the whole of "the target is whatever you tapped".
+    func message(body: String) -> String {
+        CommentCodec.serialise(target: active.link, body: body)
+    }
+
+    /// Where a comment written now would point. `itemLink` is the album item the carousel is
+    /// showing (PRODUCT §2.12: "paging … re-targets the thread to that item's post"); without one
+    /// it is the post's own link. `reply` is the comment a tap selected, and it wins.
+    static func make(post: Post, itemLink: String? = nil, reply: Comment? = nil) -> CommentTargeting {
+        let quote = post.text.plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = CommentTarget(link: itemLink ?? post.deepLink,
+                                 quoteTitle: post.sourceTitle, quoteText: quote)
+        return CommentTargeting(post: base, reply: reply.map {
+            CommentTarget(link: $0.link, quoteTitle: $0.ownerTitle, quoteText: $0.body)
+        })
+    }
 }
 
 /// One page of the full-screen viewer (PRODUCT §2.11).
@@ -220,28 +280,77 @@ struct ViewerRequest: Equatable {
     var items: [ViewerItem]
     var index: Int
     var caption: String
+    /// The post the media came from. The carousel's `Comments` control (PRODUCT §2.12) needs it;
+    /// media inside a comment has none, and carries no Comments control.
+    var post: Post?
+    /// The `t.me` link of each item's own message, parallel to `items`. An album item is its own
+    /// message, so paging the carousel re-targets the thread to the item you are looking at.
+    var itemLinks: [String]
+    /// Identity of *this opening*, not of what is being opened. `ViewerOverlay` keeps the page, the
+    /// drag and the comments toggle in `@State`, which SwiftUI preserves across a request → request
+    /// change because the view keeps its structural identity — and PRODUCT §2.12 makes that change
+    /// reachable, since a comment inside the open viewer's thread renders its own media and tapping
+    /// it assigns `model.viewer` again with no nil in between. Without a new identity the second
+    /// viewer opens on the first one's page, so §2.11.3's "tapping tile N opens the carousel at
+    /// index N" quietly stops holding. `RootView` hangs `.id(openingID)` off this.
+    let openingID = UUID()
+
+    init(items: [ViewerItem], index: Int, caption: String,
+         post: Post? = nil, itemLinks: [String] = []) {
+        self.items = items; self.index = index; self.caption = caption
+        self.post = post; self.itemLinks = itemLinks
+    }
+
+    /// The link of the item at `index`, falling back to the post's own — which is the right answer
+    /// for a post that is not an album, where every item shares one message.
+    func link(at index: Int) -> String? {
+        if itemLinks.indices.contains(index) { return itemLinks[index] }
+        return post?.deepLink
+    }
 
     /// The viewable items of one post, in album order, with the media list index that opens each.
     static func from(_ post: Post, tappedMediaIndex: Int) -> ViewerRequest? {
-        from(media: post.media, caption: post.text.plain, tappedMediaIndex: tappedMediaIndex)
+        guard var request = from(media: post.media, caption: post.text.plain,
+                                 tappedMediaIndex: tappedMediaIndex) else { return nil }
+        request.post = post
+        request.itemLinks = links(of: post)
+        return request
+    }
+
+    /// One `t.me` link per VIEWABLE item, in the same order as `items`. `albumMessageIds` runs
+    /// parallel to `media` only when the post really is an album (`Mapping.merged` builds them
+    /// together); anything else is one message, so every item points at it.
+    static func links(of post: Post) -> [String] {
+        let album = post.albumMessageIds.count == post.media.count
+        var out: [String] = []
+        for (i, media) in post.media.enumerated() {
+            guard isViewable(media) else { continue }
+            let messageId = album ? post.albumMessageIds[i] : post.messageId
+            out.append(DeepLink.post(username: post.sourceUsername, messageId: messageId))
+        }
+        return out
+    }
+
+    private static func isViewable(_ media: PostMedia) -> Bool { item(for: media) != nil }
+
+    private static func item(for media: PostMedia) -> ViewerItem? {
+        switch media {
+        case .photo(let preview, let full): return .photo(preview: preview, full: full)
+        case .video(let file, let thumbnail, let duration, _, _): return .video(file: file, thumbnail: thumbnail, duration: duration)
+        case .animation(let file, let thumbnail, _, _, _): return .animation(file: file, thumbnail: thumbnail)
+        case .videoNote(let file, let thumbnail, let duration): return .video(file: file, thumbnail: thumbnail, duration: duration)
+        case .document(let file, let thumbnail):
+            let kind = DocumentKind.of(mimeType: file.mimeType, fileName: file.fileName)
+            return kind.isViewable ? .document(file: file, kind: kind, thumbnail: thumbnail) : nil
+        case .audio, .voice, .sticker, .linkPreview, .summary: return nil
+        }
     }
 
     static func from(media list: [PostMedia], caption: String, tappedMediaIndex: Int) -> ViewerRequest? {
         var items: [ViewerItem] = []
         var openIndex = 0
         for (i, media) in list.enumerated() {
-            let item: ViewerItem?
-            switch media {
-            case .photo(let preview, let full): item = .photo(preview: preview, full: full)
-            case .video(let file, let thumbnail, let duration, _, _): item = .video(file: file, thumbnail: thumbnail, duration: duration)
-            case .animation(let file, let thumbnail, _, _, _): item = .animation(file: file, thumbnail: thumbnail)
-            case .videoNote(let file, let thumbnail, let duration): item = .video(file: file, thumbnail: thumbnail, duration: duration)
-            case .document(let file, let thumbnail):
-                let kind = DocumentKind.of(mimeType: file.mimeType, fileName: file.fileName)
-                item = kind.isViewable ? .document(file: file, kind: kind, thumbnail: thumbnail) : nil
-            case .audio, .voice, .sticker, .linkPreview, .summary: item = nil
-            }
-            guard let item else { continue }
+            guard let item = item(for: media) else { continue }
             if i == tappedMediaIndex { openIndex = items.count }
             items.append(item)
         }

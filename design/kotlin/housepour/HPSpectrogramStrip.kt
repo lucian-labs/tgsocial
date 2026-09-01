@@ -168,8 +168,12 @@ fun HPSpectrogramStrip(
     )
 }
 
-/** How much of the half-height the silhouette claims, so peaks do not clip against the strip's edges. */
-private const val ENVELOPE_HEADROOM = 0.9f
+/**
+ * How much of the half-height an envelope's peak claims, so peaks do not clip against the rounded edges
+ * of what draws them. Shared with the dock's line drawing (`HPMiniWave`, PRODUCT §2.11.2) so the same
+ * envelope reads at the same relative height in both places.
+ */
+internal const val HP_ENVELOPE_HEADROOM = 0.9f
 
 /**
  * Fill and ridge opacities. The silhouette sits *over* the spectrum, so a solid fill would hide the data it
@@ -193,7 +197,7 @@ private fun DrawScope.silhouette(envelope: FloatArray, playedX: Float) {
     val n = envelope.size
     val stepX = size.width / (n - 1)
     val centreY = size.height / 2
-    val amplitude = centreY * ENVELOPE_HEADROOM
+    val amplitude = centreY * HP_ENVELOPE_HEADROOM
     val stroke = HPTokens.BORDER_WIDTH.dp.toPx()
 
     fun x(i: Int) = i * stepX

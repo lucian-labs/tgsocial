@@ -57,6 +57,7 @@ import {
   envelopeColumns,
   MAX_SAMPLES,
   paintStrip,
+  resampleEnvelope,
   TARGET_RATE,
 } from './spectro.js';
 
@@ -108,6 +109,35 @@ const MAX_ATTEMPTS = 3;
 /** The analysis records, keyed by file identity. */
 const jobs = new Map();
 
+/**
+ * Everything watching for a record to settle — the now-playing dock, which owns
+ * no analysis of its own (§2.11.2) and only wants to know when the one the
+ * STRIP started has an envelope to share. A Set of plain callbacks rather than
+ * a waiter element, because the dock's mini waveform is not a strip: it takes
+ * the envelope at its own width and never the texture.
+ */
+const readyListeners = new Set();
+
+/**
+ * Call `fn(cacheId)` whenever an analysis settles (ready or failed). Returns
+ * the unsubscribe. Nothing here starts work — it is a notification that the
+ * cache changed, and `cachedEnvelope` is how you read it.
+ */
+export function onStripReady(fn) {
+  readyListeners.add(fn);
+  return () => readyListeners.delete(fn);
+}
+
+function announce(cacheId) {
+  for (const fn of [...readyListeners]) {
+    try {
+      fn(cacheId);
+    } catch (e) {
+      console.warn('[strip] listener', e?.message ?? e);
+    }
+  }
+}
+
 let workerFailed = false;
 let worker = null;
 let nextId = 1;
@@ -143,6 +173,27 @@ export function stripPixels(env = globalThis) {
     cols: Math.max(COL_QUANTUM, COL_QUANTUM * Math.floor(wide / COL_QUANTUM)),
     rows: Math.max(2, Math.round(STRIP_HEIGHT_CSS * dpr)),
   };
+}
+
+/**
+ * The envelope this clip's STRIP already computed, resampled to `cols`
+ * (PRODUCT §2.11.2: "a view of the analysis the strip already did — the same
+ * envelope array, resampled to the dock's width").
+ *
+ * This never starts anything. It reads the record `ensureStrip` keyed under the
+ * same file identity and strip size, and returns null for every state that has
+ * no envelope yet — pending, refused, failed, or the hairline a decode failure
+ * left behind. Null is not "draw nothing": §2.11.2 says a clip whose strip
+ * degraded to the hairline shows a FLAT LINE, and that is the mini waveform's
+ * own no-envelope shape.
+ */
+export function cachedEnvelope(meta, cols) {
+  const id = stripIdentity(meta?.file);
+  if (!id) return null;
+  const { cols: sc, rows } = stripPixels();
+  const record = jobs.get(`${id}@${sc}x${rows}`);
+  if (!record || record.state !== 'ready' || !record.envelope) return null;
+  return resampleEnvelope(record.envelope, cols);
 }
 
 // ── decode ─────────────────────────────────────────────────────────────────
@@ -516,6 +567,7 @@ export function ensureStrip(app, meta, el, fetchBytes, { retry = false } = {}) {
       const url = result.key ? app.td.derivedUrl(result.key) : null;
       for (const target of next.waiters) apply(next, target, url);
       next.waiters.clear();
+      announce(cacheId);
     }, (e) => {
       // Degrade, never block: the row keeps the silhouette it already had (a
       // voice note's Telegram bytes) or its hairline, and nothing is logged as
@@ -529,6 +581,7 @@ export function ensureStrip(app, meta, el, fetchBytes, { retry = false } = {}) {
       if (next.transient) next.attempts -= 1;
       stats.failed += 1;
       next.waiters.clear();
+      announce(cacheId);
       if (!e?.cancelled) console.warn('[strip]', next.reason);
     });
   return next;

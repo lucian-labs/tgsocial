@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, extname, join, normalize } from 'node:path';
 import { createRequire } from 'node:module';
 import { analysisRate, axisMaxHz, rowForFrequency } from '../js/spectro.js';
+import { MOSAIC_AREAS, mosaicPlan } from '../js/mosaic.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const web = join(here, '..');
@@ -701,7 +702,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
   ok(await page.evaluate(() => !location.hash.startsWith('#/thread')), 'post sheet: long-press did not open the thread');
   ok(await page.evaluate(() => !!document.querySelector('#view .post-body b') && !!document.querySelector('#view .post-body code') && !!document.querySelector('#view .post-body a')), 'feed: entities rendered as b/code/a');
-  await page.waitForFunction(() => [...document.querySelectorAll('#view .post-media img')].some((i) => i.src.startsWith('blob:')), null, { timeout: 10000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('#view .post-media img, #view .post-mosaic-tile img')].some((i) => i.src.startsWith('blob:')), null, { timeout: 10000 });
   ok(true, 'feed: media loaded via readFile blob');
   ok(/release-notes-\d+\.pdf/.test(feedText), 'feed: document file name');
   ok(/Bench loop/.test(feedText) && /3:32/.test(feedText), 'feed: audio title + duration');
@@ -872,6 +873,12 @@ try {
     ok(hit.lands.every((x) => x === 'strip'), `strip: every point of the region reaches the strip (${hit.lands.join(', ')})`);
 
     // Tap anywhere on the strip to seek.
+    // §2.11.2 rides on this play: the row's strip is analysed (fidelity `full`
+    // above), so the dock must reuse THAT envelope rather than asking for one.
+    const analysedBefore = await page.evaluate(() => {
+      const s = window.__tgsocial.strip();
+      return { started: s.started, records: s.records };
+    });
     await page.locator('[data-test-strip] .player-btn').click();
     await page.waitForFunction(() => (window.__tgsocial.currentAudio()?.duration ?? 0) > 0, null, { timeout: 10000 });
     const box = await page.locator('[data-test-strip] .strip').boundingBox();
@@ -883,7 +890,174 @@ try {
     ok(Math.abs(seek - 0.75) < 0.06, `strip: clicking at 75% of the strip seeks to 75% of the clip (${seek.toFixed(3)})`);
     ok(await page.evaluate(() => Number(document.querySelector('[data-test-strip] .strip').getAttribute('aria-valuenow'))) === 75,
       'strip: and the slider reports it');
+
+    // ── §2.11.2 the mini waveform in the now-playing dock ──────────────────
+    //
+    // "It is a view of the analysis the strip already did — the same envelope
+    // array, resampled to the dock's width. Playing a clip must never trigger a
+    // second analysis." That last sentence is a COUNT, so it is asserted as one:
+    // the dock is up, the clip is playing, and js/strip.js started nothing and
+    // keyed nothing new.
+    await page.waitForSelector('#dock .now-playing .mini-wave', { timeout: 8000 });
+    const shared = await page.evaluate((before) => {
+      const s = window.__tgsocial.strip();
+      const wave = document.querySelector('#dock .mini-wave');
+      return {
+        started: s.started - before.started,
+        records: s.records - before.records,
+        hasEnvelope: wave.hasEnvelope,
+        columns: wave.columns,
+      };
+    }, analysedBefore);
+    ok(shared.started === 0 && shared.records === 0,
+      `dock: playing the clip started no second analysis (started +${shared.started}, records +${shared.records})`);
+    ok(shared.hasEnvelope && shared.columns > 1,
+      `dock: the mini waveform carries the strip's own envelope, resampled to ${shared.columns} columns`);
+
+    // A LINE through the column peaks — not the strip's mirrored filled
+    // silhouette and not the spectrum. Read back in pixels: every lit column is
+    // a stroke a couple of pixels tall, never a filled slab, and nothing is
+    // painted below the centre line the peaks rise from.
+    const drawn = await page.evaluate(() => {
+      const c = document.querySelector('#dock .mini-wave-line');
+      const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const alpha = (x, y) => px[(y * c.width + x) * 4 + 3];
+      const rgb = (x, y) => [0, 1, 2].map((k) => px[(y * c.width + x) * 4 + k]).join(',');
+      let thickest = 0;
+      let lit = 0;
+      let belowMid = 0;
+      let topmost = c.height;
+      const mid = Math.floor(c.height / 2);
+      for (let x = 0; x < c.width; x += 1) {
+        let run = 0;
+        for (let y = 0; y < c.height; y += 1) {
+          if (alpha(x, y) <= 8) continue;
+          run += 1;
+          lit += 1;
+          if (y > mid + 2) belowMid += 1;
+          if (y < topmost) topmost = y;
+        }
+        thickest = Math.max(thickest, run);
+      }
+      const colourAt = (f) => {
+        const x = Math.max(0, Math.min(c.width - 1, Math.round(f * (c.width - 1))));
+        for (let y = 0; y < c.height; y += 1) if (alpha(x, y) > 120) return rgb(x, y);
+        return null;
+      };
+      // The token is whatever the cascade holds (a hex, an rgb()); resolve it
+      // the way the canvas did, by letting the browser compute it.
+      const wave = document.querySelector('#dock .mini-wave');
+      const style = getComputedStyle(wave);
+      const probe = document.createElement('span');
+      wave.append(probe);
+      const named = (name) => {
+        probe.style.color = style.getPropertyValue(name).trim();
+        const m = /rgba?\(([^)]+)\)/.exec(getComputedStyle(probe).color);
+        return m ? m[1].split(/[\s,\/]+/).slice(0, 3).join(',') : null;
+      };
+      const tokens = { played: named('--mini-wave-played'), ahead: named('--mini-wave-ahead') };
+      probe.remove();
+      return {
+        h: c.height,
+        lit,
+        thickest,
+        belowMid,
+        rises: mid - topmost,
+        behind: colourAt(0.2),
+        ahead: colourAt(0.95),
+        played: tokens.played,
+        aheadToken: tokens.ahead,
+      };
+    });
+    ok(drawn.lit > 0 && drawn.thickest <= Math.max(4, Math.round(drawn.h / 4)),
+      `dock: one polyline, not a filled silhouette (thickest column ${drawn.thickest}px of ${drawn.h})`);
+    ok(drawn.belowMid === 0 && drawn.rises > 1,
+      `dock: no fill under the curve — the peaks rise off the centre line (${drawn.rises}px)`);
+    // played behind the head, muted ahead of it — and the playhead is at 75%
+    // because the seek above put it there
+    ok(drawn.behind === drawn.played && drawn.ahead === drawn.aheadToken && drawn.played !== drawn.aheadToken,
+      `dock: accent behind the playhead, muted ahead of it (${drawn.behind} vs ${drawn.ahead})`);
+
+    // Rule 6 on the ASSEMBLED dock: it paints thinner than a target and takes
+    // the 40 as an overlay that reaches past its own bounds — and tiles with
+    // the play button beside it rather than swallowing its half.
+    const dockHit = await page.evaluate(() => {
+      const row = document.querySelector('#dock .now-playing');
+      const wave = row.querySelector('.mini-wave');
+      const btn = row.querySelector('.player-btn');
+      const r = wave.getBoundingClientRect();
+      const b = btn.getBoundingClientRect();
+      const probe = (x, y) => {
+        const el = document.elementFromPoint(x, y);
+        if (!el) return 'none';
+        if (el.closest('.mini-wave')) return 'wave';
+        if (el.closest('.player-btn')) return 'btn';
+        if (el.closest('.now-playing')) return 'row';
+        return el.className || el.tagName;
+      };
+      const min = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-touch-min'));
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      return {
+        min,
+        painted: Math.round(r.height * 10) / 10,
+        btn: Math.round(Math.min(b.width, b.height) * 10) / 10,
+        overlaps: r.left < b.right && r.right > b.left,
+        edges: [probe(cx, cy - min / 2 + 1), probe(cx, cy), probe(cx, cy + min / 2 - 1), probe(r.left + 1, cy), probe(r.right - 1, cy)],
+        beyondBtn: probe(b.left + b.width / 2, b.top + b.height / 2),
+        row: probe(row.getBoundingClientRect().left + 4, cy),
+      };
+    });
+    ok(dockHit.painted < dockHit.min,
+      `dock: the waveform paints thinner than a target (${dockHit.painted}pt of ${dockHit.min})`);
+    ok(dockHit.edges.every((x) => x === 'wave'),
+      `dock: and still takes a full ${dockHit.min}pt region past its painted bounds (${dockHit.edges.join(', ')})`);
+    ok(!dockHit.overlaps && dockHit.btn >= dockHit.min && dockHit.beyondBtn === 'btn',
+      'dock: it tiles with the 40pt play circle instead of swallowing it');
+    ok(dockHit.row === 'row', 'dock: the rest of the row is the row — §2.11 opens the post from there');
+
+    // Tapping it seeks, like the strip.
+    const waveBox = await page.locator('#dock .mini-wave').boundingBox();
+    await page.mouse.click(waveBox.x + waveBox.width * 0.4, waveBox.y + waveBox.height / 2);
+    const dockSeek = await page.evaluate(() => {
+      const a = window.__tgsocial.currentAudio();
+      return a && a.duration ? a.currentTime / a.duration : -1;
+    });
+    ok(Math.abs(dockSeek - 0.4) < 0.06, `dock: tapping the waveform seeks (${dockSeek.toFixed(3)})`);
+
+    // "A clip whose strip degraded to the hairline shows a flat line rather
+    // than nothing": the no-envelope shape, drawn by the same code path.
+    const flat = await page.evaluate(() => {
+      const wave = document.querySelector('#dock .mini-wave');
+      wave.setEnvelope(null);
+      const c = wave.querySelector('canvas');
+      const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const rows = new Set();
+      let lit = 0;
+      for (let x = 0; x < c.width; x += 1) {
+        for (let y = 0; y < c.height; y += 1) {
+          if (px[(y * c.width + x) * 4 + 3] > 8) {
+            rows.add(y);
+            lit += 1;
+          }
+        }
+      }
+      return { lit, spread: rows.size, width: c.width, mid: Math.floor(c.height / 2), rows: [...rows] };
+    });
+    ok(flat.lit >= flat.width && flat.spread <= 4 && flat.rows.every((y) => Math.abs(y - flat.mid) <= 2),
+      `dock: a hairline clip draws a FLAT line down the middle, not nothing (${flat.spread} rows lit across ${flat.width} columns)`);
     await page.evaluate(() => window.__tgsocial.currentAudio()?.pause());
+
+    // §2.11: "Tapping the row anywhere but its controls opens the post the
+    // audio came from." The waveform and the play circle stopped their own
+    // gestures above; this is what the rest of the row is for.
+    const rowBox = await page.locator('#dock .now-playing').boundingBox();
+    await page.mouse.click(rowBox.x + 6, rowBox.y + rowBox.height / 2);
+    await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, { timeout: 8000 });
+    ok(/Bench loop/.test(await page.evaluate(() => document.getElementById('view').innerText)),
+      'dock: tapping the row opens the post the audio came from');
+    await page.evaluate(() => { location.hash = '#/feed'; });
+    await page.waitForSelector('#view article.post', { timeout: 15000 });
   }
 
   // §2.11.1: "a video note keeps its circular player and gets the strip as the
@@ -1178,9 +1352,11 @@ try {
   await page.click('#topbar-lead .btn');
   await waitText(/YOUR FEEDS/);
   await page.click('.tabs button:has-text("Feed")');
-  await page.waitForSelector('#view .post-media[role="button"]', { timeout: 15000 });
+  await page.waitForSelector('#view .post-mosaic-tile', { timeout: 15000 });
 
-  await page.locator('#view .post-media[role="button"]').first().click();
+  // §2.11.3: the newest post is the two-photo album, so its media is a MOSAIC
+  // and the way into the carousel is a tile.
+  await page.locator('#view .post-mosaic-tile').first().click();
   await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
   ok(await page.evaluate(() => document.body.hasAttribute('data-viewer') && getComputedStyle(document.getElementById('dock')).display === 'none' && getComputedStyle(document.getElementById('head')).display === 'none'), 'viewer: hides the topbar and the tab bar');
   ok(await page.evaluate(() => document.querySelector('.viewer-counter')?.textContent === '1 / 2'), 'viewer: album counter 1 / 2');
@@ -1191,6 +1367,202 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer'), null, { timeout: 5000 });
   ok(await page.evaluate(() => !document.body.hasAttribute('data-viewer')), 'viewer: Escape dismisses and restores the chrome');
+
+  // ── §2.11.3 photos: mosaic, then carousel ────────────────────────────────
+  //
+  // "A post with more than one photo is a mosaic, not a stack — an album is one
+  // thing, and reading it as one block is the point." The layouts are measured
+  // as RECTANGLES against js/mosaic.js's own table, so the stylesheet's
+  // grid-template-areas and the module the app builds from cannot drift apart.
+  await page.evaluate(() => { location.hash = '#/feed/mosaic_demo'; });
+  await page.waitForFunction(() => document.querySelectorAll('#view .post-mosaic').length >= 3, null, { timeout: 20000 });
+
+  const measureMosaics = () => page.evaluate(() => [...document.querySelectorAll('#view .post-mosaic')].map((m) => {
+    const box = m.getBoundingClientRect();
+    const style = getComputedStyle(m);
+    const card = m.closest('.card').getBoundingClientRect();
+    return {
+      count: Number(m.dataset.count),
+      w: box.width,
+      h: box.height,
+      radius: style.borderTopLeftRadius,
+      mediaRadius: getComputedStyle(document.documentElement).getPropertyValue('--radius-media').trim(),
+      tileRadius: getComputedStyle(m.querySelector('.post-mosaic-tile')).borderTopLeftRadius,
+      gap: parseFloat(style.rowGap) || 0,
+      border: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--border-width')) || 0,
+      more: m.querySelector('.post-mosaic-more')?.textContent ?? null,
+      insideCard: box.right <= card.right + 0.5 && box.left >= card.left - 0.5,
+      tiles: [...m.querySelectorAll('.post-mosaic-tile')].map((t) => {
+        const r = t.getBoundingClientRect();
+        return { x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height, target: Math.min(r.width, r.height) };
+      }),
+    };
+  }));
+  const mosaics = await measureMosaics();
+
+  // The expected rectangles come from MOSAIC_AREAS, not from this file: two
+  // columns, one row per row of the table, and a tile spanning every cell its
+  // letter occupies.
+  const expectedTiles = (m) => {
+    const areas = MOSAIC_AREAS[m.count];
+    const rows = areas.length;
+    const cellW = (m.w - m.gap) / 2;
+    const cellH = (m.h - (rows - 1) * m.gap) / rows;
+    return [...new Set(areas.flat())].map((letter) => {
+      const cells = [];
+      areas.forEach((row, r) => row.forEach((a, c) => { if (a === letter) cells.push({ r, c }); }));
+      const r0 = Math.min(...cells.map((c) => c.r));
+      const c0 = Math.min(...cells.map((c) => c.c));
+      const spanR = Math.max(...cells.map((c) => c.r)) - r0 + 1;
+      const spanC = Math.max(...cells.map((c) => c.c)) - c0 + 1;
+      return {
+        x: c0 * (cellW + m.gap),
+        y: r0 * (cellH + m.gap),
+        w: spanC * cellW + (spanC - 1) * m.gap,
+        h: spanR * cellH + (spanR - 1) * m.gap,
+      };
+    });
+  };
+  const near = (a, b) => Math.abs(a - b) <= 1.5;
+  const matches = (m) => {
+    const want = expectedTiles(m);
+    return m.tiles.length === want.length
+      && m.tiles.every((t, i) => near(t.x, want[i].x) && near(t.y, want[i].y) && near(t.w, want[i].w) && near(t.h, want[i].h));
+  };
+  const byCount = Object.fromEntries(mosaics.map((m) => [m.count, m]));
+  ok(byCount[3] && matches(byCount[3])
+    && near(byCount[3].tiles[0].h, byCount[3].h)
+    && near(byCount[3].tiles[1].h, byCount[3].tiles[2].h)
+    && byCount[3].tiles[1].x > byCount[3].tiles[0].x,
+    `mosaic: 3 photos are one tall leading tile with two stacked beside it (${byCount[3]?.tiles.map((t) => `${Math.round(t.w)}x${Math.round(t.h)}`).join(' ')})`);
+  ok(byCount[4] && matches(byCount[4])
+    && new Set(byCount[4].tiles.map((t) => Math.round(t.w))).size === 1
+    && new Set(byCount[4].tiles.map((t) => Math.round(t.h))).size === 1,
+    `mosaic: 4 photos are two by two, equal cells (${byCount[4]?.tiles.map((t) => `${Math.round(t.w)}x${Math.round(t.h)}`).join(' ')})`);
+  // the six-photo album paints the same 2×2 with the rest counted on the fourth
+  const six = mosaics.find((m) => m.more);
+  ok(six && six.count === 4 && six.tiles.length === 4 && six.more === '+2' && matches(six),
+    `mosaic: 5+ photos are the first four with a +N over the fourth (${six?.more})`);
+
+  const shape = byCount[4];
+  ok(shape.radius === shape.mediaRadius && shape.tileRadius === '0px',
+    `mosaic: radius-media on the OUTER corners only (block ${shape.radius}, tile ${shape.tileRadius})`);
+  ok(shape.gap === shape.border && shape.border > 0,
+    `mosaic: hairline line gutters, so it reads as one object (${shape.gap}px gap at ${shape.border}px border)`);
+  ok(mosaics.every((m) => m.insideCard), 'mosaic: the block never leaves its card');
+  const ratios = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const min = parseFloat(root.getPropertyValue('--ratio-mosaic-min'));
+    const max = parseFloat(root.getPropertyValue('--ratio-mosaic-max'));
+    return [...document.querySelectorAll('#view .post-mosaic')].map((m) => {
+      const r = m.getBoundingClientRect();
+      return { r: r.width / r.height, min, max };
+    });
+  });
+  ok(ratios.every((x) => x.r >= x.min - 0.02 && x.r <= x.max + 0.02),
+    `mosaic: the block keeps a sane ratio rather than letting one photo set the height (${ratios.map((x) => x.r.toFixed(2)).join(', ')} in ${ratios[0].min}…${ratios[0].max})`);
+
+  // Aspect-aware: the tiles COVER their cells rather than letterboxing them.
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view .post-mosaic-tile img')].every((i) => getComputedStyle(i).objectFit === 'cover')),
+    'mosaic: tiles cover their cell');
+
+  // Rule 6 on the assembled screen: a tile is far past a target on its own
+  // drawn shape, and every point of it reaches the tile and not the card.
+  await page.evaluate(() => document.querySelector('#view .post-mosaic[data-count="4"]').scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(250);
+  const tileHits = await page.evaluate(() => {
+    const min = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-touch-min'));
+    const probe = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      return el && el.closest('.post-mosaic-tile') ? 'tile' : (el?.className || 'none');
+    };
+    return [...document.querySelectorAll('#view .post-mosaic')].flatMap((m) => [...m.querySelectorAll('.post-mosaic-tile')].map((t) => {
+      const r = t.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) return null;
+      // the block's OUTER corners are clipped by radius-media, so the region is
+      // probed along its edges rather than into a rounded corner
+      return {
+        min,
+        size: Math.min(r.width, r.height),
+        corners: [
+          probe(r.left + r.width / 2, r.top + 2), probe(r.left + r.width / 2, r.bottom - 2),
+          probe(r.left + 2, r.top + r.height / 2), probe(r.right - 2, r.top + r.height / 2),
+          probe(r.left + r.width / 2, r.top + r.height / 2),
+        ],
+      };
+    })).filter(Boolean);
+  });
+  ok(tileHits.length >= 3 && tileHits.every((t) => t.size >= t.min && t.corners.every((c) => c === 'tile')),
+    `mosaic: every tile is a ${tileHits[0]?.min}pt region of its own drawn shape, corner to corner (${tileHits.length} measured)`);
+
+  // Memory (§2.11.3 + the byte-budgeted cache): a tile is a THUMBNAIL. It is
+  // requested at tile size, never at the size the carousel will want.
+  await page.waitForFunction(() => [...document.querySelectorAll('#view .post-mosaic img')].filter((i) => i.src).length >= 8, null, { timeout: 20000 });
+  const tileWidths = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const n = (name) => parseFloat(root.getPropertyValue(name));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const block = Math.min(window.innerWidth, n('--space-column-max')) - 2 * n('--space-column-side') - 2 * n('--space-card-pad');
+    const widths = [];
+    for (const [key, e] of window.__tgsocial.app.td.media.entries) {
+      // this channel's photos only (seeds 300-325 in test/mock-tdweb.js)
+      if (/^ph3\d\d[mx]@\d+$/.test(key)) widths.push(e.width || Number(key.split('@')[1]));
+    }
+    return { widths, tile: Math.round((block / 2) * dpr), full: Math.round(window.innerWidth * dpr) };
+  });
+  ok(tileWidths.widths.length > 0 && tileWidths.widths.every((w) => w <= tileWidths.tile + 1),
+    `mosaic: tiles are decoded at tile size, not full-screen (${[...new Set(tileWidths.widths)].join(', ')} px, tile ${tileWidths.tile}, screen ${tileWidths.full})`);
+
+  // "Tapping any tile opens the carousel AT THAT TILE'S INDEX."
+  console.log('# PROBE state', JSON.stringify(await page.evaluate(async () => {
+    const t = document.querySelector('#view .post-mosaic-tile');
+    const out = { stats: window.__tgsocial.media.stats(), tile: !!t };
+    try {
+      const r = await window.__tgsocial.app.td.imageUrl({ id: 8300, remote: { unique_id: 'ph300m' }, local: {} }, { width: 322 });
+      out.direct = String(r).slice(0, 24);
+    } catch (e) { out.err = String(e && e.message); }
+    return out;
+  }))); 
+  await page.locator('#view .post-mosaic[data-count="4"] .post-mosaic-tile').nth(2).click();
+  await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelector('.viewer-counter')?.textContent === '3 / 4'),
+    'mosaic: tapping the third tile opens the carousel at the third item');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer'), null, { timeout: 5000 });
+  await page.locator('#view .post-mosaic[data-count="4"] .post-mosaic-tile').first().click();
+  await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelector('.viewer-counter')?.textContent === '1 / 4'),
+    'mosaic: and the first tile opens it at the first');
+  ok(await page.evaluate(() => {
+    const w = window.__tgsocial.app.td.media;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const want = Math.round(window.innerWidth * dpr);
+    return [...w.entries].some(([k]) => /^ph3\d\d[mx]@(\d+)$/.test(k) && Number(RegExp.$1) >= want);
+  }), 'mosaic: the carousel is the one that asks for the full-screen rendition');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer'), null, { timeout: 5000 });
+  await snap('mosaic');
+
+  // "It reflows at the narrow end rather than overflowing."
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.waitForTimeout(400);
+  const narrow = await measureMosaics();
+  ok(narrow.length >= 3 && narrow.every((m) => m.insideCard) && narrow.every((m) => matches(m)),
+    `mosaic: at 320px it reflows into the card rather than overflowing (${narrow.map((m) => `${Math.round(m.w)}x${Math.round(m.h)}`).join(' ')})`);
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    'mosaic: and the page never scrolls sideways');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  await page.click('.tabs button:has-text("Feed")');
+  await page.waitForSelector('#view article.post', { timeout: 15000 });
+
+  // The two-photo layout is the one that lives in the feed (the newest post),
+  // measured on the card it actually ships on.
+  await page.waitForSelector('#view .post-mosaic[data-count="2"]', { timeout: 15000 });
+  const pair = (await measureMosaics()).find((m) => m.count === 2);
+  ok(pair && matches(pair) && near(pair.tiles[0].w, pair.tiles[1].w) && near(pair.tiles[0].y, pair.tiles[1].y)
+    && near(pair.tiles[0].h, pair.h) && pair.tiles[1].x > pair.tiles[0].x,
+    `mosaic: 2 photos are two tiles side by side, equal width (${pair?.tiles.map((t) => `${Math.round(t.w)}x${Math.round(t.h)}`).join(' ')})`);
 
   // ── §2.12 comments and threads ───────────────────────────────────────────
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -1232,9 +1604,203 @@ try {
   await page.click('#modal button.btn.danger');
   await waitText(/COMMENTS · 2/);
   ok(true, 'delete: my comment removed from my channel');
+
+  // ── §2.12 the reply target is whatever you tapped ────────────────────────
+  //
+  // "Tapping any comment in the thread selects it as the reply target: it lifts
+  // into a quoted line above the composer and the composer's placeholder
+  // becomes `Reply to <name>.`" — and the written comment's first line is
+  // `re: ` + THAT comment's own t.me link (PROTOCOL §6.2), not the post's.
+  const myChannelHistory = () => page.evaluate(() => {
+    const sg = Object.values(window.__mock.supergroups).find((x) => x.usernames?.editable_username === 'tgs_elijah_r');
+    const chat = Object.values(window.__mock.chats).find((c) => c.type.supergroup_id === sg?.id);
+    return (window.__mock.history[chat.id] ?? []).map((m) => m.content?.text?.text ?? '');
+  });
+  // Ana's comment CONTAINS Bob's reply, so the body has to be its own child,
+  // not any descendant's — and tapping the child selects the child (§2.12).
+  const anaComment = () => page.locator('#view .comment', { hasText: 'Nice one. The bass is huge.' }).first();
+  const anaBody = () => anaComment().locator(':scope > .post-body');
+  await anaBody().click();
+  await page.waitForSelector('#view .comment[data-selected]', { timeout: 5000 });
+  const picked = await page.evaluate(() => {
+    const sel = document.querySelector('#view .comment[data-selected]');
+    return {
+      name: sel.querySelector('.post-title span').textContent,
+      pressed: sel.getAttribute('aria-pressed'),
+      quote: document.querySelector('#view .comment-quote-row .comment-quote')?.textContent ?? '',
+      clear: !!document.querySelector('#view .comment-quote-clear'),
+    };
+  });
+  ok(picked.name === 'Ana Iliovic' && picked.pressed === 'true' && /^re: Ana Iliovic/.test(picked.quote) && picked.clear,
+    `thread: tapping a comment lifts it into a quoted line above the composer (${picked.quote})`);
+
+  // Rule 6 on the ASSEMBLED thread: the comment's own drawn shape is far past a
+  // target, the × beside the quote takes its 40 as an overlay, and the name
+  // button inside the comment keeps its own region out of the row's.
+  const threadHits = await page.evaluate(() => {
+    const min = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-touch-min'));
+    const probe = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      if (!el) return 'none';
+      if (el.closest('.comment-quote-clear')) return 'clear';
+      if (el.closest('.post-title')) return 'name';
+      if (el.closest('.comment-meta')) return 'meta';
+      if (el.closest('.comment')) return 'comment';
+      return el.className || el.tagName;
+    };
+    const row = document.querySelector('#view .comment[data-selected]');
+    const clear = document.querySelector('#view .comment-quote-clear');
+    const name = row.querySelector('.post-title');
+    const r = row.getBoundingClientRect();
+    const c = clear.getBoundingClientRect();
+    const n = name.getBoundingClientRect();
+    const body = row.querySelector('.post-body').getBoundingClientRect();
+    return {
+      min,
+      comment: Math.min(r.width, r.height),
+      commentLands: probe(body.left + body.width / 2, body.top + body.height / 2),
+      clearPainted: Math.round(Math.min(c.width, c.height) * 10) / 10,
+      clearLands: [
+        probe(c.left + c.width / 2, c.top + c.height / 2 - min / 2 + 1),
+        probe(c.left + c.width / 2, c.top + c.height / 2 + min / 2 - 1),
+        probe(c.left + c.width / 2, c.top + c.height / 2),
+      ],
+      nameLands: [probe(n.left + n.width / 2, n.top + n.height / 2), probe(n.left + n.width / 2, n.top - min / 2 + n.height / 2 + 1)],
+    };
+  });
+  ok(threadHits.comment >= threadHits.min && threadHits.commentLands === 'comment',
+    `thread: the comment's own drawn shape is its ${threadHits.min}pt region (${Math.round(threadHits.comment)}pt)`);
+  ok(threadHits.clearLands.every((x) => x === 'clear'),
+    `thread: the quote's × paints at ${threadHits.clearPainted}pt and takes its ${threadHits.min} past those bounds (${threadHits.clearLands.join(', ')})`);
+  ok(threadHits.nameLands.every((x) => x === 'name'),
+    'thread: and the name inside the comment keeps its own region out of the row\'s');
+
+  await page.click('#view button.btn.primary:has-text("Comment")');
+  await page.waitForSelector('#modal textarea', { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelector('#modal textarea').placeholder) === 'Reply to Ana Iliovic.',
+    'composer: the placeholder becomes `Reply to <name>.`');
+  await page.fill('#modal textarea', 'Straight at Ana.');
+  await page.click('#modal button.btn.primary:has-text("Post")');
+  await waitText(/Straight at Ana\./);
+  await page.waitForFunction(() => !/Posting…/.test(document.getElementById('view').innerText), null, { timeout: 10000 });
+  const toComment = (await myChannelHistory())[0] ?? '';
+  ok(toComment.split('\n')[0] === 're: https://t.me/tgs_ana_r/600',
+    `thread: the reply points at the comment that was tapped (${toComment.split('\n')[0]})`);
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view .comment-children .comment')].some((k) => /Straight at Ana\./.test(k.innerText))),
+    'thread: and it renders as a reply under it, which is the re: chain (§6.2)');
+
+  // Tapping it again — or the quote's × — clears the target, and the reply goes
+  // to the post instead.
+  await anaBody().click();
+  await page.waitForFunction(() => !document.querySelector('#view .comment[data-selected]'), null, { timeout: 5000 });
+  ok(await page.evaluate(() => !document.querySelector('#view .comment-quote-row')),
+    'thread: tapping the selected comment again clears the target');
+  await page.click('#view button.btn.primary:has-text("Comment")');
+  await page.waitForSelector('#modal textarea', { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelector('#modal textarea').placeholder) === 'Say it.',
+    'composer: and the placeholder goes back to `Say it.`');
+  await page.fill('#modal textarea', 'Straight at the post.');
+  await page.click('#modal button.btn.primary:has-text("Post")');
+  await waitText(/Straight at the post\./);
+  await page.waitForFunction(() => !/Posting…/.test(document.getElementById('view').innerText), null, { timeout: 10000 });
+  const toPost = (await myChannelHistory())[0] ?? '';
+  ok(/^re: https:\/\/t\.me\/waveloop_devlog\/\d+$/.test(toPost.split('\n')[0]),
+    `thread: with no target the reply points at the post (${toPost.split('\n')[0]})`);
+
+  // The × is the other way out of a selection.
+  await anaBody().click();
+  await page.waitForSelector('#view .comment-quote-clear', { timeout: 5000 });
+  await page.click('#view .comment-quote-clear');
+  ok(await page.evaluate(() => !document.querySelector('#view .comment[data-selected]') && !document.querySelector('#view .comment-quote-row')),
+    'thread: the quote\'s × clears it too');
+  await snap('thread-reply-target');
+
+  // ── §2.12 comments inside the carousel ───────────────────────────────────
+  //
+  // "Opening it does not leave the media: the media shrinks to a mini view
+  // pinned at the top — the current item, still tappable to restore it
+  // full-screen — and the thread takes the rest of the sheet."
   await page.click('#topbar-lead .btn');
   await page.waitForFunction(() => location.hash === '#/feed' || location.hash === '', null, { timeout: 8000 });
+  await page.waitForSelector('#view .post-mosaic[data-count="2"] .post-mosaic-tile', { timeout: 15000 });
+  await page.locator('#view .post-mosaic[data-count="2"] .post-mosaic-tile').first().click();
+  await page.waitForSelector('#viewer-root .viewer', { timeout: 8000 });
+  const stageBefore = await page.evaluate(() => document.querySelector('.viewer-stage').getBoundingClientRect().height);
+  await page.click('.viewer-actions button:has-text("Comments")');
+  await page.waitForSelector('#viewer-root .viewer.comments-open .comments', { timeout: 8000 });
+  const opened = await page.evaluate(() => {
+    const stage = document.querySelector('.viewer-stage').getBoundingClientRect();
+    const mini = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-viewer-mini-height'));
+    const comments = document.querySelector('.viewer-comments').getBoundingClientRect();
+    return {
+      stage: Math.round(stage.height),
+      mini,
+      stillMedia: !!document.querySelector('.viewer-slide img'),
+      commentsBelow: comments.top >= stage.bottom - 0.5,
+      commentsTall: comments.height > stage.height,
+      counter: document.querySelector('.viewer-counter')?.textContent,
+      restore: !!document.querySelector('.viewer-restore:not([hidden])'),
+    };
+  });
+  ok(opened.stage === opened.mini && stageBefore > opened.stage && opened.stillMedia,
+    `carousel: the media shrinks to a ${opened.mini}pt mini view rather than leaving it (${stageBefore} → ${opened.stage})`);
+  ok(opened.commentsBelow && opened.commentsTall, 'carousel: and the thread takes the rest of the sheet');
+  // item 1 of the album is its own message, and nobody has commented on it
+  ok(opened.counter === '1 / 2' && /No comments from your network yet\./.test(await page.evaluate(() => document.querySelector('.viewer-comments').innerText)),
+    'carousel: the thread targets the item on screen, not the album');
+  await snap('carousel-comments');
+
+  // "Paging the carousel while comments are open moves the mini view and
+  // re-targets the thread to that item's post." The second item IS the post the
+  // comments were left on, so the count moves with the page.
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => /Nice one\. The bass is huge\./.test(document.querySelector('.viewer-comments')?.innerText ?? ''), null, { timeout: 8000 });
+  ok(await page.evaluate(() => document.querySelector('.viewer-counter')?.textContent === '2 / 2'),
+    'carousel: paging moves the mini view and re-targets the thread to that item');
+
+  // The same paging by the gesture it is actually done with. A swipe starts and
+  // ends on the mini view's transparent restore overlay, so the browser fires a
+  // `click` on it once the drag finishes — which must not be read as the tap
+  // that restores full-screen. Arrow keys never produce that click, so only a
+  // real drag covers it.
+  const swipeStage = async (dx) => {
+    const box = await page.locator('.viewer-stage').boundingBox();
+    const y = box.y + box.height / 2;
+    const x = box.x + box.width / 2 - dx / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y, { steps: 12 });
+    await page.mouse.up();
+  };
+  await swipeStage(150); // → the previous item
+  await page.waitForFunction(() => document.querySelector('.viewer-counter')?.textContent === '1 / 2', null, { timeout: 8000 });
+  ok(await page.evaluate(() => !!document.querySelector('#viewer-root .viewer.comments-open')
+    && /No comments from your network yet\./.test(document.querySelector('.viewer-comments')?.innerText ?? '')),
+    'carousel: swiping back pages the mini view and keeps the thread open');
+  await swipeStage(-150); // → the next item
+  await page.waitForFunction(() => document.querySelector('.viewer-counter')?.textContent === '2 / 2', null, { timeout: 8000 });
+  ok(await page.evaluate(() => !!document.querySelector('#viewer-root .viewer.comments-open')
+    && /Nice one\. The bass is huge\./.test(document.querySelector('.viewer-comments')?.innerText ?? '')),
+    'carousel: and swiping forward re-targets the thread without dismissing it');
+
+  // The same selection behaviour, hosted over the media.
+  await page.locator('.viewer-comments .comment', { hasText: 'Nice one. The bass is huge.' }).first().locator(':scope > .post-body').click();
+  await page.waitForSelector('.viewer-comments .comment[data-selected]', { timeout: 5000 });
+  ok(await page.evaluate(() => /^re: Ana Iliovic/.test(document.querySelector('.viewer-comments .comment-quote')?.textContent ?? '')),
+    'carousel: tapping a comment selects it there too — one thread rendering, two hosts');
+
+  // The mini view is tappable to restore it full-screen.
+  await page.click('.viewer-restore');
+  await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer.comments-open'), null, { timeout: 5000 });
+  ok(await page.evaluate(() => {
+    const stage = document.querySelector('.viewer-stage').getBoundingClientRect();
+    return !!document.querySelector('#viewer-root .viewer') && stage.height > parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--space-viewer-mini-height'));
+  }), 'carousel: tapping the mini view restores it full-screen');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#viewer-root .viewer'), null, { timeout: 5000 });
   await page.waitForSelector('#view article.post', { timeout: 15000 });
+  // the carousel above was opened from the feed, so this is already the feed
+  await page.waitForFunction(() => location.hash === '#/feed' || location.hash === '', null, { timeout: 8000 });
   const beforeMore = await page.locator('#view article.post').count();
   for (let i = 0; i < 10 && (await page.locator('#view article.post').count()) <= beforeMore; i += 1) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -1328,8 +1894,24 @@ try {
   };
   const oneWalk = await walkFeed(2);
   const twoWalks = await walkFeed(3);
-  ok(twoWalks.entries <= 6 && twoWalks.bytes <= 1200,
-    `media: scrolling a long feed stays inside the bound (${twoWalks.entries} files, ${twoWalks.bytes} B of 1200)`);
+  // `put` never evicts the entry it has just stored: "a blob bigger than the
+  // whole budget still has to be reachable by the caller that just asked for
+  // it — it is never its own eviction victim, and the next insert takes it
+  // out" (js/blobcache.js). Against a 1.2 KB budget EVERY entry is bigger than
+  // the budget, so whether the walk happens to end inside it is decided by
+  // whether the last thing to finish was a 185-byte thumbnail or a 154 KB strip
+  // texture — a race, not a property. What the cache actually promises is that
+  // everything it is ALLOWED to evict is inside the bound, so that is what is
+  // asserted; the entry count is unconditional either way.
+  const bounded = await page.evaluate(() => {
+    const m = window.__tgsocial.app.td.media;
+    const newest = [...m.entries.keys()].pop() ?? null;
+    let bytes = 0;
+    for (const [k, e] of m.entries) if (k !== newest || e.bytes <= m.maxBytes) bytes += e.bytes;
+    return { evictable: bytes, exempt: m.entries.size ? [...m.entries.values()].pop().bytes : 0 };
+  });
+  ok(twoWalks.entries <= 6 && bounded.evictable <= 1200,
+    `media: scrolling a long feed stays inside the bound (${twoWalks.entries} files, ${bounded.evictable} B of 1200 evictable, ${bounded.exempt} B newest)`);
   ok(twoWalks.entries <= 6 && twoWalks.entries <= oneWalk.entries + 0,
     `media: the registry does not grow with the number of scrolls (${oneWalk.entries} → ${twoWalks.entries})`);
   ok(oneWalk.revoked > 0 && twoWalks.revoked >= oneWalk.revoked,

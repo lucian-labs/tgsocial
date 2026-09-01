@@ -23,7 +23,7 @@ import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
 import { normaliseUsername, parsePublicPath, publicPath, usernameKey } from './protocol.js';
-import { audioRowStats, closeViewer, currentAudio, watchMedia } from './media.js';
+import { audioRowStats, closeViewer, currentAudio, useHost, watchMedia } from './media.js';
 import { stripStats } from './strip.js';
 import { PublicSource } from './public/source.js';
 import { openStatusSheet } from './views/status.js';
@@ -37,6 +37,8 @@ import * as channel from './views/channel.js';
 import * as graph from './views/graph.js';
 import * as you from './views/you.js';
 import * as thread from './views/thread.js';
+import { commentsPanel } from './views/comments.js';
+import { openThread } from './views/shared.js';
 import { openCompose } from './views/compose.js';
 
 const MAIN_TABS = [
@@ -654,6 +656,14 @@ class App {
 }
 
 const app = new App();
+// js/media.js sits UNDER the views in the import graph (they render media; it
+// does not render them), so the two things its dock and its carousel need from
+// above are handed down here rather than imported sideways: the Thread route
+// for §2.11's now-playing tap, and §2.12's comment thread for the carousel.
+useHost({
+  openPost: (post) => openThread(app, post),
+  comments: commentsPanel,
+});
 window.__tgsocial = {
   app,
   td: app.td,

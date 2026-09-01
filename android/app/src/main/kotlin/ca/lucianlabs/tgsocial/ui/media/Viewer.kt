@@ -5,14 +5,21 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 import ca.lucianlabs.housepour.HPDownloadRing
 import ca.lucianlabs.housepour.HPText
+import ca.lucianlabs.housepour.HPToastTone
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.housepour.HPViewer
 import ca.lucianlabs.housepour.HPViewerButton
@@ -44,13 +52,18 @@ import ca.lucianlabs.tgsocial.repo.MediaRepo
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.ViewerUi
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImagePx
-import ca.lucianlabs.housepour.HPToastTone
+import ca.lucianlabs.tgsocial.ui.screens.ThreadItems
 import kotlinx.coroutines.launch
 
 /**
  * PRODUCT §2.11 — the full-screen viewer: ink 96%, pinch/double-tap zoom for photos, swipe-down or `Close` to
  * dismiss, `Save` ghost button, caption below, swipe between the album items of one post. It covers the topbar
  * and the floating tab bar; scroll position under it is untouched.
+ *
+ * PRODUCT §2.12 — and `Comments`, which does not leave the media: the pages shrink to the mini view at the top
+ * (still paging, still tappable to restore) and the thread takes the rest. The thread is targeted at the
+ * **current page's post**, so paging re-targets it; every page of one viewer belongs to one post here, which
+ * makes that a re-read rather than a reload.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -63,7 +76,15 @@ fun PostViewer(vm: AppViewModel, viewer: ViewerUi) {
         initialPage = viewer.page,
         onDismiss = vm::closeViewer,
         caption = post.text?.text,
-        actions = { page -> pages.getOrNull(page)?.let { SaveActions(vm, it) } },
+        onPage = vm::setViewerPage,
+        actions = { page ->
+            // §2.12's one new control. Its label does not change with the state — copy is shared across the
+            // three builds (§3) — and the way back to the media is the mini view's own tap, or Back.
+            HPViewerButton("Comments", vm::toggleViewerComments)
+            pages.getOrNull(page)?.let { SaveActions(vm, it) }
+        },
+        sheet = if (viewer.commentsOpen) ({ ViewerComments(vm, viewer) }) else null,
+        onRestore = vm::toggleViewerComments,
     ) { page, dismiss ->
         when (val m = pages[page]) {
             is PostMedia.Photo -> ViewerImage(m.file, m.mini, dismiss)
@@ -75,6 +96,36 @@ fun PostViewer(vm: AppViewModel, viewer: ViewerUi) {
             is PostMedia.Document -> ViewerDocument("viewer:${post.key}#$page", m, dismiss)
             is PostMedia.Sticker -> ViewerImage(m.file, null, dismiss)
             is PostMedia.Audio, is PostMedia.Voice, is PostMedia.Summary -> Box(Modifier.fillMaxSize().hpViewerDismiss(dismiss))
+        }
+    }
+}
+
+/**
+ * PRODUCT §2.12 — the thread over the media. It is [ThreadItems] without the post card at the top, because the
+ * post's media is the mini view directly above it; everything else — the `re:` tree, tap-to-select, the
+ * composer — is the Thread screen's own code, running here.
+ */
+@Composable
+private fun ViewerComments(vm: AppViewModel, viewer: ViewerUi) {
+    val shape = RoundedCornerShape(topStart = HPTokens.Radius.card, topEnd = HPTokens.Radius.card)
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(shape)
+            .background(HPTokens.Colors.bg, shape),
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().imePadding(),
+            contentPadding = PaddingValues(
+                start = HPTokens.Space.columnSide,
+                end = HPTokens.Space.columnSide,
+                top = HPTokens.Space.cardGap,
+                bottom = HPTokens.Space.cardGap + nav,
+            ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ThreadItems(vm, viewer.current, includePost = false)
         }
     }
 }

@@ -49,6 +49,8 @@ import { readImageHeader } from '../js/decode.js';
 import { Td } from '../js/td.js';
 import { decodeWaveform } from '../js/media.js';
 import { rampStops } from '../vendor/house-pour.js';
+import { MOSAIC_AREAS, MOSAIC_MAX_TILES, mosaicPlan, mosaicRatio, tileArea } from '../js/mosaic.js';
+import { replyTarget } from '../js/views/comments.js';
 import {
   analyse,
   analysisPlan,
@@ -60,6 +62,7 @@ import {
   ENVELOPE_MAX_SAMPLES,
   ENVELOPE_RATE,
   envelopeColumns,
+  resampleEnvelope,
   ENVELOPE_ATTACK_MS,
   ENVELOPE_RELEASE_MS,
   F_MAX,
@@ -1121,4 +1124,83 @@ test('strip: the strip is charged to the media budget at its true decoded cost',
   const cache = new MediaCache({ maxBytes: 4 * MB, create: () => 'blob:strip', revoke: () => {} });
   cache.put('u1#strip664x88', png, { width: cols, height: rows });
   assert.equal(cache.stats().bytes, cols * rows * 4, 'and shows up in the same accounting as every picture');
+});
+
+// ── PRODUCT §2.11.2 — the dock's mini waveform reads the strip's envelope ───
+
+test('the mini waveform resamples the strip\'s envelope instead of computing one', () => {
+  // 448 columns is the strip's own width at a 540 column (js/strip.js
+  // stripPixels); the dock's is a fraction of that, so this is a downsample.
+  const strip = envelopeColumns(Float32Array.from({ length: 48000 }, (_, i) => Math.sin(i / 9) * (i > 32000 ? 0.02 : 1)), 16000, 448);
+  const dock = resampleEnvelope(strip, 96);
+  assert.equal(dock.length, 96, 'exactly the columns the dock asked for');
+  assert.ok(dock.every((v) => v >= 0 && v <= 1), 'still 0…1 per column');
+  // Peak-picking, not averaging: the loud front of the clip must stay at full
+  // height, which is the whole reason the line is worth drawing.
+  assert.ok(Math.max(...dock) >= 0.99, 'the peak survives the resample');
+  assert.ok(Math.max(...dock.slice(-8)) < Math.max(...dock.slice(0, 8)) / 2,
+    'and the quiet tail stays quiet — a mean over eight columns would have flattened both');
+});
+
+test('resampleEnvelope widens as well as it narrows, and refuses nothing-to-draw', () => {
+  assert.deepEqual([...resampleEnvelope(Float32Array.from([0, 1]), 6)], [0, 0, 0, 1, 1, 1],
+    'widening is a staircase of the inputs, never a gap-toothed comb');
+  assert.deepEqual([...resampleEnvelope(Float32Array.from([0, 1, 0, 0.5, 0, 0, 0, 0]), 4)], [1, 0.5, 0, 0],
+    'narrowing keeps each bucket\'s peak');
+  // §2.11.2: "a clip whose strip degraded to the hairline shows a flat line
+  // rather than nothing" — the component draws that from a null envelope.
+  assert.equal(resampleEnvelope(null, 96), null, 'no envelope is null, which the component paints flat');
+  assert.equal(resampleEnvelope(Float32Array.from([0.5]), 96), null, 'and one column is not a line');
+  assert.equal(resampleEnvelope(Float32Array.from([0, 1]), 0), null, 'and nowhere to paint is not a line either');
+});
+
+// ── PRODUCT §2.11.3 — the mosaic's layout rule ─────────────────────────────
+
+test('the mosaic is one grid per count, and 5+ is 4 with the rest counted', () => {
+  assert.equal(mosaicPlan(1).mosaic, false, 'one photo is not a mosaic — it is §2.11 media');
+  assert.equal(mosaicPlan(0).mosaic, false, 'and no photos are not either');
+  for (const [count, shown, extra] of [[2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 4, 1], [9, 4, 5]]) {
+    const plan = mosaicPlan(count);
+    assert.equal(plan.mosaic, true, `${count} photos are a mosaic`);
+    assert.equal(plan.shown, shown, `${count} photos paint ${shown} tiles`);
+    assert.equal(plan.extra, extra, `${count} photos hide ${extra} behind the +N`);
+    assert.equal(plan.areas, MOSAIC_AREAS[shown], 'and take the grid of their shown count');
+  }
+  assert.equal(MOSAIC_MAX_TILES, 4, 'four tiles is the ceiling (§2.11.3)');
+  assert.deepEqual(MOSAIC_AREAS[2], [['a', 'b']], '2 → side by side, equal width');
+  assert.deepEqual(MOSAIC_AREAS[3], [['a', 'b'], ['a', 'c']], '3 → one tall leading tile with two stacked beside it');
+  assert.deepEqual(MOSAIC_AREAS[4], [['a', 'b'], ['c', 'd']], '4 → two by two');
+  assert.deepEqual([0, 1, 2, 3].map(tileArea), ['a', 'b', 'c', 'd'], 'tiles take their areas in album order');
+});
+
+test('the mosaic block keeps a sane ratio instead of letting one tall photo set the height', () => {
+  const bounds = { min: 0.8, max: 1.9 };
+  const square = [1, 1, 1, 1];
+  // two tiles side by side are each half the block's width at its full height,
+  // so squares want a block twice as wide as it is tall
+  assert.equal(mosaicRatio(square.slice(0, 2), 2, { min: 0.5, max: 4 }), 2, '2 up: the block is twice the tile');
+  assert.equal(mosaicRatio(square.slice(0, 4), 4, { min: 0.5, max: 4 }), 1, '4 up: a cell is the block again');
+  assert.equal(mosaicRatio(square.slice(0, 3), 3, { min: 0.5, max: 4 }), 1, '3 up: the stacked cells are the block again');
+  // one panorama among squares must not set the shape (median, not mean), and
+  // one portrait must not drag the block past the clamp
+  assert.equal(mosaicRatio([1, 1, 8], 3, bounds), 1, 'a panorama among squares is outvoted');
+  assert.equal(mosaicRatio([0.2, 0.25, 0.2], 3, bounds), bounds.min, 'a column of portraits stops at the floor');
+  assert.equal(mosaicRatio([4, 4], 2, bounds), bounds.max, 'a pair of panoramas stops at the ceiling');
+  assert.ok(mosaicRatio([], 4, bounds) >= bounds.min && mosaicRatio([], 4, bounds) <= bounds.max,
+    'photos with no declared size fall inside the range rather than guessing');
+});
+
+// ── PRODUCT §2.12 — the reply target is whatever was tapped ────────────────
+
+test('the reply target decides the re: line, and nothing else does', () => {
+  const post = { link: 'https://t.me/waveloop_devlog/403', title: 'WaveLoop devlog', username: 'waveloop_devlog', text: 'Bench notes.' };
+  const comment = { key: 'c1', link: 'https://t.me/tgs_ana_r/600', name: 'Ana Iliovic', text: 'Nice one.' };
+  assert.equal(replyTarget(post, null).link, post.link, 'no selection replies to the post');
+  assert.equal(replyTarget(post, comment).link, comment.link, 'a selected comment replies to THAT comment');
+  assert.equal(replyTarget(post, comment).name, 'Ana Iliovic', 'and names it, for `Reply to <name>.`');
+  // §6.5 does the formatting; §2.12's whole job is choosing the link
+  assert.equal(serialiseComment(replyTarget(post, comment).link, 'Agreed.').split('\n')[0],
+    're: https://t.me/tgs_ana_r/600', 'the written comment points at the comment');
+  assert.equal(serialiseComment(replyTarget(post, null).link, 'Agreed.').split('\n')[0],
+    're: https://t.me/waveloop_devlog/403', 'clearing it points at the post again');
 });

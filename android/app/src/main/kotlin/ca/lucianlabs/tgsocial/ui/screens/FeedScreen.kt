@@ -52,7 +52,7 @@ fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
                 onOpenChannel = { vm.push(Screen.FeedChannel(it)) },
                 onOpenProfile = { vm.push(Screen.Profile(it)) },
                 onOpenThread = { vm.openThread(post) },
-                onComment = { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) },
+                onComment = { vm.openCommentComposer(post) },
                 onOpenViewer = { vm.openViewer(post, it) },
                 onLongPress = { vm.openSheet(Sheet.PostSheet(post)) },
             )

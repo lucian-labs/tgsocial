@@ -28,6 +28,7 @@ struct PostCard: View {
 
             // Media (PRODUCT §2.11): everything opens or plays inside the app.
             PostMediaList(ownerId: post.id, media: post.media, caption: post.text.plain,
+                          post: post,
                           onOpenExternal: { model.open(post.deepLink) })
 
             footer

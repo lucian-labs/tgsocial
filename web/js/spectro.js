@@ -643,3 +643,37 @@ export function analysisPlan(durationSeconds, {
   if (d * rate > envelopeMaxSamples) return { mode: 'none', rate: 0, reason: 'too-many-samples' };
   return { mode: 'envelope', rate, reason: 'too-long' };
 }
+
+/**
+ * PRODUCT §2.11.2 — the same envelope, at a different width.
+ *
+ * The dock's mini waveform is "a view of the analysis the strip already did",
+ * so it never recomputes anything: it takes the strip's column peaks and
+ * resamples them to its own, much narrower, column count. Peak-picking (not
+ * averaging) is what keeps it a line through the PEAKS — a mean over eight
+ * strip columns flattens the transient that made the shape worth drawing.
+ *
+ * Widening is the same function read the other way: each output column takes
+ * the nearest input column, so an envelope of four values stretched over forty
+ * is a staircase of the four rather than a gap-toothed comb.
+ *
+ * Returns a Float32Array of exactly `cols` values, or null when there is
+ * nothing to draw — the caller then paints §2.11.2's flat line.
+ */
+export function resampleEnvelope(values, cols) {
+  const w = Math.max(0, Math.floor(cols));
+  const n = values?.length ?? 0;
+  if (!w || n < 2) return null;
+  const out = new Float32Array(w);
+  for (let c = 0; c < w; c += 1) {
+    const from = Math.floor((c * n) / w);
+    const to = Math.max(from + 1, Math.floor(((c + 1) * n) / w));
+    let peak = 0;
+    for (let i = from; i < to && i < n; i += 1) {
+      const v = values[i];
+      if (v > peak) peak = v;
+    }
+    out[c] = Math.max(0, Math.min(1, peak));
+  }
+  return out;
+}

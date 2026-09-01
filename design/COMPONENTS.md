@@ -117,6 +117,24 @@ ring, initial set in `h2` (size 36) / `h1` (size 72) display serif, muted.
 **HPMedia(image, aspect)** — full width, `Radius.media`, `bg2` placeholder
 while loading, no border, no shadow.
 
+**HPMosaic(count, aspects, onTap, tile)** — an album as **one object** (PRODUCT
+§2.11.3). Two tiles side by side; three as one tall leading tile with two
+stacked beside it; four as two by two; five or more as the first four with a
+`+N` in the `pill` style over a `scrim` on the last. Every arrangement is two
+columns, which is what fixes the block's shape: a cell's ratio follows the
+block's, so the block wants `2 × r` at two tiles and `r` at three or four, where
+`r` is the **median** photo ratio — the median, so one panorama among squares
+does not flatten it — clamped between `ratio.mosaicMin` and `ratio.mosaicMax`.
+Tiles `cover` their cell; `Radius.media` clips the **block**, never the tiles,
+with `border.width` gutters in `line` showing through between them. A cell that
+would fall under `touchMin` in either axis is not a tap target, so the block
+reflows to a single column rather than overflowing. Tapping a tile calls
+[onTap] with its index — §2.11.3's "opens the carousel at that tile" — and each
+tile's painted shape simply *is* its region (rule 6), minus the block's own
+corner radius. `tile` is handed the cell's pixel size, because the tiles are
+thumbnails and must be requested at tile size. Layout rule shared verbatim with
+`web/js/mosaic.js`.
+
 **HPSpectrogramStrip(content, progress, onSeek)** — the audio scrubber
 (PRODUCT §2.11.1). A spectrogram of the *whole clip* on `bg2` at
 `Radius.media`, its one-pole envelope mirrored about the centre and filled
@@ -135,6 +153,23 @@ re-emitting that per frame is the O(columns × rows) blowup the texture
 exists to avoid. Analysis is the app's job, not the kit's. Currently iOS
 only; the ramp tokens are generated for all three so the other two match
 when they land.
+
+**HPMiniWave(peaks, progress, onSeek)** — the now-playing dock's waveform
+(PRODUCT §2.11.2). **One polyline** through the envelope's column peaks: a line
+drawing, not the strip's mirrored filled silhouette and not the spectrum.
+Hairline (`border.width`), `muted` ahead of the playhead and `accent` behind
+it, no fill under the curve, split once at the playhead so the two runs share a
+vertex and the line stays continuous. The baseline is the band's **centre**, so
+a clip whose strip degraded to the hairline draws a *flat line* rather than
+nothing. It paints `miniWaveHeight` (20) tall inside a `touchMin` frame with a
+`miniWaveWidth` (96) floor — rule 6's chrome case: the dock row is a 40pt play
+button tall already, so nothing is inflated to reach the target and a long
+title truncates against the floor instead of squeezing the control away. Tap or
+drag anywhere on it to seek. It draws peaks and never computes them: the
+envelope is the strip's (§2.11.1), resampled to the dock's width, because
+playing a clip must never trigger a second analysis. Web: `.mini-wave` — a
+canvas inside a `.hit-min` slider, so the 40pt region is an **HPHitTarget**
+overlay past the painted 20 and the dock row must not clip its overflow.
 
 **HPKebabButton(label, action)** — the vertical three-dot button (PRODUCT
 §2.6). Ghost: no fill, no border, `Radius.pill`, three `faint` dots `pillY` (4)
@@ -167,6 +202,16 @@ target) on the sheet, or a scroll of the page behind it (web). Never the
 platform's own menu — SwiftUI `Menu` and Compose `DropdownMenu` both paint
 system chrome. Web: `.menu` anchored, `.menu.sheet` inside `.menu-scrim`.
 
+**HPViewer(counter, caption, actions, onClose)** — the full-screen media
+viewer chrome (PRODUCT §2.11, §2.12). `ink` at 96%, `Close` leading and a LIST
+of `HPButton .ghostOnInk .small` actions trailing — `Comments` beside `Save`,
+each 40pt by its own drawn shape. `HPViewerChrome.height` (`touchMin` + `pillY`)
+is what a caller insets by to pin content under that row: with the thread open
+the media shrinks to a `viewerMiniHeight` (120 = 3 × `touchMin`) mini view and
+the thread takes the rest of the sheet. The mini view is tappable to restore
+it full-screen, and paging re-targets the thread at that item's own post. The chrome column spans the screen but
+only hit-tests where it paints, so the sheet under it keeps its own touches.
+
 **HPStepper** — from upstream; not used in tgsocial v1 but kept in the kit.
 
 ## Composite (product-level, built from the above)
@@ -183,6 +228,34 @@ small "Comment"`). The channel's half of that target hangs *below* the header,
 so the card owes it `PostHeaderBottomGap` clear of tap surfaces before the first
 of those — and the body's tap surface starts at its glyphs, not at its padding,
 because padding inside the shape claims the band and swallows the subheading.
+
+**PhotoMosaic** — see PRODUCT §2.11.3. More than one photo in a post is ONE
+block, not a stack. The rule is **N equal-width columns, each an equal-height
+stack**, and §2.11.3's table is that rule with different column contents: 2 →
+`[[0],[1]]`, 3 → `[[0],[1,2]]` (the tall tile leads), 4 and up → `[[0,2],[1,3]]`
+with `+N` in the `pill` style over a `scrim` on the fourth. Those are the
+**transpose** of the `HPMosaic` table above, which Android and web spell as rows
+because their placers walk rows — this one walks columns, and album order still
+reads left to right THEN down, so photo 1 is the top-right tile. The block's
+ratio is the same derivation as `HPMosaic`: the **median** photo ratio times
+`columns / rows` — the median, so one panorama among squares does not set the
+shape — clamped between `ratio.mosaicMin` and `ratio.mosaicMax`. Tiles `cover`
+their cells;
+gutters are the `line` colour showing through one `border.width` gap, and
+`Radius.media` is clipped on the **outer** corners only, so it reads as one
+object. It reflows to a single column when a tile would fall under `touchMin`
+wide, because every tile is a control: tapping one opens the §2.11 carousel at
+that tile's index. Implemented as a `Layout` (the height depends on the width,
+which is exactly what `sizeThatFits` answers) so each tile is handed its own
+cell size and can ask the image cache for **tile** pixels rather than card
+pixels. Web: `.post-mosaic` / `.post-mosaic-tile` — one CSS grid
+with `grid-template-areas` per count (never four bespoke components), the gutters
+its `gap` over a `line` background, and the tiles asking the byte-budgeted image
+cache for half the block's width. Its narrow end is fluid rather than
+stepped — `minmax(0, 1fr)` columns and `min-width: 0` tiles are what stop a
+photo's intrinsic width from becoming the floor and overflowing the card — so the
+web build keeps two columns all the way down instead of collapsing to one; on the
+app column that threshold is a viewport under 149pt, which no phone reaches.
 
 **NodeRow** — `HPListItem`: `HPAvatar 36`, name (`HPBody` strong) over
 `HPMonoSmall` (`@username · n feeds`), optional `HPSmall` "Followed by n of

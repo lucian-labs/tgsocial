@@ -14,11 +14,14 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,10 +51,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
+import androidx.compose.ui.unit.Dp
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** Ink at 96% — the full-screen viewer surface (PRODUCT §1: the one dark surface besides the toast). */
 val HPViewerBackground = HPTokens.Colors.ink.copy(alpha = 0.96f)
@@ -104,10 +108,22 @@ fun HPViewerButton(label: String, onClick: () -> Unit, modifier: Modifier = Modi
     }
 }
 
+/** The viewer's chrome row, as a measurement other things need. */
+object HPViewerChrome {
+    /** What the row occupies at the top of the viewer: one hit target plus its gap, above and below. Content
+     *  pinned under the chrome (the §2.12 mini view) insets by this. */
+    val height: Dp get() = HPTokens.Space.touchMin + HPTokens.Space.rowGap * 2
+}
+
 /**
  * PRODUCT §2.11 — the full-screen media viewer: ink 96% background over everything (it hides the topbar and the
  * floating tab bar by covering them), a top row with `Close` leading and [actions] trailing, swipe between the
  * album items of one post, caption below in `charcoalText`, swipe down or `Close` to dismiss.
+ *
+ * PRODUCT §2.12 — passing a [sheet] opens **comments over the media without leaving it**: the pages shrink to a
+ * `viewerMiniHeight` mini view pinned under the chrome, still paging (so the mini view follows the carousel),
+ * still tappable — [onRestore] — to go back to full screen, and the sheet takes the rest. The caption steps
+ * aside for it; the thread is the reading now.
  */
 @Composable
 fun HPViewer(
@@ -118,6 +134,8 @@ fun HPViewer(
     caption: String? = null,
     onPage: (Int) -> Unit = {},
     actions: @Composable RowScope.(page: Int) -> Unit = {},
+    sheet: (@Composable () -> Unit)? = null,
+    onRestore: () -> Unit = {},
     content: @Composable (page: Int, dismiss: HPViewerDismissState) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -136,14 +154,33 @@ fun HPViewer(
             .pointerInput(Unit) { detectTapGestures { } }
             .semantics { contentDescription = "Media viewer" },
     ) {
-        HorizontalPager(
-            state = pager,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { translationY = dismissState.offset },
-        ) { page ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                content(page, dismissState)
+        val pages: @Composable (Modifier) -> Unit = { pagerModifier ->
+            HorizontalPager(
+                state = pager,
+                modifier = pagerModifier.graphicsLayer { translationY = dismissState.offset },
+            ) { page ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    content(page, dismissState)
+                }
+            }
+        }
+        if (sheet == null) {
+            pages(Modifier.fillMaxSize())
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.statusBarsPadding().height(HPViewerChrome.height))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(HPTokens.Space.viewerMiniHeight)
+                        // A tap restores full screen; a drag does not, because this never consumes and the
+                        // pager underneath keeps paging — §2.12: "paging the carousel while comments are
+                        // open moves the mini view".
+                        .hpTapUnconsumed(onRestore),
+                ) {
+                    pages(Modifier.fillMaxSize())
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) { sheet() }
             }
         }
         Row(
@@ -159,7 +196,7 @@ fun HPViewer(
             HPViewerButton("Close", onDismiss)
             Row(verticalAlignment = Alignment.CenterVertically) { actions(pager.currentPage) }
         }
-        if (!caption.isNullOrBlank()) {
+        if (!caption.isNullOrBlank() && sheet == null) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -176,6 +213,30 @@ fun HPViewer(
 }
 
 private fun snapshotPage(@Suppress("UNUSED_PARAMETER") page: Int) = Unit
+
+/**
+ * A tap that does **not** consume the gesture, so a node underneath keeps its drags.
+ *
+ * `clickable` and `detectTapGestures` both consume the first down, which is right for a button and wrong
+ * here: the §2.12 mini view sits over a pager whose whole job is to keep paging while the comments are open,
+ * and the viewer's own pages consume taps of their own (zoom, play). Watching the gesture without claiming
+ * it leaves both intact — a press that ends inside the touch slop is a tap, anything further was somebody
+ * else's drag.
+ */
+fun Modifier.hpTapUnconsumed(onTap: () -> Unit): Modifier = this.pointerInput(onTap) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var moved = false
+        val slop = viewConfiguration.touchSlop
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if ((change.position - down.position).getDistance() > slop) moved = true
+            if (!change.pressed) break
+        }
+        if (!moved) onTap()
+    }
+}
 
 /**
  * Pinch-zoom + double-tap zoom + pan for the viewer's photo pages. When unzoomed, a vertical drag hands off to

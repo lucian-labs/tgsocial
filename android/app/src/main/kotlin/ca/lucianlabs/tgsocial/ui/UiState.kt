@@ -7,6 +7,7 @@ import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.protocol.CommentTarget
 
 enum class AuthStep { LOADING, PHONE, CODE, PASSWORD, OTHER_DEVICE, REGISTRATION, READY }
 
@@ -30,24 +31,35 @@ sealed class Screen {
     data class Thread(val post: Post) : Screen()
 }
 
-/** What a comment points at: a post or another comment. [title]/[excerpt] feed the composer's quote line. */
-data class CommentTarget(val link: String, val title: String, val excerpt: String)
-
 sealed class Sheet {
     data class Compose(val feedUsername: String?) : Sheet()
     data object EditCard : Sheet()
     data object SignOut : Sheet()
     /** PRODUCT §2.10 — the Status sheet, opened by tapping the status pill. */
     data object Status : Sheet()
-    /** PRODUCT §2.12 — the comment composer. */
-    data class CommentComposer(val target: CommentTarget) : Sheet()
+    /**
+     * PRODUCT §2.12 — the comment composer. It carries the **post** as well as the target because clearing
+     * the reply target (the quote's `×`) does not close the composer — it re-aims it at the post, and the
+     * composer has to know which one that is.
+     */
+    data class CommentComposer(val post: Post, val target: CommentTarget) : Sheet()
     data class DeleteComment(val comment: Comment) : Sheet()
     /** PRODUCT §2.3 — the long-press post sheet: exact date, views, feed, and the one `Open in Telegram`. */
     data class PostSheet(val post: Post) : Sheet()
 }
 
-/** PRODUCT §2.11 — the full-screen viewer over one post's media, opened at [page]. */
-data class ViewerUi(val post: Post, val page: Int)
+/**
+ * PRODUCT §2.11 — the full-screen viewer over one post's media, opened at [page].
+ *
+ * PRODUCT §2.12 — [commentsOpen] does not leave the media: the pages shrink to the mini view and the thread
+ * takes the rest of the sheet. [page] is live rather than initial, because the thread is targeted at the
+ * current item's post: paging the carousel re-targets it. Every page of one viewer belongs to one post on
+ * this build (a viewer is opened over a post's own album), so [current] is that post — but the thread reads
+ * it through the page, which is what makes the rule true rather than incidentally true.
+ */
+data class ViewerUi(val post: Post, val page: Int, val commentsOpen: Boolean = false) {
+    val current: Post get() = post
+}
 
 data class FeedUi(
     val posts: List<Post> = emptyList(),
@@ -137,6 +149,8 @@ data class EditCardUi(
  */
 data class CommentComposerUi(
     val target: CommentTarget? = null,
+    /** Where the quote's `×` re-aims: the post itself (§2.12). */
+    val postTarget: CommentTarget? = null,
     val text: String = "",
     val photo: Uri? = null,
     val posting: Boolean = false,

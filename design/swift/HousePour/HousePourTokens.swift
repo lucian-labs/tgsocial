@@ -135,6 +135,9 @@ public enum HPTokens {
     public static let rowGap: CGFloat = 10
     public static let touchMin: CGFloat = 40
     public static let stripHeight: CGFloat = 44
+    public static let miniWaveWidth: CGFloat = 96
+    public static let miniWaveHeight: CGFloat = 20
+    public static let viewerMiniHeight: CGFloat = 120
     public static let kebabDot: CGFloat = 4
     public static let kebabDotGap: CGFloat = 3
     public static let menuWidth: CGFloat = 240
@@ -142,6 +145,11 @@ public enum HPTokens {
     public static let avatarRow: CGFloat = 36
     public static let avatarProfile: CGFloat = 72
     public static let bottomSafe: CGFloat = 96
+    }
+    /// Unitless shape constants (width / height) — PRODUCT 2.11.3's mosaic block ratio.
+    public enum Ratio {
+    public static let mosaicMin: CGFloat = 0.8
+    public static let mosaicMax: CGFloat = 1.9
     }
     public enum Shadow {
     public static let contact = HPShadow(color: Color(red: 0.149, green: 0.137, blue: 0.098, opacity: 0.04), x: 0, y: 1, blur: 2, spread: 0)

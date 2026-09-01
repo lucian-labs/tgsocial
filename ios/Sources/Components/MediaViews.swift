@@ -16,20 +16,70 @@ struct PostMediaList: View {
     let ownerId: String
     let media: [PostMedia]
     let caption: String
+    /// The post these surfaces belong to. Nil inside a comment card, which has media but no post:
+    /// the carousel then carries no `Comments` control (§2.12) and the dock no row tap (§2.11).
+    var post: Post?
     /// Poll / location / contact summaries hand off here (`Open in Telegram`, PRODUCT §2.11).
     var onOpenExternal: (() -> Void)?
 
     var body: some View {
-        ForEach(Array(media.enumerated()), id: \.offset) { i, item in
-            mediaView(item, at: i)
+        ForEach(blocks) { block in
+            blockView(block)
                 .padding(.top, HPTokens.Space.rowGap)
         }
     }
 
-    private func open(_ index: Int) {
-        if let request = ViewerRequest.from(media: media, caption: caption, tappedMediaIndex: index) {
-            model.viewer = request
+    /// How the media list groups itself (PRODUCT §2.11.3): more than one photo is ONE mosaic, drawn
+    /// where the first of them sat, and everything else is a surface of its own in place. Pure and
+    /// separate from the views so `PhotoMosaicTests` can state the grouping without a host.
+    enum Block: Identifiable {
+        case single(index: Int)
+        case mosaic(indices: [Int])
+
+        var id: Int {
+            switch self {
+            case .single(let i): return i
+            case .mosaic(let indices): return indices.first ?? 0
+            }
         }
+    }
+
+    var blocks: [Block] { Self.blocks(of: media) }
+
+    static func blocks(of media: [PostMedia]) -> [Block] {
+        let photos = media.indices.filter { if case .photo = media[$0] { return true } else { return false } }
+        // One photo is a photo (§2.11: `HPMedia` at the post width); more than one is a mosaic.
+        guard photos.count > 1, let first = photos.first else {
+            return media.indices.map { .single(index: $0) }
+        }
+        let inMosaic = Set(photos)
+        var out: [Block] = []
+        for i in media.indices {
+            if inMosaic.contains(i) {
+                if i == first { out.append(.mosaic(indices: photos)) }
+                continue
+            }
+            out.append(.single(index: i))
+        }
+        return out
+    }
+
+    @ViewBuilder private func blockView(_ block: Block) -> some View {
+        switch block {
+        case .single(let i):
+            mediaView(media[i], at: i)
+        case .mosaic(let indices):
+            PhotoMosaicView(photos: indices.compactMap { i in
+                guard case .photo(let preview, let full) = media[i] else { return nil }
+                return (mediaIndex: i, preview: preview, full: full)
+            }, onOpen: { open($0) })
+        }
+    }
+
+    private func open(_ index: Int) {
+        let request = post.map { ViewerRequest.from($0, tappedMediaIndex: index) }
+            ?? ViewerRequest.from(media: media, caption: caption, tappedMediaIndex: index)
+        if let request { model.viewer = request }
     }
 
     @ViewBuilder private func mediaView(_ item: PostMedia, at index: Int) -> some View {
@@ -46,9 +96,9 @@ struct PostMediaList: View {
             InlineVideoView(id: "\(ownerId):\(index)", file: file, thumbnail: thumbnail, duration: duration,
                             aspect: 1, mode: .videoNote, onExpand: nil)
         case .audio(let file, let title, let performer, let duration):
-            AudioRowView(file: file, title: title, performer: performer, duration: duration)
+            AudioRowView(file: file, title: title, performer: performer, duration: duration, post: post)
         case .voice(let file, let duration, let waveform):
-            VoiceRowView(file: file, duration: duration, waveform: waveform)
+            VoiceRowView(file: file, duration: duration, waveform: waveform, post: post)
         case .document(let file, let thumbnail):
             DocumentRowView(file: file, thumbnail: thumbnail) { open(index) }
         case .sticker(let file, let thumbnail, let width, let height, let animated, let emoji):
@@ -378,6 +428,8 @@ struct AudioRowView: View {
     let title: String
     let performer: String
     let duration: Int
+    /// Carried into the dock so the docked row can open the post the audio came from (§2.11).
+    var post: Post?
 
     private var key: String { file.uniqueId }
     private var isCurrent: Bool { model.audio.isCurrent(key) }
@@ -400,13 +452,14 @@ struct AudioRowView: View {
                     state: state,
                     buttonLabel: isCurrent && model.audio.isPlaying ? "Pause \(displayTitle)" : "Play \(displayTitle)",
                     onButton: tapped) {
-            SpectrogramScrubber(file: file, duration: duration, title: displayTitle,
+            SpectrogramScrubber(file: file, duration: duration, title: displayTitle, post: post,
                                 label: "\(displayTitle) progress")
         }
     }
 
     private func tapped() {
-        AudioActions.tap(model: model, key: key, fileId: file.fileId, title: displayTitle, duration: duration)
+        AudioActions.tap(model: model, key: key, fileId: file.fileId, title: displayTitle,
+                         duration: duration, post: post)
     }
 }
 
@@ -415,6 +468,8 @@ struct VoiceRowView: View {
     let file: FileRef
     let duration: Int
     let waveform: Data
+    /// See `AudioRowView.post`.
+    var post: Post?
 
     private var key: String { file.uniqueId }
     private var isCurrent: Bool { model.audio.isCurrent(key) }
@@ -435,12 +490,13 @@ struct VoiceRowView: View {
             // §2.11.1: a voice note ships its own waveform bytes, so the silhouette is drawn
             // IMMEDIATELY — no decode, nothing to wait for — and the spectrum fills in behind it.
             SpectrogramScrubber(file: file, duration: duration, title: "Voice message",
-                                waveform: waveform, label: "Voice message progress")
+                                waveform: waveform, post: post, label: "Voice message progress")
         }
     }
 
     private func tapped() {
-        AudioActions.tap(model: model, key: key, fileId: file.fileId, title: "Voice message", duration: duration)
+        AudioActions.tap(model: model, key: key, fileId: file.fileId, title: "Voice message",
+                         duration: duration, post: post)
     }
 }
 
@@ -465,6 +521,9 @@ struct SpectrogramScrubber: View {
     /// note plays through its own `AVPlayer` inside `InlineVideoView` (§2.11.1 — video notes use
     /// the same strip, but not the same transport). nil for audio and voice rows.
     var transport: InlinePlayerModel?
+    /// The post this row belongs to — carried only so a drag on the strip of a row that is not
+    /// playing can start it *and* dock it with somewhere to go (§2.11).
+    var post: Post?
     let label: String
 
     @State private var render: SpectrogramRender?
@@ -525,12 +584,21 @@ struct SpectrogramScrubber: View {
             return
         }
         AudioActions.tap(model: model, key: key, fileId: file.fileId, title: title,
-                         duration: duration, startAt: fraction)
+                         duration: duration, post: post, startAt: fraction)
     }
 
     private func analyse(columns: Int) async {
+        // §2.11.2: whatever silhouette this row draws, the dock draws the same one. A voice note's
+        // TDLib bytes are published first because they are here *now* and need no decode — so a
+        // clip that starts playing before its spectrum lands still docks with a shape rather than a
+        // flat line. `SpectrogramStore.strip` publishes the analysed envelope over it when it
+        // arrives, which is the same order the strip itself swaps them in.
+        let bytes = WaveformCodec.decode(waveform)
+        if !bytes.isEmpty { model.spectrograms.publish(envelope: bytes, uniqueId: key) }
+
         if let hit = model.spectrograms.cached(uniqueId: key, columns: columns, rows: rows) {
             render = hit
+            model.spectrograms.publish(envelope: hit.envelope, uniqueId: key)
             return
         }
         guard duration > 0, let path = localPath else { return }
@@ -548,6 +616,53 @@ struct SpectrogramScrubber: View {
     }
 }
 
+// MARK: - The dock's mini waveform (PRODUCT §2.11.2)
+
+/// The now-playing dock's waveform: **a view of the analysis the strip already did**, resampled to
+/// the dock's width. There is no file path anywhere in this type and no call into
+/// `SpectrogramStore.strip` — the only thing it can do is read a published envelope and resample
+/// it, which is what makes "playing a clip must never trigger a second analysis" a property of the
+/// code rather than a promise in a comment (`MiniWaveformTests` asserts the analysis count).
+///
+/// A clip whose strip has not run — or whose strip degraded to the hairline — has no envelope here,
+/// and `HPMiniWave` draws the flat line for it.
+struct DockWaveform: View {
+    @Environment(AppModel.self) private var model
+    /// The clip's `uniqueId`: the same identity the strip cached its analysis under.
+    let key: String
+    let title: String
+
+    var body: some View {
+        GeometryReader { geo in
+            HPMiniWave(peaks: model.spectrograms.peaks(uniqueId: key,
+                                                       columns: Self.columns(width: geo.size.width)),
+                       progress: model.audio.progress,
+                       label: "\(title) progress",
+                       regionLabel: DockRegion.wave,
+                       onSeek: { model.audio.seek(toFraction: $0) })
+        }
+        // The kit view carries the sizing (`miniWaveWidth` floor, `touchMin` height); this frame
+        // only bounds the greedy `GeometryReader` that reads the width to resample against, so the
+        // shipped control and `DockHitRegionTests`' `HPMiniWave` are the same geometry.
+        .frame(minWidth: HPTokens.Space.miniWaveWidth, maxWidth: .infinity,
+               minHeight: HPTokens.Space.touchMin, maxHeight: HPTokens.Space.touchMin)
+    }
+
+    /// One vertex per point, not per pixel. The strip is a texture drawn once, so it buys a column
+    /// per pixel; this is a stroked path re-emitted on every playhead tick, and a hairline polyline
+    /// gains nothing from vertices closer together than the line is wide.
+    static func columns(width: CGFloat) -> Int {
+        min(max(Int(width.rounded()), 1), SpectrogramSpec.maxColumns)
+    }
+}
+
+/// Labels the docked now-playing row's hit regions report under `hpMeasureTouchTargets`, so the
+/// assembled-dock test names a region instead of counting tree order.
+enum DockRegion {
+    static let wave = "dock waveform"
+    static let play = "dock play"
+}
+
 @MainActor
 enum AudioActions {
     /// Shared tap behaviour for audio and voice rows: toggle when current, cancel when loading,
@@ -555,7 +670,7 @@ enum AudioActions {
     /// `startAt` is the fraction a drag on the spectrogram strip landed on (§2.11.1) — 0 for a
     /// press of the play button.
     static func tap(model: AppModel, key: String, fileId: Int, title: String, duration: Int,
-                    startAt: Double = 0) {
+                    post: Post? = nil, startAt: Double = 0) {
         if model.audio.isCurrent(key) {
             if startAt > 0 { model.audio.seek(toFraction: startAt); return }
             model.audio.toggle()
@@ -571,7 +686,7 @@ enum AudioActions {
             let path = await model.media.download(fileId, priority: MediaLoader.tappedPriority, label: "Downloading audio")
             guard model.audio.loadingKey == key else { return }
             guard let path else { model.audio.loadingKey = nil; return }
-            model.audio.play(AudioPlayback.Item(key: key, title: title, duration: duration),
+            model.audio.play(AudioPlayback.Item(key: key, title: title, duration: duration, post: post),
                              url: URL(fileURLWithPath: path), startAt: startAt)
         }
     }
@@ -751,6 +866,9 @@ struct ViewerOverlay: View {
     @State private var index: Int
     @State private var dragY: CGFloat = 0
     @State private var saver = MediaSaver()
+    /// §2.12: opening comments does NOT leave the media — it shrinks to a mini view pinned at the
+    /// top and the thread takes the rest of the sheet.
+    @State private var showsComments = false
 
     init(request: ViewerRequest) {
         self.request = request
@@ -761,7 +879,7 @@ struct ViewerOverlay: View {
         request.items.indices.contains(index) ? request.items[index] : nil
     }
 
-    private var actionLabel: String? {
+    private var saveLabel: String? {
         switch current {
         case .photo, .video, .animation: return "Save"
         case .document: return "Share"
@@ -769,38 +887,87 @@ struct ViewerOverlay: View {
         }
     }
 
+    /// The trailing chrome. `Comments` comes first because it is the one that changes what the
+    /// screen is; `Save` acts on whatever is showing either way.
+    private var actions: [HPViewerAction] {
+        var out: [HPViewerAction] = []
+        if request.post != nil {
+            out.append(HPViewerAction("Comments") {
+                withAnimation(HPMotion.color) { showsComments.toggle() }
+            })
+        }
+        if let saveLabel { out.append(HPViewerAction(saveLabel, action: performAction)) }
+        return out
+    }
+
     var body: some View {
         HPViewer(counter: request.items.count > 1 ? "\(index + 1) / \(request.items.count)" : nil,
-                 caption: request.caption,
-                 actionLabel: actionLabel,
-                 onAction: performAction,
+                 // With the thread open the sheet owns the bottom of the screen; the caption is the
+                 // post's text, and the thread is about that post already.
+                 caption: showsComments ? "" : request.caption,
+                 actions: actions,
                  onClose: { model.viewer = nil }) {
-            TabView(selection: $index) {
-                ForEach(Array(request.items.enumerated()), id: \.offset) { i, item in
-                    ViewerPageView(item: item)
-                        .tag(i)
+            VStack(spacing: 0) {
+                if showsComments {
+                    // Room for the Close / Comments row, which the mini view must sit under rather
+                    // than behind.
+                    Color.clear.frame(height: HPViewerChrome.height)
+                }
+                pager
+                if showsComments, let post = request.post {
+                    CarouselComments(post: post, link: request.link(at: index))
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea()
-            .offset(y: dragY)
-            .simultaneousGesture(
-                DragGesture()
-                    .onChanged { v in
-                        if v.translation.height > 0, abs(v.translation.width) < HPTokens.Space.bottomSafe / 2 {
-                            dragY = v.translation.height
-                        }
-                    }
-                    .onEnded { v in
-                        if dragY > HPTokens.Space.bottomSafe {
-                            model.viewer = nil
-                        } else {
-                            withAnimation(HPMotion.color) { dragY = 0 }
-                        }
-                        if abs(v.translation.width) > abs(v.translation.height) { dragY = 0 }
-                    }
-            )
         }
+        // Paging re-targets the thread, so a selection made against the previous item does not
+        // survive the swipe (§2.12).
+        .onChange(of: index) { _, _ in model.clearReply() }
+        .onDisappear { model.clearReply() }
+    }
+
+    /// The carousel. One `TabView` in both states: shrinking its frame is what "the media shrinks to
+    /// a mini view" means, and it is why paging keeps working with the thread open — there is no
+    /// second player and no second page list to keep in step.
+    private var pager: some View {
+        TabView(selection: $index) {
+            ForEach(Array(request.items.enumerated()), id: \.offset) { i, item in
+                ViewerPageView(item: item)
+                    .tag(i)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(height: showsComments ? HPTokens.Space.viewerMiniHeight : nil)
+        .modifier(ViewerFullBleed(active: !showsComments))
+        .offset(y: dragY)
+        // §2.12: the mini view is "still tappable to restore it full-screen". Simultaneous, so the
+        // page swipe underneath still gets its drag.
+        .simultaneousGesture(
+            showsComments
+                ? TapGesture().onEnded { withAnimation(HPMotion.color) { showsComments = false } }
+                : nil
+        )
+        .accessibilityAction(named: "Show the media full screen") {
+            withAnimation(HPMotion.color) { showsComments = false }
+        }
+        .simultaneousGesture(
+            // Swipe down to dismiss — but not while the thread is open, where a downward drag
+            // belongs to the thread's own scrolling.
+            showsComments ? nil :
+            DragGesture()
+                .onChanged { v in
+                    if v.translation.height > 0, abs(v.translation.width) < HPTokens.Space.bottomSafe / 2 {
+                        dragY = v.translation.height
+                    }
+                }
+                .onEnded { v in
+                    if dragY > HPTokens.Space.bottomSafe {
+                        model.viewer = nil
+                    } else {
+                        withAnimation(HPMotion.color) { dragY = 0 }
+                    }
+                    if abs(v.translation.width) > abs(v.translation.height) { dragY = 0 }
+                }
+        )
     }
 
     private func performAction() {
@@ -837,6 +1004,49 @@ struct ViewerOverlay: View {
                 ShareSheet.present(url: URL(fileURLWithPath: path))
             }
         }
+    }
+}
+
+/// `ignoresSafeArea` only while the media is full screen. With the thread open the mini view has to
+/// sit inside the safe area under the chrome, and a modifier that is applied conditionally has to be
+/// a modifier — `if` inside a view builder would rebuild the `TabView` and lose its page.
+private struct ViewerFullBleed: ViewModifier {
+    let active: Bool
+    func body(content: Content) -> some View {
+        if active { content.ignoresSafeArea() } else { content }
+    }
+}
+
+/// §2.12 "Comments in the carousel": the thread, on the look's one panel surface, taking the rest
+/// of the sheet under the mini view.
+///
+/// It hosts `CommentThreadList` — the same rows, the same reply-target selection and the same
+/// composer the Thread screen uses. `link` is the album item the carousel is showing, so paging
+/// re-targets the thread to that item's post without this view knowing anything about paging.
+private struct CarouselComments: View {
+    @Environment(AppModel.self) private var model
+    let post: Post
+    let link: String?
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: HPTokens.Radius.card, style: .continuous)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                CommentThreadList(post: post, roots: [link ?? post.deepLink])
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(HPTokens.Space.cardPad)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // `bg`, not `panel`: the sheet is the app's PAGE docked over the media, and the comment
+        // cards inside it are cards on a page. A panel here would be a card holding cards.
+        .background(shape.fill(HPTokens.Colors.bg))
+        .hpBorder(shape)
+        .padding(.horizontal, HPTokens.Space.columnSide)
+        .padding(.top, HPTokens.Space.cardGap)
+        .scrollDismissesKeyboard(.interactively)
+        // §6.3, as on the Thread screen: opening the thread refreshes the index for the target.
+        .task(id: link ?? post.deepLink) { await model.refreshComments(for: post) }
     }
 }
 

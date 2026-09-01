@@ -146,6 +146,11 @@
   channel({ id: -1050, sg: 1050, title: 'Zed', username: 'tgs_zed', description: 'tgsocial v1 · prefix search only' });
   pin(-1050, `${CARD}\nname: Zed\npublic: yes\nfeeds: @bob_feed`);
   channel({ id: -1070, sg: 1070, title: 'Future', username: 'tgs_future', description: 'tgsocial v2' });
+  // PRODUCT §2.11.3 — the mosaic layouts live in a channel of their own, on
+  // nobody's card and in nobody's feed, so thirteen album messages cannot
+  // change how many POSTS the merged feed's first page carries (an album is one
+  // post out of many messages). The flow test opens it as a feed channel (§2.6).
+  channel({ id: -1080, sg: 1080, title: 'Mosaic demo', username: 'mosaic_demo', description: 'Photo albums.' });
   pin(-1070, 'tgsocial v2\nname: Future');
   // index group
   chats[-1060] = { '@type': 'chat', id: -1060, type: { '@type': 'chatTypeSupergroup', supergroup_id: 1060, is_channel: false }, title: 'tgsocial index', photo: null };
@@ -205,6 +210,22 @@
     for (const n of [0, 1]) {
       history[-1002].push({ ...text((402 + n) << 20, -1002, '', NOW - 90), content: photo(90 + n), media_album_id: '77' });
     }
+    // §2.11.3 — one album per remaining layout, newest first in `mosaic_demo`:
+    // 3 (one tall leading tile with two stacked beside it), 4 (two by two) and
+    // 6 (two by two of the first four with `+2` over the fourth). The two-photo
+    // album above stays in the feed, because a mosaic is also how the carousel
+    // is reached from a card.
+    history[-1080] = [];
+    // `seed` picks the photo FILE ids (8000 + seed, 8100 + seed): the 8300s and
+    // 8400s are the free band — the 8500s are video thumbnails and the 8600s
+    // are documents, and a photo served a PDF's bytes never decodes.
+    const albums = [[3, '78', 520, 92, 320], [4, '79', 510, 94, 310], [6, '80', 500, 96, 300]];
+    for (const [size, group, base, age, seed] of albums) {
+      for (let n = 0; n < size; n += 1) {
+        history[-1080].push({ ...text((base + n) << 20, -1080, '', NOW - age), content: photo(seed + n), media_album_id: group });
+      }
+    }
+    history[-1080].sort((a, b) => b.id - a.id);
     const preview = text(401 << 20, -1002, 'Read the writeup at https://lucianlabs.ca', NOW - 100, { entities: [{ offset: 22, length: 21, type: { '@type': 'textEntityTypeUrl' } }] });
     preview.content.link_preview = {
       url: 'https://lucianlabs.ca',

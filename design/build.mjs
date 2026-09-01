@@ -74,6 +74,7 @@ function swift() {
 
   const radius = Object.entries(T.radius).map(([k, v]) => `    public static let ${k}: CGFloat = ${v}`).join('\n');
   const space = Object.entries(T.space).filter(([k]) => !k.startsWith('$')).map(([k, v]) => `    public static let ${k}: CGFloat = ${v}`).join('\n');
+  const ratio = Object.entries(T.ratio).filter(([k]) => !k.startsWith('$')).map(([k, v]) => `    public static let ${k}: CGFloat = ${v}`).join('\n');
   const shadow = Object.entries(T.shadow)
     .filter(([k]) => !k.startsWith('$'))
     .map(([k, s]) => {
@@ -152,6 +153,10 @@ ${radius}
     public enum Space {
 ${space}
     }
+    /// Unitless shape constants (width / height) — PRODUCT 2.11.3's mosaic block ratio.
+    public enum Ratio {
+${ratio}
+    }
     public enum Shadow {
 ${shadow}
     }
@@ -191,6 +196,7 @@ function kotlin() {
     .join('\n');
   const radius = Object.entries(T.radius).map(([k, v]) => `    val ${k} = ${v}.dp`).join('\n');
   const space = Object.entries(T.space).filter(([k]) => !k.startsWith('$')).map(([k, v]) => `    val ${k} = ${v}.dp`).join('\n');
+  const ratio = Object.entries(T.ratio).filter(([k]) => !k.startsWith('$')).map(([k, v]) => `    const val ${k} = ${v}f`).join('\n');
   const shadow = Object.entries(T.shadow)
     .filter(([k]) => !k.startsWith('$'))
     .map(([k, s]) => {
@@ -249,6 +255,10 @@ ${radius}
     }
     object Space {
 ${space}
+    }
+    /** Unitless shape constants (width / height) — PRODUCT 2.11.3's mosaic block ratio. */
+    object Ratio {
+${ratio}
     }
     object Shadow {
 ${shadow}
@@ -325,6 +335,8 @@ async function css() {
     .concat(stops.map((k, i) => `  --ramp-${i}: rgba(${k.r}, ${k.g}, ${k.b}, ${f3(k.a)}); --ramp-${i}-at: ${k.at};`))
     .join('\n');
   const components = await readFile(join(root, 'web', 'house-pour.components.css'), 'utf8');
+  // PRODUCT 2.11.3 — unitless, so they are plain numbers (aspect-ratio takes them directly).
+  const ratioVars = Object.entries(T.ratio).filter(([k]) => !k.startsWith('$')).map(([k, v]) => `  --ratio-${kebab(k)}: ${v};`).join('\n');
   const typeVars = Object.entries(T.type)
     .filter(([k]) => !k.startsWith('$'))
     .map(([k, s]) => `  --type-${kebab(k)}: ${s.weight} ${s.size / 16}rem/${s.lineHeight} var(--font-${s.face});`)
@@ -347,6 +359,9 @@ ${typeVars}
   --space-row-pad: ${T.space.rowPad}px;
   --space-touch-min: ${T.space.touchMin}px;
   --space-strip-height: ${T.space.stripHeight}px;
+  --space-mini-wave-width: ${T.space.miniWaveWidth}px;
+  --space-mini-wave-height: ${T.space.miniWaveHeight}px;
+  --space-viewer-mini-height: ${T.space.viewerMiniHeight}px;
   --space-kebab-dot: ${T.space.kebabDot}px;
   --space-kebab-dot-gap: ${T.space.kebabDotGap}px;
   --space-menu-width: ${T.space.menuWidth}px;
@@ -356,6 +371,7 @@ ${typeVars}
   --radius-input: ${T.radius.input}px;
   --radius-media: ${T.radius.media}px;
   --border-width: ${T.border.width}px;
+${ratioVars}
   --shadow-contact: ${shadowCss(T.shadow.contact)};
   --shadow-cast: ${shadowCss(T.shadow.cast)};
   --shadow-cast-modal: ${shadowCss(T.shadow.cast, scaleAlpha(T.shadow.cast.color, 1.5))};

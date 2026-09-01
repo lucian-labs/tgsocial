@@ -142,7 +142,8 @@ public enum HPMirrorWave {
 
 /// Attaches `hpTouchRegion` only when a caller named one. An unnamed probe would report an empty
 /// label into `HPTouchTargetKey` and show up in every screen's region count as a nameless rect.
-private struct HPOptionalTouchRegion: ViewModifier {
+/// Shared with `HPMiniWave`, which reports its region the same way.
+struct HPOptionalTouchRegion: ViewModifier {
     let label: String?
     func body(content: Content) -> some View {
         if let label { content.hpTouchRegion(label) } else { content }

@@ -27,6 +27,7 @@ import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
 import ca.lucianlabs.housepour.HPFieldKind
 import ca.lucianlabs.housepour.HPH2
+import ca.lucianlabs.housepour.HPHitTarget
 import ca.lucianlabs.housepour.HPListItem
 import ca.lucianlabs.housepour.HPMonoSmall
 import ca.lucianlabs.housepour.HPMuted
@@ -41,6 +42,7 @@ import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Format
+import ca.lucianlabs.tgsocial.protocol.ReplyTarget
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Availability
 import ca.lucianlabs.tgsocial.ui.components.openLink
@@ -205,12 +207,19 @@ fun ColumnScope.CommentComposerSheet(vm: AppViewModel) {
     }
     val target = c.target
     if (target != null) {
-        val excerpt = target.excerpt.replace('\n', ' ').trim()
-        val quote = if (excerpt.isEmpty()) "re: ${target.title}" else "re: ${target.title} — '${excerpt.take(60)}${if (excerpt.length > 60) "…" else ""}'"
-        HPMuted(quote, maxLines = 2)
+        // PRODUCT §2.12 — the target lifted into a quoted line above the composer. Against a comment it
+        // carries the `×` that clears it: the reply then goes to the post, and the composer stays open.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HPMuted(ReplyTarget.quote(target), Modifier.weight(1f), maxLines = 2)
+            if (target.isComment) {
+                HPHitTarget(vm::clearComposerTarget, contentDescription = "Reply to the post instead") {
+                    HPMuted("×", maxLines = 1)
+                }
+            }
+        }
         Spacer(Modifier.height(HPTokens.Space.rowGap))
     }
-    HPTextField(c.text, vm::setCommentText, placeholder = "Say it.", kind = HPFieldKind.Multiline(6), enabled = !c.posting, contentDescription = "Comment text")
+    HPTextField(c.text, vm::setCommentText, placeholder = ReplyTarget.placeholder(target), kind = HPFieldKind.Multiline(6), enabled = !c.posting, contentDescription = "Comment text")
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> vm.setCommentPhoto(uri) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = HPTokens.Space.rowGap)) {
         HPButton(if (c.photo == null) "Add Photo" else "Change Photo", { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, enabled = !c.posting)

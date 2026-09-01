@@ -84,6 +84,33 @@ class MediaBudgetTest {
         assertEquals(zoom, MediaBudget.bucket(9999, card, zoom))
     }
 
+    /**
+     * PRODUCT §2.11.3 — a mosaic tile is a thumbnail. The naive mosaic asks for the card width four times over
+     * and decodes four pictures at four times the area each is drawn at; on a small device that is more bytes
+     * for one post than the whole image budget holds.
+     */
+    @Test
+    fun aMosaicTileCostsATileRatherThanACard() {
+        val column = 1080
+        val card = MediaBudget.cardPx(column)
+        val tile = MediaBudget.mosaicTilePx(column)
+        assertEquals("a tile is half the column — every mosaic is two columns wide", card / 2, tile)
+
+        val cardBytes = MediaBudget.bitmapBytes(card, card)
+        val tileBytes = MediaBudget.bitmapBytes(tile, tile)
+        assertEquals("a tile is a quarter of the pixels", 4L, cardBytes / tileBytes)
+        assertTrue(
+            "four tiles cost less than two cards, where the naive mosaic costs four",
+            tileBytes * 4 < cardBytes * 2,
+        )
+        assertTrue("and a whole 4-photo mosaic fits the smallest budget", tileBytes * 4 < MediaBudget.MIN_IMAGE_BYTES)
+
+        // It follows the column like the card bucket does, and never falls below the thumb class.
+        assertTrue(MediaBudget.mosaicTilePx(2400) > MediaBudget.mosaicTilePx(720))
+        assertTrue(MediaBudget.mosaicTilePx(320) > MediaBudget.AVATAR_PX)
+        assertTrue("and never past the hard ceiling", MediaBudget.mosaicTilePx(8192) <= MediaBudget.MAX_DECODE_PX)
+    }
+
     @Test
     fun noDecodeIsEverAllowedPastTheHardCeiling() {
         // A 4K-wide tablet: the zoom rendition still stops at MAX_DECODE_PX.

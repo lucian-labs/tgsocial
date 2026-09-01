@@ -586,6 +586,160 @@ export function strip({ onSeek = null, label = 'Seek' } = {}) {
   return el;
 }
 
+// ── HPMiniWave ─────────────────────────────────────────────────────────────
+
+/**
+ * HPMiniWave — the now-playing dock's waveform (PRODUCT §2.11.2).
+ *
+ * The dock is not the place for a spectrogram. This is ONE polyline through the
+ * envelope's column peaks: a line drawing, not the strip's mirrored filled
+ * silhouette and not the spectrum. Hairline weight, `muted` ahead of the
+ * playhead and `accent` behind it, and nothing under the curve.
+ *
+ * It computes nothing. The caller hands it the envelope the STRIP already
+ * analysed (§2.11.1), resampled to this element's own column count — which is
+ * what `el.columns` reports — so playing a clip never triggers a second
+ * analysis. With no envelope at all (a clip whose strip degraded to the
+ * hairline) the polyline is FLAT rather than absent: zero amplitude is a
+ * straight line down the middle, which is §2.11's hairline drawn by the same
+ * code path.
+ *
+ * It paints `--space-dock-wave` tall and keeps a full `touchMin` region through
+ * `.hit-min` (rule 6): the target reaches past the painted bounds instead of
+ * inflating the dock row. The host row must not clip its overflow.
+ *
+ * miniWave({ onSeek, label }) → el with
+ *   el.set(fraction) · el.setEnvelope(values|null) · el.columns · el.hasEnvelope
+ */
+export function miniWave({ onSeek = null, label = 'Seek' } = {}) {
+  const canvas = h('canvas.mini-wave-line', { 'aria-hidden': 'true' });
+  const el = h('div.mini-wave.hit-min', {
+    role: 'slider',
+    tabindex: 0,
+    'aria-label': label,
+    'aria-valuemin': '0',
+    'aria-valuemax': '100',
+    'aria-valuenow': '0',
+  }, canvas);
+
+  let fraction = 0;
+  let envelope = null;
+
+  /** Device columns this wave paints — the width the caller resamples to. */
+  const columns = () => {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    return Math.max(2, Math.round(el.getBoundingClientRect().width * dpr));
+  };
+
+  const paintWave = () => {
+    const box = el.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.max(2, Math.round(box.width * dpr));
+    const hpx = Math.max(2, Math.round(box.height * dpr));
+    if (canvas.width !== w || canvas.height !== hpx) {
+      canvas.width = w;
+      canvas.height = hpx;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, hpx);
+
+    // Rule 1: a canvas needs a concrete colour, so the component asks the
+    // cascade for the token it would have used in a stylesheet.
+    const playedColor = tokenValue(el, '--mini-wave-played');
+    const aheadColor = tokenValue(el, '--mini-wave-ahead');
+    const line = parseFloat(tokenValue(el, '--mini-wave-ridge', '1')) * dpr;
+
+    // The baseline is the middle and the peaks rise off it, so silence and a
+    // missing envelope are the SAME shape — the flat line §2.11.2 asks for.
+    const mid = hpx / 2;
+    const amp = Math.max(0, mid - line / 2);
+    const n = envelope?.length ?? 0;
+    const cols = Math.max(2, n);
+    const stepX = w / (cols - 1);
+    const yAt = (i) => mid - (n ? Math.max(0, Math.min(1, envelope[i])) : 0) * amp;
+
+    // Two runs sharing their boundary point, as HPStrip does: the split is an
+    // Int compare and the polyline stays continuous across the colour change.
+    const split = fraction <= 0 ? 0 : Math.max(1, Math.min(cols - 1, Math.round(fraction * (cols - 1))));
+    const runs = fraction <= 0
+      ? [[0, cols - 1, false]]
+      : [[0, split, true], [split, cols - 1, false]];
+    ctx.lineWidth = line;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const [from, to, isPlayed] of runs) {
+      if (to <= from) continue;
+      ctx.beginPath();
+      for (let i = from; i <= to; i += 1) {
+        const x = i * stepX;
+        if (i === from) ctx.moveTo(x, yAt(i));
+        else ctx.lineTo(x, yAt(i));
+      }
+      ctx.strokeStyle = isPlayed ? playedColor : aheadColor;
+      ctx.stroke();
+    }
+  };
+
+  const paint = (f) => {
+    fraction = Math.max(0, Math.min(1, f || 0));
+    el.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
+    paintWave();
+  };
+
+  el.set = (f) => {
+    if (el.dataset.dragging) return;
+    paint(f);
+  };
+  /** The envelope, already at `el.columns`. Null draws the flat line. */
+  el.setEnvelope = (values) => {
+    envelope = values && values.length > 1 ? values : null;
+    paint(fraction);
+    return el;
+  };
+  el.repaint = () => paint(fraction);
+  Object.defineProperty(el, 'columns', { get: columns });
+  Object.defineProperty(el, 'hasEnvelope', { get: () => !!envelope });
+
+  // Tap or drag to seek, exactly as the strip does: painting follows the
+  // finger, the seek lands on release, and the row underneath never sees the
+  // gesture (the dock row's own tap opens the post the audio came from).
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.dataset.dragging = '1';
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      // a synthetic pointer with no capture support still drags fine
+    }
+    paint(fractionIn(el, e.clientX));
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (el.dataset.dragging) paint(fractionIn(el, e.clientX));
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!el.dataset.dragging) return;
+    delete el.dataset.dragging;
+    paint(fractionIn(el, e.clientX));
+    if (onSeek) onSeek(fraction);
+  });
+  el.addEventListener('pointercancel', () => {
+    delete el.dataset.dragging;
+    paint(fraction);
+  });
+  el.addEventListener('click', (e) => e.stopPropagation());
+  el.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 0.05 : e.key === 'ArrowLeft' ? -0.05 : null;
+    if (step === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    paint(fraction + step);
+    if (onSeek) onSeek(fraction);
+  });
+  return el;
+}
+
 // ── HPRing ─────────────────────────────────────────────────────────────────
 
 /**
@@ -697,15 +851,40 @@ export function playerRow({ title, sub = '', duration = '0:00', waveform = null,
 // ── HPNowPlaying ───────────────────────────────────────────────────────────
 
 /**
- * Slim now-playing row docked above the floating tab bar while audio plays:
- * play/pause, title, serif elapsed. nowPlaying({ title, onToggle }) → el with
- * el.setPlaying(bool) · el.setTime(text).
+ * Slim now-playing row docked above the floating tab bar while audio plays
+ * (PRODUCT §2.11): play/pause, title, serif elapsed, and the mini waveform of
+ * §2.11.2 — the strip's own envelope, resampled to this row's width.
+ *
+ * "Tapping the row anywhere but its controls opens the post the audio came
+ * from", so the row is a control too: the play button and the waveform stop
+ * their gestures at themselves and everything else in the row reaches `onOpen`.
+ *
+ * nowPlaying({ title, onToggle, onSeek, onOpen }) → el with
+ *   el.setPlaying(bool) · el.setTime(text) · el.set(fraction) ·
+ *   el.setEnvelope(values|null) · el.wave
  */
-export function nowPlaying({ title, onToggle = null } = {}) {
+export function nowPlaying({ title, onToggle = null, onSeek = null, onOpen = null } = {}) {
   const btn = h('button.player-btn.sm', { type: 'button', 'aria-label': `Pause ${title}` }, icon('pause'));
   const elapsed = h('span.player-time', '0:00');
-  const el = h('div.now-playing', btn, h('div.now-playing-title', title), elapsed);
-  if (onToggle) btn.addEventListener('click', onToggle);
+  const wave = miniWave({ onSeek, label: `Seek ${title}` });
+  const el = h('div.now-playing', btn, wave, h('div.now-playing-title', title), elapsed);
+  if (onToggle) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onToggle();
+    });
+  }
+  if (onOpen) {
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', `Open ${title}`);
+    el.addEventListener('click', onOpen);
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      onOpen();
+    });
+  }
   el.setPlaying = (playing) => {
     replace(btn, icon(playing ? 'pause' : 'play'));
     btn.setAttribute('aria-label', playing ? `Pause ${title}` : `Play ${title}`);
@@ -713,6 +892,9 @@ export function nowPlaying({ title, onToggle = null } = {}) {
   el.setTime = (t) => {
     elapsed.textContent = t;
   };
+  el.set = (f) => wave.set(f);
+  el.setEnvelope = (values) => wave.setEnvelope(values);
+  el.wave = wave;
   return el;
 }
 

@@ -26,11 +26,12 @@
  * an element registers itself so a memory-pressure flush can repaint it
  * instead of leaving a hole (watchMedia / releaseMedia below).
  */
-import { h, replace, button, media, pill, icon, ring, scrubber, strip, playerRow, nowPlaying, viewer } from '../vendor/house-pour.js';
-import { ensureStrip, releaseStrip, stripPixels } from './strip.js';
-import { formatDuration } from './protocol.js';
+import { h, replace, button, media, pill, icon, ring, scrubber, strip, playerRow, nowPlaying, tokenValue, viewer } from '../vendor/house-pour.js';
+import { cachedEnvelope, ensureStrip, onStripReady, releaseStrip, stripPixels } from './strip.js';
+import { deepLink, formatDuration } from './protocol.js';
 import { pickPhotoSize } from './repo.js';
 import { cardWidthPx, viewerWidthPx } from './decode.js';
+import { mosaicPlan, mosaicRatio, tileArea } from './mosaic.js';
 
 // ── file plumbing ──────────────────────────────────────────────────────────
 
@@ -416,7 +417,24 @@ const detachedAudio = {
   np: null, // now-playing row in the dock
   rows: new Set(), // { row, key } player rows currently bound
   pinned: null, // media-cache key held against eviction while this plays
+  offStrip: null, // unsubscribe from strip.js while a clip is docked
+  wave: null, // { key, columns, values } — the dock's resample, kept per clip
 };
+
+/**
+ * The two things this module needs from the app but must not import: opening a
+ * post (js/views/shared.js owns the Thread route) and rendering a comment
+ * thread (js/views/comments.js renders media, which is this file). Both live
+ * upstream of media.js in the import graph, so js/app.js — which already
+ * imports everything — hands them down here instead, the same shape as the
+ * `openExternal` that `mediaBlocks` takes.
+ */
+const host = { openPost: null, comments: null };
+
+/** js/app.js wires the host once, at boot. */
+export function useHost(fns) {
+  Object.assign(host, fns);
+}
 
 function audioRowsFor(key) {
   const out = [];
@@ -464,13 +482,46 @@ function paintAudio(app) {
   if (a.el.ended) {
     stopAudio(app);
     dockNowPlaying(app, null);
-  } else if (a.np) {
-    a.np.setPlaying(playing);
-    a.np.setTime(elapsed);
-  } else {
-    dockNowPlaying(app, nowPlaying({ title: a.meta.title, onToggle: () => toggleAudio(app, a.meta) }));
-    a.np.setPlaying(playing);
+    return;
   }
+  if (!a.np) {
+    dockNowPlaying(app, nowPlaying({
+      title: a.meta.title,
+      onToggle: () => toggleAudio(app, a.meta),
+      onSeek: (f) => seekAudio(app, a.meta, f),
+      // §2.11: "Tapping the row anywhere but its controls opens the post the
+      // audio came from." The controls stop their own gestures; this is the row.
+      onOpen: host.openPost && a.meta.post ? () => host.openPost(a.meta.post) : null,
+    }));
+  }
+  a.np.setPlaying(playing);
+  a.np.setTime(elapsed);
+  a.np.set(fraction);
+  paintDockWave();
+}
+
+/**
+ * PRODUCT §2.11.2 — the dock's waveform is "a view of the analysis the strip
+ * already did", so this only ever READS: `cachedEnvelope` returns the strip's
+ * own envelope resampled to the dock's column count, and null for every state
+ * that has none (pending, refused, or the hairline a failed decode left). Null
+ * is the flat line, not an empty row.
+ *
+ * Playing a clip therefore starts no analysis of its own. The one the play tap
+ * arms is the STRIP's (`audioBlock`'s `analyse(32)`), keyed on the file, and
+ * this row joins its result rather than asking for a second.
+ */
+function paintDockWave() {
+  const a = detachedAudio;
+  if (!a.np || !a.meta) return;
+  const columns = a.np.wave.columns;
+  // `timeupdate` lands about four times a second and the playhead has to be
+  // repainted every time; the ENVELOPE has not changed, so it is resampled once
+  // per clip and per width instead of once per tick.
+  if (a.wave?.key === a.meta.key && a.wave.columns === columns && a.wave.values) return;
+  const values = cachedEnvelope(a.meta, columns);
+  a.wave = { key: a.meta.key, columns, values };
+  a.np.setEnvelope(values);
 }
 
 /** Playback is over: unpin the file, let the element go, forget the item. */
@@ -497,6 +548,20 @@ function stopAudio(app) {
 function dockNowPlaying(app, el) {
   if (detachedAudio.np) detachedAudio.np.remove();
   detachedAudio.np = el;
+  detachedAudio.wave = null;
+  if (detachedAudio.offStrip) {
+    detachedAudio.offStrip();
+    detachedAudio.offStrip = null;
+  }
+  // The strip is usually analysed before anything is played (§2.11.1 arms it on
+  // visibility), but a row tapped the moment it scrolls in is not: this paints
+  // the mini waveform when that analysis settles, without starting one.
+  if (el) {
+    detachedAudio.offStrip = onStripReady(() => {
+      detachedAudio.wave = null;
+      paintDockWave();
+    });
+  }
   if (el) app.els.dock.prepend(el);
   document.body.toggleAttribute('data-now-playing', !!el);
   // the dock stays visible for the row even where the tab bar is hidden, and
@@ -663,6 +728,107 @@ function photoBlock(app, post, item, index) {
   return box;
 }
 
+/**
+ * CSS px a full-width media block paints inside a post card: the app column
+ * (capped at `columnMax`) less its side padding and the card's own padding on
+ * both sides. Summed from the tokens the cascade actually holds rather than
+ * measuring a laid-out element, which is the same trick js/strip.js plays with
+ * `PLAYER_LEAD_CSS` — and the reason the feed and the thread agree on one tile
+ * size, and therefore one cache key, instead of forking it over a pixel.
+ */
+function mosaicWidthCss(env = window) {
+  const t = (name, fallback) => {
+    const v = parseFloat(tokenValue(document.documentElement, name, ''));
+    return Number.isFinite(v) ? v : fallback;
+  };
+  const columnMax = t('--space-column-max', 540);
+  const side = t('--space-column-side', 14);
+  const pad = t('--space-card-pad', 20);
+  return Math.max(1, Math.min(env?.innerWidth || columnMax, columnMax) - 2 * side - 2 * pad);
+}
+
+/**
+ * Device pixels ONE mosaic tile paints. Every layout in §2.11.3 is two columns
+ * wide — even the three-up, whose tall leading tile is half the block — so a
+ * tile is never more than half the card, and that is the size the tiles are
+ * requested and decoded at. Four full-screen renditions to draw one summary
+ * block is exactly the decode this cap exists to refuse; the carousel asks for
+ * the big one, and only for the item it is showing (`buildPhotoSlide`).
+ */
+function mosaicTilePx(env = window) {
+  const dpr = Math.min(env?.devicePixelRatio || 1, 2);
+  return Math.max(1, Math.round((mosaicWidthCss(env) / 2) * dpr));
+}
+
+/** The clamped block ratio for these photos, with the bounds read as tokens. */
+function mosaicBlockRatio(photos, shown) {
+  const num = (name, fallback) => {
+    const v = parseFloat(tokenValue(document.documentElement, name, ''));
+    return Number.isFinite(v) ? v : fallback;
+  };
+  const aspects = photos.slice(0, shown).map(({ item }) => {
+    const size = item.sizes?.[item.sizes.length - 1];
+    return size?.w && size?.h ? size.w / size.h : NaN;
+  });
+  return mosaicRatio(aspects, shown, { min: num('--ratio-mosaic-min', 0.8), max: num('--ratio-mosaic-max', 1.9) });
+}
+
+/**
+ * PRODUCT §2.11.3 — a post with more than one photo is a MOSAIC, not a stack.
+ *
+ * The arrangement is one CSS grid with `grid-template-areas` per count
+ * (css/app.css, keyed on `data-count`); js/mosaic.js is the shared rule both
+ * that stylesheet and test/flows.mjs read. Here we only place the tiles into
+ * `a`…`d` in album order, set the block's clamped ratio, and hang the `+N`
+ * pill over the fourth when there are more.
+ *
+ * `radius-media` and `overflow: hidden` live on the block, so the radius lands
+ * on the OUTER corners only and the hairline `line` gutters read as one object
+ * (the grid's gap is the border width over a `line` background).
+ *
+ * "Tapping any tile opens the carousel at that tile": each tile carries its own
+ * ALBUM index, which is what `openViewer` maps onto the viewable items.
+ */
+function photoMosaic(app, post, photos) {
+  const plan = mosaicPlan(photos.length);
+  const el = h('div.post-mosaic', {
+    'data-count': String(plan.shown),
+    style: { aspectRatio: String(mosaicBlockRatio(photos, plan.shown)) },
+  });
+  const tilePx = mosaicTilePx();
+  photos.slice(0, plan.shown).forEach(({ item, index }, i) => {
+    const size = pickPhotoSize(item.sizes, tilePx);
+    // the tile is an HPMedia box with no aspect of its own: the CELL sets the
+    // shape and the picture covers it (§2.11.3)
+    const tile = media(null, null, { mini: item.mini });
+    tile.classList.add('post-mosaic-tile');
+    tile.style.gridArea = tileArea(i);
+    tile.setAttribute('role', 'button');
+    tile.setAttribute('tabindex', '0');
+    tile.setAttribute('aria-label', `View photo ${i + 1} of ${photos.length}`);
+    if (size?.file) {
+      autoLoad(app, tile, size.file, { kind: 'photo', decodeWidth: tilePx, onUrl: (url) => tile.setImage(url) });
+    }
+    const open = (e) => {
+      stop(e);
+      openViewer(app, post, index);
+    };
+    tile.addEventListener('click', open);
+    tile.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') open(e);
+    });
+    // §2.11.3: the fourth tile carries `+N` in the pill style over a scrim
+    if (i === plan.shown - 1 && plan.extra > 0) {
+      const more = pill(`+${plan.extra}`);
+      more.classList.add('post-mosaic-more');
+      tile.append(h('div.post-mosaic-scrim', more));
+      tile.setAttribute('aria-label', `View photo ${i + 1} of ${photos.length}, ${plan.extra} more`);
+    }
+    el.append(tile);
+  });
+  return el;
+}
+
 /** Poster + play glyph + duration pill → inline video with House Pour transport. */
 function videoBlock(app, post, item, index) {
   const aspect = item.w && item.h ? `${item.w} / ${item.h}` : '4 / 3';
@@ -769,6 +935,9 @@ function audioMeta(post, item, kind) {
   return {
     key: `${post.key}:${item.file?.uniqueId ?? item.file?.id}`,
     kind,
+    // the dock outlives the card, and §2.11's row tap has to be able to get
+    // back to the post the audio came from
+    post,
     title: kind === 'voice' ? 'Voice message' : item.title,
     sub: item.performer || '',
     duration: item.duration,
@@ -1074,9 +1243,17 @@ function previewBlock(app, preview, openExternal) {
 export function mediaBlocks(app, post, { openExternal }) {
   const blocks = [];
   const album = post.album?.length ? post.album : post.media ? [post.media] : [];
+  // §2.11.3: more than one photo is ONE block, not a stack of them. The photos
+  // leave the per-item loop below and become a mosaic; anything else in the
+  // album (Telegram lets a group mix in a video) still renders as its own
+  // block, in album order, after it. Each tile keeps its ALBUM index, so a tap
+  // opens the carousel on that item and not on the mosaic's own numbering.
+  const photos = album.map((item, index) => ({ item, index })).filter(({ item }) => item.kind === 'photo');
+  const mosaic = mosaicPlan(photos.length).mosaic;
+  if (mosaic) blocks.push(photoMosaic(app, post, photos));
   album.forEach((item, i) => {
     let el = null;
-    if (item.kind === 'photo') el = photoBlock(app, post, item, i);
+    if (item.kind === 'photo') el = mosaic ? null : photoBlock(app, post, item, i);
     else if (item.kind === 'video') el = videoBlock(app, post, item, i);
     else if (item.kind === 'animation') el = animationBlock(app, post, item, i);
     else if (item.kind === 'audio') el = audioBlock(app, post, item, 'audio');
@@ -1131,6 +1308,8 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
       slides.clear();
       for (const key of pinnedKeys) app.td.unpinKey(key);
       pinnedKeys.clear();
+      if (panel) panel.release();
+      panel = null;
       if (offKeys) offKeys();
       if (!poppedByHistory && history.state?.tgsViewer) history.back();
     },
@@ -1164,6 +1343,80 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
     }
   });
   if (post?.text && !doc) v.caption.textContent = post.text;
+
+  // ── comments over the media (PRODUCT §2.12) ──────────────────────────────
+  //
+  // "Opening it does not leave the media": nothing is unmounted and nothing is
+  // rebuilt — the stage keeps the same slides and simply becomes the
+  // `--space-viewer-mini` strip at the top (CSS), with the thread underneath
+  // it. Paging still runs `show()`, which moves that strip and re-targets the
+  // thread at the item's own post.
+  const commentsHost = h('div.viewer-comments');
+  v.root.append(commentsHost);
+  const restore = h('button.viewer-restore', { type: 'button', 'aria-label': 'Show the media full screen' });
+  v.stage.append(restore);
+  let panel = null;
+  let commentsOpen = false;
+  let commentsBtn = null;
+
+  /**
+   * The post a carousel item belongs to. An album is a run of Telegram
+   * MESSAGES merged into one post (repo.toPost), so every item carries its own
+   * message id and therefore its own `t.me` link — which is what a comment's
+   * `re:` line points at (PROTOCOL §6.2). That is what "re-targets the thread
+   * to that item's post" means: the same post, addressed at the item.
+   */
+  function itemPost(i) {
+    const messageId = items[i]?.messageId;
+    if (doc || !post || !messageId || messageId === post.id) return post;
+    return { ...post, id: messageId, key: `${post.chatId}:${messageId}`, link: deepLink(post.username, messageId) };
+  }
+
+  function toggleComments(open) {
+    if (open === commentsOpen) return;
+    commentsOpen = open;
+    v.root.classList.toggle('comments-open', open);
+    restore.hidden = !open;
+    if (commentsBtn) {
+      commentsBtn.textContent = open ? 'Hide' : 'Comments';
+      commentsBtn.setAttribute('aria-label', open ? 'Hide comments' : 'Comments');
+    }
+    if (!open) return;
+    if (!panel) {
+      panel = host.comments(app, itemPost(idx));
+      commentsHost.append(panel);
+    } else panel.setPost(itemPost(idx));
+    commentsHost.scrollTop = 0;
+  }
+
+  if (!doc && post?.link && host.comments && app.repo) {
+    commentsBtn = button('Comments', { style: 'ghost', size: 'sm', ariaLabel: 'Comments' });
+    commentsBtn.addEventListener('click', () => toggleComments(!commentsOpen));
+    v.actions.append(commentsBtn);
+  }
+  restore.hidden = true;
+  // The overlay covers the whole mini view, so a swipe that pages the carousel
+  // (§2.12: "paging the carousel while comments are open moves the mini view")
+  // both starts and ends on it — and the browser then fires a `click` here.
+  // Only a tap restores full-screen, so hold the same tap-vs-drag line the
+  // stage's own gestures hold (wireGestures' `panStart.moved`, 6px of slop).
+  let downAt = null;
+  restore.addEventListener('pointerdown', (e) => {
+    downAt = { x: e.clientX, y: e.clientY, moved: false };
+  });
+  restore.addEventListener('pointermove', (e) => {
+    if (downAt && Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y) > 6) downAt.moved = true;
+  });
+  restore.addEventListener('click', (e) => {
+    const down = downAt;
+    downAt = null;
+    stop(e);
+    // `detail === 0` is a keyboard activation of the button: no pointer travel
+    // to judge, and no stale `downAt` from a drag that ended off the overlay.
+    if (e.detail !== 0 && down
+      && (down.moved || Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > 6)) return;
+    toggleComments(false);
+  });
 
   function indexAmongViewable(p, albumIndex) {
     // `index` counts album positions; the viewer only pages its viewable items
@@ -1205,6 +1458,9 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
     const slide = buildSlide(i);
     if (!slide.isConnected) v.stage.append(slide);
     v.counter.textContent = items.length > 1 ? `${i + 1} / ${items.length}` : '';
+    // §2.12: paging with comments open moves the mini view AND re-targets the
+    // thread — the reply goes to the item you are looking at.
+    if (commentsOpen && panel) panel.setPost(itemPost(i));
     if (autoplayVideo) slide.querySelector('video')?.play().catch(() => null);
     // warm the neighbours
     if (i + 1 < items.length) buildSlide(i + 1);
@@ -1216,7 +1472,7 @@ export function openViewer(app, post, index = 0, { doc = null, resumeAt = 0 } = 
     index: () => idx,
     goTo: (i) => show(i, { autoplayVideo: false }),
     close: () => v.close(),
-    zoomable: () => !doc && items[idx].kind === 'photo',
+    zoomable: () => !doc && !commentsOpen && items[idx].kind === 'photo',
     slideOf: () => slides.get(idx),
   });
 

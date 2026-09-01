@@ -21,6 +21,10 @@
   --app-compose-rows: 6;
   /* chevron glyph size in list rows — uses the h2 step of the ramp */
   --app-chevron-size: var(--hp-type-h2-size);
+  /* PRODUCT §2.12 opens the comment composer OVER the carousel, and the viewer
+     is the one kit surface that sits above the modal's own layer. This is the
+     layer above it — a stacking order, not a measurement. */
+  --app-z-over-viewer: 61;
 }
 
 /* ── focus (visible on web, per PRODUCT §4) ──────────────────────────────── */
@@ -40,6 +44,10 @@
 /* the toggle's hit box is transparent — ring the drawn track instead */
 .toggle:focus-visible { outline: none; box-shadow: none; }
 .toggle:focus-visible::before { border-color: var(--accent); box-shadow: 0 0 0 var(--app-focus-ring) var(--accent-soft); }
+
+/* §2.12 — the comment composer (and its Delete confirm) open over the
+   full-screen viewer, which is the one kit surface above the modal layer. */
+body[data-viewer] .modal-scrim { z-index: var(--app-z-over-viewer); }
 
 /* ── shell ───────────────────────────────────────────────────────────────── */
 
@@ -250,6 +258,66 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   right: var(--hp-space-pill-x);
   bottom: var(--hp-space-pill-x);
 }
+
+/* ── photo mosaic (PRODUCT §2.11.3) ──────────────────────────────────────── */
+
+/* "A post with more than one photo is a mosaic, not a stack — an album is one
+   thing, and reading it as one block is the point."
+
+   One grid, one arrangement per count (js/mosaic.js is the shared rule; the
+   areas below are the same table). radius-media and overflow live on the BLOCK,
+   so the radius lands on the outer corners only; the gutters are the grid gap
+   showing the `line` behind it, which is how four pictures read as one object.
+
+   The block's ratio is set inline from the album's own median photo aspect,
+   clamped between --ratio-mosaic-min and --ratio-mosaic-max, so one tall photo
+   cannot set the height. minmax(0, 1fr) columns and min-width: 0 tiles are what
+   make it REFLOW at the narrow end: without them a photo's intrinsic width is
+   the floor and the block overflows its card instead of shrinking. */
+.post-mosaic {
+  display: grid;
+  gap: var(--hp-border-width);
+  margin: var(--hp-space-row-gap) 0 0;
+  background: var(--line);
+  border-radius: var(--radius-media);
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+/* 2 — two tiles side by side, equal width */
+.post-mosaic[data-count='2'] {
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'a b';
+}
+/* 3 — one tall tile leading, two stacked beside it */
+.post-mosaic[data-count='3'] {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'a b' 'a c';
+}
+/* 4, and 5+ with the fourth carrying the count — two by two */
+.post-mosaic[data-count='4'] {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'a b' 'c d';
+}
+/* the tile is an HPMedia box with the block's radius taken off it: the corners
+   belong to the mosaic, not to the picture inside it */
+.post-mosaic-tile {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+  cursor: pointer;
+}
+.post-mosaic-tile img { width: 100%; height: 100%; object-fit: cover; }
+/* §2.11.3: `+N` in the pill style over a scrim on the fourth */
+.post-mosaic-scrim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+}
+.post-mosaic-more { pointer-events: none; }
 .post-file {
   display: flex;
   align-items: center;
@@ -448,7 +516,47 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  margin: 0;
 }
+
+/* §2.12 — tapping a comment selects it as the reply target. The row's own drawn
+   shape is well past touchMin, so rule 6 needs no overlay here; the controls
+   inside it are descendants and keep their own regions out of this one. */
+.comment[role='button'] { cursor: pointer; }
+.comment[data-selected] {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 var(--hp-space-tabs-pad) var(--accent-soft);
+  border-radius: var(--radius-input);
+}
+
+/* The target "lifts into a quoted line above the composer" — this row sits
+   between the thread and its one gold action, with the × that clears it. */
+.comment-quote-row {
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-row-gap);
+  margin: var(--hp-space-row-pad) 0;
+}
+.comment-quote-clear {
+  appearance: none;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: var(--type-h2);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--motion-color) ease;
+}
+.comment-quote-clear:hover { color: var(--ink); }
+
+/* The thread inside the carousel (§2.12): the same cards, on the ink surface. */
+.viewer-comments .comments { margin: 0 auto; max-width: var(--space-column-max); }
+.viewer-comments .comment-quote { color: var(--viewer-text); }
+.viewer-comments .comment-quote-clear { color: var(--viewer-text); }
+.viewer-comments .section-mark { color: var(--viewer-text); }
 
 .loading-row, .end-row {
   text-align: center;

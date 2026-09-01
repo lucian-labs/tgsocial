@@ -58,6 +58,14 @@ final class AudioPlayback {
         let key: String
         let title: String
         let duration: Int
+        /// The post this clip came from (PRODUCT §2.11): "tapping the row anywhere but its controls
+        /// opens the post the audio came from". Nil for audio inside a comment, which has no post
+        /// of its own to open.
+        let post: Post?
+
+        init(key: String, title: String, duration: Int, post: Post? = nil) {
+            self.key = key; self.title = title; self.duration = duration; self.post = post
+        }
     }
 
     private(set) var current: Item?

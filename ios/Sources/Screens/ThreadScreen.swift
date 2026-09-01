@@ -1,73 +1,155 @@
 // Screens — Thread (PRODUCT.md §2.12, PROTOCOL.md §6): the post at the top, then the indented
 // reply tree from the comment index, the comment composer, and delete-own-comment. Comments are
 // network-scoped by design: what you see is comments from your network.
+//
+// The thread is split into three pieces so the carousel (§2.12 "Comments in the carousel") can host
+// the same ones over the media instead of growing a second implementation:
+//
+//   `CommentTree`       the flattening rule — pure, no views, no model.
+//   `CommentThreadList` the section mark, the tree, the reply quote line and the composer's action.
+//   `CommentComposerModal` the composer itself, opened against a `CommentTargeting`.
+//
+// Reply-target selection lives in `AppModel.replySelection` rather than in either host, because it
+// is one selection: the same tap has to mean the same thing on the Thread screen and in the
+// carousel, and the composer has to read it from wherever it was made.
 
 import PhotosUI
 import SwiftUI
 
-struct ThreadScreen: View {
-    @Environment(AppModel.self) private var model
-    let post: Post
-
-    private var thread: [Comment] { model.threadComments(for: post) }
-
-    /// The tree, flattened for rendering: depth capped at 5, deeper replies shown flat (§6.2).
-    private var rows: [(comment: Comment, depth: Int)] {
-        let all = thread
-        let rootKeys = Set(model.commentTargets(for: post).compactMap(CommentCodec.targetKey))
+/// The `re:` chain (PROTOCOL §6.2) flattened for rendering: depth capped at 5, deeper replies shown
+/// flat. Pure, so `CommentThreadTests` can state the shape of a tree without a screen.
+enum CommentTree {
+    static func rows(comments: [Comment], roots: [String]) -> [(comment: Comment, depth: Int)] {
+        let rootKeys = Set(roots.compactMap(CommentCodec.targetKey))
         var out: [(Comment, Int)] = []
         var seen = Set<String>()
         func walk(_ c: Comment, depth: Int) {
             guard seen.insert(c.id).inserted else { return }
             out.append((c, min(depth, CommentCodec.maxDepth - 1)))
             guard let key = CommentCodec.targetKey(c.link) else { return }
-            for child in all where child.targetKey == key { walk(child, depth: depth + 1) }
+            for child in comments where child.targetKey == key { walk(child, depth: depth + 1) }
         }
-        for c in all where c.targetKey.map(rootKeys.contains) ?? false { walk(c, depth: 0) }
+        for c in comments where c.targetKey.map(rootKeys.contains) ?? false { walk(c, depth: 0) }
         // Anything whose parent never rendered (deleted, out of scan range) shows flat at the top level.
-        for c in all { walk(c, depth: 0) }
-        return out
+        for c in comments { walk(c, depth: 0) }
+        return out.map { (comment: $0.0, depth: $0.1) }
     }
+
+    static func replyCount(of comment: Comment, in comments: [Comment]) -> Int {
+        guard let key = CommentCodec.targetKey(comment.link) else { return 0 }
+        return comments.filter { $0.targetKey == key }.count
+    }
+}
+
+struct ThreadScreen: View {
+    @Environment(AppModel.self) private var model
+    let post: Post
 
     var body: some View {
         Screen(back: true, refresh: { await model.refreshComments(for: post) }) {
             PostCard(post: post, inThread: true) { username in
                 model.path.append(.feedChannel(username: username))
             }
-            HPSectionMark("Comments", count: thread.count)
-            if rows.isEmpty {
-                HPMuted("No comments from your network yet.")
-                    .padding(.bottom, HPTokens.Space.cardGap)
-            } else {
-                HPListCard {
-                    ForEach(Array(rows.enumerated()), id: \.element.comment.id) { i, row in
-                        CommentRow(comment: row.comment, depth: row.depth,
-                                   replyCount: replyCount(of: row.comment),
-                                   isLast: i == rows.count - 1)
-                    }
-                }
-            }
-            HPButton("Comment", style: .primary) { model.startComment(on: post) }
-                .padding(.top, HPTokens.Space.rowGap)
+            CommentThreadList(post: post, roots: model.commentTargets(for: post))
         }
         // §6.3: the thread refreshes its comment index for the visible target when opened,
         // deepening the scan of channels that have not yet reached this post's date.
         .task(id: post.id) { await model.refreshComments(for: post) }
-    }
-
-    private func replyCount(of comment: Comment) -> Int {
-        guard let key = CommentCodec.targetKey(comment.link) else { return 0 }
-        return thread.filter { $0.targetKey == key }.count
+        // A selection belongs to the thread it was made in; leaving takes it with you.
+        .onDisappear { model.clearReply() }
     }
 }
 
-/// One comment in the tree. Replies indent one level (12pt) behind a hairline gutter.
+/// The thread body: `COMMENTS · n`, the tree, the reply quote line, and the gold action. Shared by
+/// the Thread screen and by the carousel's comment sheet (§2.12) — the carousel just hosts it over
+/// the media.
+struct CommentThreadList: View {
+    @Environment(AppModel.self) private var model
+    let post: Post
+    /// The links this thread is about: every album item on the Thread screen, and just the item the
+    /// carousel is showing when the carousel hosts it.
+    let roots: [String]
+
+    private var thread: [Comment] { model.threadComments(targets: roots) }
+    private var rows: [(comment: Comment, depth: Int)] { CommentTree.rows(comments: thread, roots: roots) }
+
+    var body: some View {
+        HPSectionMark("Comments", count: thread.count)
+        if rows.isEmpty {
+            HPMuted("No comments from your network yet.")
+                .padding(.bottom, HPTokens.Space.cardGap)
+        } else {
+            HPListCard {
+                ForEach(Array(rows.enumerated()), id: \.element.comment.id) { i, row in
+                    CommentRow(comment: row.comment, depth: row.depth,
+                               replyCount: CommentTree.replyCount(of: row.comment, in: thread),
+                               isLast: i == rows.count - 1,
+                               isSelected: model.replySelection?.id == row.comment.id,
+                               onSelect: { model.selectReply(row.comment) },
+                               onReply: { model.startReply(to: row.comment, on: post) })
+                }
+            }
+        }
+        // §2.12: the selected comment "lifts into a quoted line above the composer".
+        ReplyQuoteBar(target: model.replySelection.map {
+            CommentTarget(link: $0.link, quoteTitle: $0.ownerTitle, quoteText: $0.body)
+        }, onClear: { model.clearReply() })
+        HPButton("Comment", style: .primary) {
+            model.startComment(on: post, itemLink: roots.first)
+        }
+        .padding(.top, HPTokens.Space.rowGap)
+    }
+}
+
+/// The selected reply target, quoted above the composer's action, with the × that clears it
+/// (PRODUCT §2.12). Nothing when the reply goes to the post.
+///
+/// It takes the target and the clear action rather than reading `AppModel`, so `ReplyTargetRegionTests`
+/// can measure the shipped bar against the shipped `Comment` button underneath it.
+struct ReplyQuoteBar: View {
+    let target: CommentTarget?
+    let onClear: () -> Void
+    /// Reported under `hpMeasureTouchTargets` so the assembled-thread test can name the regions.
+    static let quoteRegion = "reply quote"
+    static let clearRegion = "clear reply"
+
+    var body: some View {
+        if let target {
+            HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
+                HPMonoSmall(target.quoteLine)
+                    .lineLimit(2)
+                Spacer(minLength: HPTokens.Space.rowGap)
+                Button(action: onClear) {
+                    Text("\u{00D7}")
+                        .hpStyle(HPType.totals, color: HPTokens.Colors.muted)
+                        .hpTouchTarget()
+                        .hpTouchRegion(Self.clearRegion)
+                }
+                .buttonStyle(HPPressStyle())
+                .accessibilityLabel("Clear reply target")
+            }
+            .padding(.horizontal, HPTokens.Space.rowPad)
+            .padding(.vertical, HPTokens.Space.pillY)
+            .background(RoundedRectangle(cornerRadius: HPTokens.Radius.input, style: .continuous)
+                .fill(HPTokens.Colors.accentSoft))
+            .hpTouchRegion(Self.quoteRegion)
+            .padding(.top, HPTokens.Space.rowGap)
+            .animation(HPMotion.color, value: target)
+        }
+    }
+}
+
+/// One comment in the tree. Replies indent one level (12pt) behind a hairline gutter. Tapping the
+/// row selects it as the reply target (§2.12); tapping it again clears it.
 struct CommentRow: View {
     @Environment(AppModel.self) private var model
     let comment: Comment
     let depth: Int
     let replyCount: Int
     let isLast: Bool
+    var isSelected: Bool = false
+    var onSelect: (() -> Void)?
+    var onReply: (() -> Void)?
 
     static let indent: CGFloat = 12
 
@@ -83,12 +165,19 @@ struct CommentRow: View {
         }
         .padding(.vertical, HPTokens.Space.rowPad)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? HPTokens.Colors.accentSoft : .clear)
         .overlay(alignment: .bottom) {
             if !isLast { Rectangle().fill(HPTokens.Colors.line).frame(height: HPTokens.borderWidth) }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect?() }
         .onLongPressGesture {
             guard comment.isMine, !comment.isPending else { return }
             model.modal = .deleteComment(comment)
+        }
+        .animation(HPMotion.color, value: isSelected)
+        .accessibilityAction(named: isSelected ? "Clear reply target" : "Reply to \(comment.ownerTitle)") {
+            onSelect?()
         }
     }
 
@@ -122,7 +211,9 @@ struct CommentRow: View {
                     if replyCount > 0 {
                         HPMonoSmall("\(replyCount) repl\(replyCount == 1 ? "y" : "ies")", color: HPTokens.Colors.faint)
                     }
-                    HPButton("Reply", style: .ghost, size: .small) { model.startReply(to: comment) }
+                    if let onReply {
+                        HPButton("Reply", style: .ghost, size: .small, action: onReply)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -132,13 +223,19 @@ struct CommentRow: View {
 
 /// The comment composer (PRODUCT §2.12): the Compose card with a muted quote line of the target.
 /// The first comment ever shows the comments-channel card first.
+///
+/// It takes a `CommentTargeting` and not a target, so the quote's × can drop the reply here — the
+/// composer stays open, the placeholder goes back to `Say it.`, and the `re:` line is rewritten
+/// from the post's link, all without reopening anything.
 struct CommentComposerModal: View {
     @Environment(AppModel.self) private var model
-    let target: CommentTarget
+    let targeting: CommentTargeting
     @State private var text = ""
     @State private var pickerItem: PhotosPickerItem?
     @State private var photoPath: String?
     @State private var posting = false
+    /// Cleared in place by the quote's ×; starts from whatever was selected when this opened.
+    @State private var replyCleared = false
 
     // Channel creation (first comment ever).
     @State private var channelName = ""
@@ -148,6 +245,12 @@ struct CommentComposerModal: View {
     @State private var checkTask: Task<Void, Never>?
 
     private var needsChannel: Bool { model.myCard?.replies == nil }
+
+    /// What the comment will point at right now — and the only thing the `re:` line is written from.
+    private var live: CommentTargeting {
+        replyCleared ? CommentTargeting(post: targeting.post) : targeting
+    }
+    private var target: CommentTarget { live.active }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -219,19 +322,27 @@ struct CommentComposerModal: View {
 
     // MARK: The composer
 
-    private var quoteLine: String {
-        var quote = target.quoteText.replacingOccurrences(of: "\n", with: " ")
-        if quote.count > 80 { quote = String(quote.prefix(80)) + "\u{2026}" }
-        let head = "re: \(target.quoteTitle)"
-        return quote.isEmpty ? head : head + " \u{2014} '\(quote)'"
-    }
-
     private var composer: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HPMuted(quoteLine)
-                .lineLimit(2)
-                .padding(.bottom, HPTokens.Space.rowPad)
-            HPTextField(nil, text: $text, placeholder: "Say it.", kind: .multiline(rows: HPMetric.composeRows))
+            HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
+                HPMuted(target.quoteLine)
+                    .lineLimit(2)
+                if live.isReply {
+                    Spacer(minLength: HPTokens.Space.rowGap)
+                    Button {
+                        replyCleared = true
+                        model.clearReply()
+                    } label: {
+                        Text("\u{00D7}")
+                            .hpStyle(HPType.totals, color: HPTokens.Colors.muted)
+                            .hpTouchTarget()
+                    }
+                    .buttonStyle(HPPressStyle())
+                    .accessibilityLabel("Clear reply target")
+                }
+            }
+            .padding(.bottom, HPTokens.Space.rowPad)
+            HPTextField(nil, text: $text, placeholder: live.placeholder, kind: .multiline(rows: HPMetric.composeRows))
             HStack(spacing: HPTokens.Space.rowGap) {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Text(photoPath == nil ? "Add Photo" : "Photo added")
@@ -254,6 +365,7 @@ struct CommentComposerModal: View {
                 HPButton("Cancel", style: .ghost) { model.modal = nil }
             }
         }
+        .animation(HPMotion.color, value: replyCleared)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             Task {
@@ -283,8 +395,10 @@ struct CommentComposerModal: View {
         // Optimistic (PRODUCT §2.12): the modal closes as the pending comment appears in the thread.
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let photo = photoPath
+        let sendTo = target
         model.modal = nil
-        Task { _ = await model.postComment(text: body, photoPath: photo, target: target) }
+        model.clearReply()
+        Task { _ = await model.postComment(text: body, photoPath: photo, target: sendTo) }
         posting = false
     }
 }

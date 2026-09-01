@@ -85,6 +85,9 @@
   --space-row-pad: 14px;
   --space-touch-min: 40px;
   --space-strip-height: 44px;
+  --space-mini-wave-width: 96px;
+  --space-mini-wave-height: 20px;
+  --space-viewer-mini-height: 120px;
   --space-kebab-dot: 4px;
   --space-kebab-dot-gap: 3px;
   --space-menu-width: 240px;
@@ -94,6 +97,8 @@
   --radius-input: 12px;
   --radius-media: 12px;
   --border-width: 1px;
+  --ratio-mosaic-min: 0.8;
+  --ratio-mosaic-max: 1.9;
   --shadow-contact: 0px 1px 2px 0px rgba(38, 35, 25, 0.04);
   --shadow-cast: 0px 14px 34px -18px rgba(38, 35, 25, 0.18);
   --shadow-cast-modal: 0px 14px 34px -18px rgba(38, 35, 25, 0.27);
@@ -919,7 +924,10 @@ h3 .mark-count {
   display: flex;
   align-items: center;
   gap: var(--space-row-pad);
-  max-width: 100%;
+  /* §2.11.2 put a waveform in this row, so it spans the column like the tab
+     bar under it rather than hugging its own text. */
+  width: 100%;
+  max-width: var(--space-column-max);
   min-height: var(--space-touch-min);
   padding: calc(var(--space-card-gap) / 4) calc(var(--space-card-gap) / 4) calc(var(--space-card-gap) / 4) var(--space-row-pad);
   flex-direction: row-reverse;
@@ -937,8 +945,13 @@ h3 .mark-count {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  /* the waveform takes the slack now; the title shrinks to its ellipsis */
+  flex: 0 1 auto;
 }
+/* Nothing but the play button and the waveform is a control in this row — the
+   rest of it opens the post the audio came from (PRODUCT §2.11). */
+.now-playing[role='button'] { cursor: pointer; }
+.now-playing .mini-wave { flex: 1 1 var(--space-mini-wave-width); min-width: var(--space-touch-min); }
 
 /* ── HPPlayerRow ─────────────────────────────────────────────────────────── */
 
@@ -1150,6 +1163,38 @@ h3 .mark-count {
 .viewer-slide .strip { background: transparent; }
 .viewer-slide .strip { --strip-unplayed: var(--viewer-text); }
 
+/* ── HPMiniWave: the dock's single-line waveform (PRODUCT 2.11.2) ────────── */
+
+/* One polyline through the envelope's column peaks — a LINE drawing, not the
+   strip's mirrored filled silhouette and not the spectrum. Hairline weight,
+   muted ahead of the playhead and accent behind it, nothing under the curve.
+
+   The canvas colours are declared here rather than baked into the script, for
+   the same reason HPStrip's are: a canvas needs a concrete colour string and
+   rule 1 says component code carries no hex, so house-pour.js reads these back
+   out of the cascade (tokenValue).
+
+   It paints --space-mini-wave-height tall, which is UNDER touchMin, so rule 6's region
+   is an overlay (.hit-min) that reaches past the painted bounds instead of
+   inflating the dock row. The row must not clip its overflow or it clips the
+   region away — .now-playing does not. */
+.mini-wave {
+  --mini-wave-played: var(--accent);
+  --mini-wave-ahead: var(--muted);
+  --mini-wave-ridge: var(--border-width);
+  position: relative;
+  height: var(--space-mini-wave-height);
+  min-width: var(--space-touch-min);
+  cursor: pointer;
+  touch-action: none;
+}
+.mini-wave-line {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 /* ── HPRing: determinate gold download progress, tap to cancel ───────────── */
 
 .ring {
@@ -1343,3 +1388,43 @@ h3 .mark-count {
 }
 .viewer-caption:empty { display: none; }
 .viewer .ring { position: static; }
+
+/* ── comments inside the carousel (PRODUCT 2.12) ─────────────────────────── */
+
+/* "Opening it does not leave the media": the stage stops filling the sheet and
+   becomes a --space-viewer-mini-height strip pinned under the chrome, with the thread
+   taking the rest. Nothing is unmounted, so the current item keeps playing and
+   paging still moves it — the stage is simply smaller. */
+.viewer-comments { display: none; }
+.viewer.comments-open .viewer-stage {
+  flex: none;
+  height: var(--space-viewer-mini-height);
+}
+.viewer.comments-open .viewer-caption { display: none; }
+.viewer.comments-open .viewer-comments {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-card-gap) var(--space-column-side) calc(env(safe-area-inset-bottom, 0px) + var(--space-card-gap));
+  color: var(--viewer-text);
+  /* the viewer locks touch and selection for its gestures; the thread is a
+     document again inside it */
+  touch-action: pan-y;
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* The mini view is tappable to restore full-screen (2.12). A transparent
+   overlay, so the region is the whole picture rather than a control drawn on
+   top of it. */
+.viewer-restore {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+}
+.viewer:not(.comments-open) .viewer-restore { display: none; }

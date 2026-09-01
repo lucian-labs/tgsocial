@@ -149,6 +149,25 @@ object MediaBudget {
      */
     fun cardPx(columnWidthPx: Int): Int = columnWidthPx.coerceIn(THUMB_PX + 1, MAX_DECODE_PX)
 
+    /**
+     * PRODUCT §2.11.3 — the decode width of a **mosaic tile**.
+     *
+     * A tile is a thumbnail: the widest one any mosaic draws is the 3-up leading tile, and every mosaic is
+     * two columns, so no tile ever needs more than half the column plus the gutter it swallows. Asking for
+     * the card width instead — which is what [bucket] alone would round a tile request up to — decodes four
+     * pictures at four times the pixels they are drawn at, which for a 4-photo album is more bytes than the
+     * whole [imageCacheBytes] budget on a small device. The mosaic is a *summary*; the carousel is where the
+     * full rendition belongs.
+     *
+     * Reached only by a caller that asks for this width **by value** (see `MediaRepo.bucket`), exactly like
+     * the zoom rendition, so an ordinary card request that happens to land near it cannot fall in.
+     */
+    fun mosaicTilePx(columnWidthPx: Int): Int =
+        (cardPx(columnWidthPx) / MOSAIC_COLUMNS).coerceIn(AVATAR_PX + 1, MAX_DECODE_PX)
+
+    /** Every mosaic arrangement in §2.11.3 is two columns wide (`HPMosaic.COLUMNS`). */
+    const val MOSAIC_COLUMNS = 2
+
     /** One step up for pinch-zoom in the viewer, which is full-bleed and not column-capped. */
     fun zoomPx(displayWidthPx: Int): Int =
         (displayWidthPx.coerceIn(THUMB_PX + 1, MAX_DECODE_PX) * 2).coerceAtMost(MAX_DECODE_PX)

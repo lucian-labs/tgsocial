@@ -22,6 +22,11 @@ struct RootView: View {
             // Full-screen media viewer (PRODUCT §2.11): covers the topbar and the tab bar.
             if let request = model.viewer {
                 ViewerOverlay(request: request)
+                    // A new opening is a new view: the page, the drag and the comments toggle live in
+                    // ViewerOverlay's @State, which survives a request → request change otherwise. That
+                    // change is a real path (§2.12 puts a comment's own media inside the open viewer),
+                    // and without this the second viewer keeps the first one's page.
+                    .id(request.openingID)
                     .transition(.opacity)
             }
         }
@@ -32,7 +37,7 @@ struct RootView: View {
             case .editCard: EditCardModal()
             case .signOut: SignOutModal()
             case .status: StatusSheetModal()
-            case .comment(let target): CommentComposerModal(target: target)
+            case .comment(let targeting): CommentComposerModal(targeting: targeting)
             case .deleteComment(let comment): DeleteCommentModal(comment: comment)
             case .postSheet(let post): PostSheetModal(post: post)
             case nil: EmptyView()
@@ -102,9 +107,18 @@ struct BottomChrome: View {
         if model.viewer == nil, showsTabs || showsDock {
             VStack(spacing: HPTokens.Space.rowGap) {
                 if let item = model.audio.current {
+                    // §2.11.2: the dock's mini waveform is a VIEW of the strip's analysis, so it is
+                    // handed the clip's identity and nothing else — no path, no duration, nothing
+                    // it could start a second analysis with.
                     HPNowPlaying(title: item.title,
                                  elapsed: PostTime.duration(seconds: Int(model.audio.elapsed)),
-                                 playing: model.audio.isPlaying) { model.audio.toggle() }
+                                 playing: model.audio.isPlaying,
+                                 onToggle: { model.audio.toggle() },
+                                 // §2.11: tapping the row anywhere but its controls opens the post.
+                                 onOpen: item.post.map { post in { model.openPost(post) } },
+                                 playRegion: DockRegion.play) {
+                        DockWaveform(key: item.key, title: item.title)
+                    }
                 }
                 if showsTabs {
                     HPFloatingTabs(items: Tab.allCases, selected: tabSelection) { $0.label }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -148,8 +149,18 @@ fun HPPlayerRow(
 }
 
 /**
- * PRODUCT §2.11 — the slim now-playing row docked above the floating tab bar while audio plays: title, play/pause,
- * elapsed in the serif, and a ghost `Stop`. A raised `panel` pill like the bar it sits on.
+ * PRODUCT §2.11 / §2.11.2 — the slim now-playing row docked above the floating tab bar while audio plays:
+ * play/pause, title, **the mini waveform**, elapsed in the serif, and a ghost `Stop`. A raised `panel` pill
+ * like the bar it sits on.
+ *
+ * Two hit-target facts about this row (COMPONENTS rule 6). The play circle and the waveform own their space
+ * and simply *are* `touchMin` tall — the row is a 40dp circle tall already, so neither is inflated and
+ * neither borrows from the other, they sit side by side. And the row itself is a control: tapping it
+ * anywhere but those two opens the post the audio came from (§2.11), which works because Compose offers a
+ * touch to the children first and only the row's own shape is left over.
+ *
+ * [peaks] is the strip's envelope resampled to the waveform's width ([HPEnvelope.peaks]) — never a second
+ * analysis (§2.11.2). Null or too short draws the flat line.
  */
 @Composable
 fun HPNowPlaying(
@@ -159,6 +170,11 @@ fun HPNowPlaying(
     onToggle: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
+    peaks: FloatArray? = null,
+    progress: Float = 0f,
+    onSeek: ((Float) -> Unit)? = null,
+    onOpen: (() -> Unit)? = null,
+    onWaveMeasured: (widthPx: Int) -> Unit = {},
 ) {
     val shape = RoundedCornerShape(HPTokens.Radius.pill)
     Row(
@@ -167,6 +183,18 @@ fun HPNowPlaying(
             .hpShadow(HPTokens.Radius.pill, HPTokens.Shadow.contact, HPTokens.Shadow.cast)
             .background(HPTokens.Colors.panel, shape)
             .border(HPTokens.BORDER_WIDTH.dp, HPTokens.Colors.line, shape)
+            .then(
+                // A dock with nowhere to go is not a button that does nothing: the row's own tap exists
+                // only when the caller has a post to open.
+                if (onOpen == null) Modifier
+                else Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Button,
+                    onClickLabel = "Open post",
+                    onClick = onOpen,
+                ),
+            )
             .padding(start = HPTokens.Space.tabsPad, end = HPTokens.Space.rowGap, top = HPTokens.Space.tabsPad, bottom = HPTokens.Space.tabsPad)
             .semantics { contentDescription = "Now playing" },
         verticalAlignment = Alignment.CenterVertically,
@@ -174,6 +202,16 @@ fun HPNowPlaying(
     ) {
         HPPlayCircle(playing, onToggle)
         HPBody(title, Modifier.weight(1f), strong = true, maxLines = 1)
+        // The waveform is the flexible member of the row alongside the title: a long title truncates
+        // against the waveform's share rather than squeezing it out of existence (`miniWaveWidth` is the
+        // width that share is sized to hold).
+        HPMiniWave(
+            peaks = peaks,
+            progress = progress,
+            modifier = Modifier.widthIn(min = HPTokens.Space.miniWaveWidth).weight(1f),
+            onSeek = onSeek,
+            onMeasured = onWaveMeasured,
+        )
         HPTime(elapsed, color = HPTokens.Colors.muted)
         Spacer(Modifier.width(HPTokens.Space.tabsGap))
         HPButton("Stop", onStop, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL)

@@ -131,6 +131,9 @@ object HPTokens {
     val rowGap = 10.dp
     val touchMin = 40.dp
     val stripHeight = 44.dp
+    val miniWaveWidth = 96.dp
+    val miniWaveHeight = 20.dp
+    val viewerMiniHeight = 120.dp
     val kebabDot = 4.dp
     val kebabDotGap = 3.dp
     val menuWidth = 240.dp
@@ -138,6 +141,11 @@ object HPTokens {
     val avatarRow = 36.dp
     val avatarProfile = 72.dp
     val bottomSafe = 96.dp
+    }
+    /** Unitless shape constants (width / height) — PRODUCT 2.11.3's mosaic block ratio. */
+    object Ratio {
+    const val mosaicMin = 0.8f
+    const val mosaicMax = 1.9f
     }
     object Shadow {
     val contact = HPShadow(Color(0x0A262319), x = 0.dp, y = 1.dp, blur = 2.dp, spread = 0.dp)

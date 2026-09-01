@@ -20,6 +20,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,6 +40,7 @@ import ca.lucianlabs.housepour.HPBackdrop
 import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
+import ca.lucianlabs.housepour.HPEnvelope
 import ca.lucianlabs.housepour.HPFloatingTabs
 import ca.lucianlabs.housepour.HPModal
 import ca.lucianlabs.housepour.HPNowPlaying
@@ -176,7 +178,14 @@ private fun Shell(vm: AppViewModel) {
             )
         }
         // PRODUCT §2.11 — the full-screen viewer covers the shell: topbar and floating tab bar are gone while it is up.
-        viewer?.let { PostViewer(vm, it) }
+        //
+        // Keyed on the post: opening a viewer *from* a viewer is a real path (§2.12 puts a comment's own mosaic
+        // inside the comments sheet), and `_viewer` is a conflated StateFlow, so that arrives as a non-null →
+        // non-null change with no null frame between. Without the key the composition slot survives, and with it
+        // the pager — whose `initialPage` rememberSaveable is keyed on an empty inputs array and so is read once
+        // per slot. The second viewer would then open on the first one's page, silently, and keep its zoom and
+        // dismiss state. The key drops all of it, which is what a new viewer means.
+        viewer?.let { key(it.post.key) { PostViewer(vm, it) } }
     }
 
     // One modal host that stays composed: it fades in when a sheet opens and keeps the last sheet's content
@@ -228,12 +237,26 @@ private fun BottomOverlay(
                     .padding(horizontal = HPTokens.Space.columnSide)
                     .padding(bottom = if (tabsVisible) HPTokens.Space.rowGap else nav + HPTokens.Space.cardGap),
             ) {
+                // PRODUCT §2.11.2 — the dock's waveform is a VIEW of the analysis the strip already did:
+                // the envelope is looked up by clip, never by geometry, so nothing on this path can start an
+                // analysis. A clip with no envelope (never analysed, or degraded to the hairline) resamples
+                // to null and the line draws flat.
+                val ready by app.strips.ready.collectAsStateWithLifecycle()
+                var waveWidthPx by remember { mutableStateOf(0) }
+                val envelope = remember(playing.uniqueId, ready) { app.strips.envelope(playing.uniqueId) }
+                val peaks = remember(envelope, waveWidthPx) { HPEnvelope.peaks(envelope, waveWidthPx) }
                 HPNowPlaying(
                     title = playing.title,
                     playing = playing.playing,
                     elapsed = Format.duration((playing.positionMs / 1000).toInt()),
                     onToggle = { app.playback.toggleCurrent() },
                     onStop = { app.playback.stopAudio() },
+                    peaks = peaks,
+                    progress = playing.progress,
+                    onSeek = { app.playback.seekAudio(it) },
+                    // "Tapping the row anywhere but its controls opens the post the audio came from" (§2.11).
+                    onOpen = playing.post?.let { post -> { vm.openThread(post) } },
+                    onWaveMeasured = { waveWidthPx = it },
                 )
             }
         }

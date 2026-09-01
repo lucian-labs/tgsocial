@@ -64,6 +64,7 @@ import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
 import ca.lucianlabs.housepour.HPDownloadRing
 import ca.lucianlabs.housepour.HPMonoSmall
+import ca.lucianlabs.housepour.HPMosaic
 import ca.lucianlabs.housepour.HPMuted
 import ca.lucianlabs.housepour.HPPill
 import ca.lucianlabs.housepour.HPPillTone
@@ -87,6 +88,7 @@ import ca.lucianlabs.tgsocial.repo.FileState
 import ca.lucianlabs.tgsocial.repo.MediaRepo
 import ca.lucianlabs.tgsocial.ui.components.openLink
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
+import ca.lucianlabs.tgsocial.ui.components.rememberTdImagePx
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
@@ -94,17 +96,25 @@ import java.util.Locale
 @Composable
 fun rememberTgApp(): TgApp = LocalContext.current.applicationContext as TgApp
 
+/**
+ * `as?`, not `as`: the layout assertions boot the stock Application rather than `TgApp` (TDLib has no
+ * business in a measure pass), and no app simply means no repo — the same state as a file that has not
+ * arrived yet. [rememberTdImagePx] has taken this shape since the hit-region harness landed.
+ */
+@Composable
+fun rememberTgAppOrNull(): TgApp? = LocalContext.current.applicationContext as? TgApp
+
 @Composable
 fun rememberFileState(ref: FileRef?): FileState? {
-    val app = rememberTgApp()
+    val app = rememberTgAppOrNull() ?: return null
     val files by app.media.files.collectAsStateWithLifecycle()
     return ref?.let { files[it.id] }
 }
 
 @Composable
 fun rememberMini(b64: String?): ImageBitmap? {
-    val app = rememberTgApp()
-    return remember(b64) { app.media.mini(b64) }
+    val app = rememberTgAppOrNull()
+    return remember(b64, app) { app?.media?.mini(b64) }
 }
 
 /** Document kinds the in-app viewer opens (PRODUCT §2.11); everything else downloads then offers Share / Save. */
@@ -140,16 +150,28 @@ private fun aspect(w: Int, h: Int): Float = if (w > 0 && h > 0) (w.toFloat() / h
 @OptIn(UnstableApi::class)
 @Composable
 fun MediaItems(post: Post, onOpenViewer: (Int) -> Unit) {
+    // PRODUCT §2.11.3 — "a post with more than one photo is a mosaic, not a stack". The album's photos are
+    // drawn ONCE, as one block, in the place the first of them held; the rest of the post's media keeps its
+    // own rows. The pair is (index in `post.media`, photo), because a tile's tap opens the carousel at that
+    // item's page and the page numbering is the post's, not the album's.
+    val photos = remember(post.media) {
+        post.media.withIndex().mapNotNull { (i, m) -> (m as? PostMedia.Photo)?.let { i to it } }
+    }
+    val mosaic = photos.size > 1
     Column(verticalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap)) {
         post.media.forEachIndexed { index, media ->
             val key = "${post.key}#$index"
+            if (mosaic && media is PostMedia.Photo) {
+                if (index == photos.first().first) PhotoMosaic(photos, onOpenViewer)
+                return@forEachIndexed
+            }
             when (media) {
                 is PostMedia.Photo -> InlinePhoto(media) { onOpenViewer(index) }
                 is PostMedia.Video -> InlineVideo(key, media) { onOpenViewer(index) }
                 is PostMedia.Animation -> InlineAnimation(key, media) { onOpenViewer(index) }
                 is PostMedia.VideoNote -> InlineVideoNote(key, media) { onOpenViewer(index) }
-                is PostMedia.Audio -> AudioRow(key, media)
-                is PostMedia.Voice -> VoiceRow(key, post.sourceTitle, media)
+                is PostMedia.Audio -> AudioRow(key, media, post)
+                is PostMedia.Voice -> VoiceRow(key, post.sourceTitle, media, post)
                 is PostMedia.Document -> DocumentRow(media) { onOpenViewer(index) }
                 is PostMedia.Sticker -> InlineSticker(media)
                 is PostMedia.Summary -> SummaryRow(media.text, post)
@@ -228,6 +250,47 @@ private fun InlinePhoto(media: PostMedia.Photo, onTap: () -> Unit) {
         if (image == null && state?.active == true) {
             val app = rememberTgApp()
             HPDownloadRing(state.progress, onCancel = { app.media.cancel(media.file) })
+        }
+    }
+}
+
+/**
+ * PRODUCT §2.11.3 — the album as one object. [HPMosaic] owns the arrangement and the geometry; this owns
+ * what goes in a cell, which is the memory half of the section.
+ *
+ * **Tiles are thumbnails.** Each asks the byte-budgeted cache for `tileWidthPx` — half the column, the widest
+ * any tile is drawn at — *by value*, which is the only way to reach that decode bucket (`MediaRepo.bucket`).
+ * The alternative is what a naive mosaic does: four card-width decodes for four pictures drawn at a quarter
+ * of the area each, which on a small device is more bytes for one post than the whole image budget. Past four
+ * photos nothing further is even requested — the fifth onward live behind the `+N` and are decoded when the
+ * carousel reaches them.
+ */
+@Composable
+private fun PhotoMosaic(photos: List<Pair<Int, PostMedia.Photo>>, onOpenViewer: (Int) -> Unit) {
+    val aspects = remember(photos) {
+        photos.map { (_, p) -> if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height else 0f }
+    }
+    HPMosaic(
+        count = photos.size,
+        aspects = aspects,
+        // The carousel opens at the tile that was tapped (§2.11.3), which is that photo's page in the post.
+        onTap = { tile -> photos.getOrNull(tile)?.let { onOpenViewer(it.first) } },
+    ) { tile, _, _ ->
+        photos.getOrNull(tile)?.second?.let { MosaicTile(it) }
+    }
+}
+
+/** One cell: the blur-up ground under a tile-sized decode, cropped to cover (§2.11.3). */
+@Composable
+private fun MosaicTile(photo: PostMedia.Photo) {
+    val app = rememberTgAppOrNull()
+    val tilePx = app?.media?.tileWidthPx ?: 0
+    val image = rememberTdImagePx(photo.file, tilePx)
+    val state = rememberFileState(photo.file)
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        MediaGround(rememberMini(photo.mini), image)
+        if (image == null && state?.active == true && app != null) {
+            HPDownloadRing(state.progress, onCancel = { app.media.cancel(photo.file) })
         }
     }
 }
@@ -611,7 +674,7 @@ private fun rememberStrip(file: FileRef, durationSeconds: Int, fallbackEnvelope:
 }
 
 @Composable
-private fun AudioRow(key: String, media: PostMedia.Audio) {
+private fun AudioRow(key: String, media: PostMedia.Audio, post: Post) {
     val app = rememberTgApp()
     val now by app.playback.now.collectAsStateWithLifecycle()
     val state = rememberFileState(media.file)
@@ -625,10 +688,10 @@ private fun AudioRow(key: String, media: PostMedia.Audio) {
         progress = if (isThis) now?.progress ?: 0f else 0f,
         elapsed = Format.duration(if (isThis) ((now?.positionMs ?: 0) / 1000).toInt() else 0),
         total = Format.duration(media.durationSeconds),
-        onToggle = { app.playback.toggleAudio(key, title, media.file, media.mimeType, media.durationSeconds) },
+        onToggle = { app.playback.toggleAudio(key, title, media.file, media.mimeType, media.durationSeconds, post) },
         onSeek = { fraction ->
             if (isThis) app.playback.seekAudio(fraction)
-            else app.playback.toggleAudio(key, title, media.file, media.mimeType, media.durationSeconds)
+            else app.playback.toggleAudio(key, title, media.file, media.mimeType, media.durationSeconds, post)
         },
         strip = strip,
         downloadProgress = state?.takeIf { it.active && !it.done }?.progress,
@@ -637,7 +700,7 @@ private fun AudioRow(key: String, media: PostMedia.Audio) {
 }
 
 @Composable
-private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice) {
+private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice, post: Post) {
     val app = rememberTgApp()
     val now by app.playback.now.collectAsStateWithLifecycle()
     val state = rememberFileState(media.file)
@@ -650,6 +713,10 @@ private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice) {
         resample(Waveform.decode(raw ?: ByteArray(0)), 128).toFloatArray().takeIf { it.size >= 2 }
     }
     val (strip, onStripVisible) = rememberStrip(media.file, media.durationSeconds, samples)
+    // PRODUCT §2.11.2 — the dock draws the same envelope this row does. A voice note's arrives free with the
+    // message, so offer it: an analysed envelope still wins, this only keeps the dock from drawing a flat
+    // line for a clip whose shape is already known.
+    LaunchedEffect(media.file.uniqueId, samples) { samples?.let { app.strips.offerEnvelope(media.file.uniqueId, it) } }
     HPPlayerRow(
         title = sourceTitle,
         subtitle = null,
@@ -657,10 +724,10 @@ private fun VoiceRow(key: String, sourceTitle: String, media: PostMedia.Voice) {
         progress = if (isThis) now?.progress ?: 0f else 0f,
         elapsed = Format.duration(if (isThis) ((now?.positionMs ?: 0) / 1000).toInt() else 0),
         total = Format.duration(media.durationSeconds),
-        onToggle = { app.playback.toggleAudio(key, sourceTitle, media.file, media.mimeType, media.durationSeconds) },
+        onToggle = { app.playback.toggleAudio(key, sourceTitle, media.file, media.mimeType, media.durationSeconds, post) },
         onSeek = { fraction ->
             if (isThis) app.playback.seekAudio(fraction)
-            else app.playback.toggleAudio(key, sourceTitle, media.file, media.mimeType, media.durationSeconds)
+            else app.playback.toggleAudio(key, sourceTitle, media.file, media.mimeType, media.durationSeconds, post)
         },
         strip = strip,
         downloadProgress = state?.takeIf { it.active && !it.done }?.progress,

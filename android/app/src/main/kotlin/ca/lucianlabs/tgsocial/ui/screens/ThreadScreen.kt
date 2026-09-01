@@ -1,8 +1,9 @@
 package ca.lucianlabs.tgsocial.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -32,6 +35,7 @@ import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
 import ca.lucianlabs.housepour.HPCard
+import ca.lucianlabs.housepour.HPHitTarget
 import ca.lucianlabs.housepour.HPMonoSmall
 import ca.lucianlabs.housepour.HPMuted
 import ca.lucianlabs.housepour.HPPill
@@ -42,6 +46,7 @@ import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.CommentNode
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.Format
+import ca.lucianlabs.tgsocial.protocol.ReplyTarget
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Screen
 import ca.lucianlabs.tgsocial.ui.Sheet
@@ -57,9 +62,13 @@ private const val MAX_DEPTH = 5
 /**
  * PRODUCT §2.12 — the thread screen: the post at the top (full card, media playable), then the indented reply
  * tree, then the screen's one gold action.
+ *
+ * [includePost] is what lets the **carousel** host this thread over the media (§2.12) without a second
+ * implementation: there the post's media is already on screen as the mini view, so the card at the top would
+ * be the same picture twice. Everything else — the tree, the selection, the composer — is this code.
  */
-fun LazyListScope.ThreadItems(vm: AppViewModel, post: Post) {
-    item(key = "thread-post") {
+fun LazyListScope.ThreadItems(vm: AppViewModel, post: Post, includePost: Boolean = true) {
+    if (includePost) item(key = "thread-post") {
         val index by vm.commentIndex.collectAsStateWithLifecycle()
         Box(Modifier.columnItem()) {
             PostCard(
@@ -68,7 +77,7 @@ fun LazyListScope.ThreadItems(vm: AppViewModel, post: Post) {
                 onOpenChannel = { vm.push(Screen.FeedChannel(it)) },
                 onOpenProfile = { vm.push(Screen.Profile(it)) },
                 onOpenThread = {},
-                onComment = { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) },
+                onComment = { vm.openCommentComposer(post) },
                 onOpenViewer = { vm.openViewer(post, it) },
                 // The sheet is for posts — the post atop a thread included (PRODUCT §2.3).
                 onLongPress = { vm.openSheet(Sheet.PostSheet(post)) },
@@ -90,25 +99,36 @@ fun LazyListScope.ThreadItems(vm: AppViewModel, post: Post) {
             } else {
                 HPCard {
                     tree.forEachIndexed { i, node ->
-                        CommentBlock(vm, node, depth = 0, isLastRoot = i == tree.lastIndex)
+                        CommentBlock(vm, post, node, depth = 0, isLastRoot = i == tree.lastIndex)
                     }
                 }
             }
         }
     }
     item(key = "thread-comment-btn") {
-        Box(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) {
-            HPButton("Comment", { vm.openSheet(Sheet.CommentComposer(vm.targetForPost(post))) }, style = HPButtonStyle.PRIMARY)
+        // PRODUCT §2.12 — the selected comment lifted into a quoted line above the composer, with the `×`
+        // that clears it. Nothing selected means the reply goes to the post, which is the default state.
+        val target by vm.replyTarget.collectAsStateWithLifecycle()
+        Column(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) {
+            target?.let { selected ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = HPTokens.Space.rowGap)) {
+                    HPMuted(ReplyTarget.quote(selected), Modifier.weight(1f), maxLines = 2)
+                    HPHitTarget(vm::clearReplyTarget, contentDescription = "Reply to the post instead") {
+                        HPMuted("×", maxLines = 1)
+                    }
+                }
+            }
+            HPButton("Comment", { vm.openCommentComposer(post) }, style = HPButtonStyle.PRIMARY)
         }
     }
 }
 
 @Composable
-private fun CommentBlock(vm: AppViewModel, node: CommentNode, depth: Int, isLastRoot: Boolean) {
-    CommentRow(vm, node.comment, depth, replyCount = node.replies.sumOf { it.count })
+private fun CommentBlock(vm: AppViewModel, post: Post, node: CommentNode, depth: Int, isLastRoot: Boolean) {
+    CommentRow(vm, post, node.comment, depth, replyCount = node.replies.sumOf { it.count })
     // Replies indent one level; depth caps at MAX_DEPTH and deeper replies render flat (§2.12).
     node.replies.forEach { child ->
-        CommentBlock(vm, child, depth = (depth + 1).coerceAtMost(MAX_DEPTH), isLastRoot = true)
+        CommentBlock(vm, post, child, depth = (depth + 1).coerceAtMost(MAX_DEPTH), isLastRoot = true)
     }
     if (!isLastRoot) {
         Box(
@@ -122,14 +142,20 @@ private fun CommentBlock(vm: AppViewModel, node: CommentNode, depth: Int, isLast
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CommentRow(vm: AppViewModel, comment: Comment, depth: Int, replyCount: Int) {
+private fun CommentRow(vm: AppViewModel, post: Post, comment: Comment, depth: Int, replyCount: Int) {
     // One level of indent is 12pt with a hairline gutter in `line` (§2.12).
     val step = HPTokens.Space.inputBottom
     val indent = step * depth
+    // PRODUCT §2.12 — "tapping any comment selects it as the reply target"; tapping it again clears it. The
+    // selected row carries `accentSoft`, the same wash the look uses for the gold pill and the focus ring,
+    // so the state is visible where the tap happened as well as in the quote above the composer.
+    val target by vm.replyTarget.collectAsStateWithLifecycle()
+    val selected = target?.link == comment.link && comment.link.isNotEmpty()
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = indent)
+            .background(if (selected) HPTokens.Colors.accentSoft else Color.Transparent, RoundedCornerShape(HPTokens.Radius.input))
             .drawBehind {
                 if (depth > 0) {
                     val x = -step.toPx() / 2
@@ -139,7 +165,8 @@ private fun CommentRow(vm: AppViewModel, comment: Comment, depth: Int, replyCoun
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = {},
+                onClickLabel = if (selected) "Reply to the post instead" else "Reply to ${comment.authorName}",
+                onClick = { vm.toggleReplyTarget(comment) },
                 onLongClick = { if (comment.own && !comment.pending) vm.openSheet(Sheet.DeleteComment(comment)) },
             )
             .padding(vertical = HPTokens.Space.rowGap)
@@ -180,7 +207,7 @@ private fun CommentRow(vm: AppViewModel, comment: Comment, depth: Int, replyCoun
                     HPMonoSmall(" · ", color = HPTokens.Colors.faint, maxLines = 1)
                 }
                 // Deleting your own comment is the long-press on the row (§2.12: swipe / long-press → Delete).
-                HPButton("Reply", { vm.openSheet(Sheet.CommentComposer(vm.targetForComment(comment))) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL)
+                HPButton("Reply", { vm.replyToComment(post, comment) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL)
             }
         }
     }
