@@ -116,9 +116,19 @@ Two things to get ahead of:
 
 - **The Connector** (`CONNECTOR.md`) runs a local HTTP server. It is
   `#if targetEnvironment(macCatalyst)`, so it should not be in the iOS
-  binary at all — **verify that on the actual archive** (symbol-check the
-  built product, do not trust the conditional), because "an iOS app that
-  opens a listening socket" is a bad conversation to have unprepared.
+  binary at all. **Checked on the archive** (1.0.0 / 202609010235), not on the
+  conditional: zero `Connector` symbols, no `bind`/`listen`/`accept`, no
+  `NWListener`, no `127.0.0.1` / `8477` / `connector.json` strings, and no
+  local-network keys in `Info.plist`. Re-run it on any archive that ships —
+  a build-setting change is all it would take to put a listening socket in an
+  iOS binary, and that is a bad conversation to have unprepared:
+
+  ```bash
+  BIN=ios/build/tgsocial.xcarchive/Products/Applications/tgsocial.app/tgsocial
+  nm -a "$BIN" | grep -c Connector                                  # expect 0
+  nm -u "$BIN" | grep -E '_bind$|_listen$|_accept$|nw_listener'     # expect none
+  strings -a "$BIN" | grep -E '127\.0\.0\.1|connector\.json|8477'  # expect none
+  ```
 - Any **demo mode** added for §2 is by definition a hidden feature. Document
   it in the review notes explicitly; undocumented ones get rejected under
   this guideline.
@@ -163,8 +173,9 @@ declare iPhone-only.
 2. Delete-my-node (§3).
 3. A documented demo route (§2).
 4. Fix the age rating (§4) and the encryption declaration (§5).
-5. Symbol-check the archive for the Connector (§7), write the review notes
-   covering the demo route and the "not just a client" argument (§6).
+5. ~~Symbol-check the archive for the Connector (§7)~~ — done, and cheap to
+   repeat per archive. Write the review notes covering the demo route and the
+   "not just a client" argument (§6).
 
 1–3 are product features that change the app. Nothing here is a reason not
 to keep shipping to TestFlight — internal testing needs none of it — but
