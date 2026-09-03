@@ -79,7 +79,7 @@ What it does, idempotently:
    use.
 4. Issues the certificate with certbot (`certonly --webroot`, then rewrites
    the vhost with TLS — the same split the existing
-   `lucianlabs.ca/scripts/provision-subdomain.sh` uses, for the same reason:
+   a provisioning script should use, for the same reason:
    the script fully owns the conf and a re-run is safe).
 5. Registers a deploy target so pushing the repo updates the domain's bundle.
 

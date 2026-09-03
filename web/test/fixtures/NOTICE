@@ -1,0 +1,20 @@
+Third-party content in web/test/fixtures/
+=========================================
+
+These .html files are unmodified captures of Telegram's own public preview pages
+(https://t.me/s/<channel>), saved so that a change in Telegram's markup fails a
+test instead of a live page (PUBLIC.md §3).
+
+They contain content owned by Telegram and by the channel authors — page markup,
+inlined CSS, post text and CDN media URLs. That content is NOT Lucian Labs' to
+license, and it is excluded from the MIT grant in the LICENSE file at the root of
+this repository. It is included here for interoperability testing only.
+
+  telegram.html, telegram.before-435.html   t.me/s/telegram — Telegram's own
+                                            announcement channel, © Telegram
+  tastycrow.html, tgs_dankcoin.html         channels belonging to this project's
+                                            author, captured with consent
+
+If you fork this repository and do not need the parser tests, delete this
+directory. If you need fixtures of your own, capture them from channels you
+control rather than redistributing someone else's.

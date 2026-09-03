@@ -208,7 +208,7 @@ into.
 
 **Deploying the proxy.** `nginx-public.conf` is an `include` for the host's
 `server { }` block plus the `proxy_cache_path` line it needs in `http { }`.
-The GroundControl webhook does not edit nginx config, so it is a one-time
+The deploy webhook does not edit nginx config, so it is a one-time
 manual step on the host; the file documents it. Until it is in place the public
 pages degrade to the §2.6 empty card rather than a blank page. Nothing in
 `npm test` exercises that file — `test/smoke.mjs` runs the dev proxy, a second

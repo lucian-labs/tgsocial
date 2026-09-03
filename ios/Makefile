@@ -4,7 +4,9 @@ SCHEME      := tgsocial
 PROJECT     := tgsocial.xcodeproj
 BUNDLE_ID   := ca.lucianlabs.tgsocial
 TEAM_ID     := L62T7W4NBF
-DEVICE_ID   := 101D3D40-548A-52CA-84AA-247AA0306754
+# Override per machine: `make device DEVICE_ID=<id>` (docs/BUILDING.md §1).
+# `xcrun devicectl list devices` prints the id for a paired phone.
+DEVICE_ID   ?=
 SIM         := platform=iOS Simulator,name=iPhone 17 Pro
 DERIVED     := build/derivedData
 PACKAGES    := build/SourcePackages
@@ -44,6 +46,9 @@ test:
 	$(XCB) -configuration Debug -destination '$(SIM)' test
 
 device:
+	@test -n "$(DEVICE_ID)" || (echo "DEVICE_ID is unset. Pair a phone, then:" && \
+	  echo "  xcrun devicectl list devices" && \
+	  echo "  make device DEVICE_ID=<identifier>" && exit 1)
 	$(XCB) -configuration Debug -destination 'id=$(DEVICE_ID)' -allowProvisioningUpdates build
 	xcrun devicectl device install app --device $(DEVICE_ID) $(DERIVED)/Build/Products/Debug-iphoneos/tgsocial.app
 	xcrun devicectl device process launch --device $(DEVICE_ID) $(BUNDLE_ID)

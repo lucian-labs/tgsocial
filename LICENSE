@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+The MIT grant above covers Lucian Labs' own work in this repository. It does not
+cover the following, which are third-party and carry their own terms:
+
+  web/vendor/tdweb/        TDLib, Boost Software License 1.0
+                           see web/vendor/tdweb/LICENSE and NOTICE
+  web/test/fixtures/       captures of Telegram's public pages, © Telegram and
+                           the respective channel authors — see NOTICE there
+  design/fonts/            see design/fonts/ for each family's licence
+  android/gradle/wrapper/  Gradle wrapper, Apache License 2.0

@@ -1,0 +1,22 @@
+Third-party notices for web/vendor/tdweb/
+=========================================
+
+tdweb.js and the *.worker.js chunks are webpack bundles: they inline several
+MIT-licensed dependencies whose individual notices the bundler stripped. Those
+declared by the upstream tdweb package.json are listed here so the attribution
+survives redistribution.
+
+  TDLib (tdweb)        Boost Software License 1.0   see ./LICENSE
+  regenerator-runtime  MIT   Copyright (c) Facebook, Inc. and its affiliates
+  @babel/runtime       MIT   Copyright (c) 2014-present Sebastian McKenzie and contributors
+  localforage          Apache-2.0  Copyright (c) 2013-2017 Mozilla
+  uuid                 MIT   Copyright (c) 2010-2020 Robert Kieffer and other contributors
+  broadcast-channel    MIT   Copyright (c) 2018 Daniel Meyer
+
+The .wasm is machine-executable object code, which BSL-1.0 exempts from the
+notice-reproduction requirement; tdweb.js and the worker chunks are distributed
+in source form and are not exempt, which is why this file exists.
+
+Provenance of this build (TDLib commit, toolchain) is recorded in
+web/tdweb-build/. Rebuild with the Dockerfile there rather than trusting these
+bytes.

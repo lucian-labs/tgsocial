@@ -29,7 +29,7 @@ Rules for any agent working in this repo. `CLAUDE.md` points here.
 - **Build before reporting.** iOS: `cd ios && make build`. Android:
   `cd android && ./gradlew :app:assembleDebug`. Web: `cd web && node
   test/smoke.mjs`. A change is not done until its build passes.
-- **Commit messages** end with `Co-Authored-By: Ana Iliovic <ana@thevii.app>`.
+- **Commit messages** end with `Co-Authored-By: Ana Iliovic <ana-iliovic@users.noreply.github.com>`.
   Work on `main`, push direct.
 
 ## Layout
@@ -46,7 +46,7 @@ docs/        App Store / Play listing copy, privacy policy, screenshots
 
 ## Deploy
 
-`web/` deploys by webhook on push to `main` (GroundControl target
-`tgsocial.lucianlabs.ca`, buildCmd copies the host-side `config.json` in).
-Never SSH, rsync, or run deploy scripts by hand. iOS ships through
-`scripts/archive.sh` → TestFlight; Android through `./gradlew :app:bundleRelease`.
+`web/` deploys automatically on push to `main`; the host keeps its own
+`config.json` (see `web/README.md`). Never SSH, rsync, or run deploy scripts by
+hand. iOS ships through `scripts/archive.sh` → TestFlight; Android through
+`./gradlew :app:bundleRelease`.
