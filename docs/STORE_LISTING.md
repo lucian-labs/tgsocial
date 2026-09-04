@@ -53,7 +53,7 @@ Social Networking
 
 ## Privacy
 
-Policy: https://tgsocial.lucianlabs.ca/privacy.html
+Policy: https://github.com/lucian-labs/tgsocial/blob/main/docs/PRIVACY.md
 Data collected: none. Data linked to you: none. Tracking: none.
 
 App Store "App Privacy" answers: the app does not collect data. TDLib stores

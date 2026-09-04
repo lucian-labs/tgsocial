@@ -40,8 +40,10 @@ import {
   parsePublicPath,
   publicFeedUrl,
   publicNodeUrl,
+  publicOrigin,
   publicPersonUrl,
   publicPath,
+  setPublicOrigin,
   trimFeedWindow,
 } from '../js/protocol.js';
 import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
@@ -145,10 +147,64 @@ for (const c of vectors.deepLink.cases) {
       assert.deepEqual(parsePublicPath(path), out);
     });
   }
-  test('publicFeedUrl / publicNodeUrl / publicPersonUrl are absolute to the canonical host', () => {
-    assert.equal(publicFeedUrl('waveloop_devlog'), 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog');
-    assert.equal(publicNodeUrl('tgs_elijah'), 'https://tgsocial.lucianlabs.ca/n/tgs_elijah');
-    assert.equal(publicPersonUrl('tastycrow'), 'https://tgsocial.lucianlabs.ca/u/tastycrow');
+  // The default, and the only state a fresh clone has: no origin is
+  // configured, so every share is the t.me link — nobody hosts the public
+  // pages until somebody chooses to.
+  test('publicFeedUrl / publicNodeUrl / publicPersonUrl are t.me links with no origin configured', () => {
+    setPublicOrigin(null);
+    assert.equal(publicOrigin(), null);
+    assert.equal(publicFeedUrl('waveloop_devlog'), 'https://t.me/waveloop_devlog');
+    assert.equal(publicNodeUrl('tgs_elijah'), 'https://t.me/tgs_elijah');
+    assert.equal(publicPersonUrl('tastycrow'), 'https://t.me/tastycrow');
+  });
+  // A person is not a feed. `/u/<name>` may have been reached through a feed's
+  // backlink (PUBLIC §4), and with no reader to resolve that a second time the
+  // t.me link has to name the node — whose pinned message is the card — rather
+  // than the channel the visitor happened to arrive by.
+  test('publicPersonUrl falls back to the resolved node, not the arrival handle', () => {
+    setPublicOrigin(null);
+    assert.equal(publicPersonUrl('tastycrow', 'tgs_dankcoin'), 'https://t.me/tgs_dankcoin');
+    assert.notEqual(publicPersonUrl('tastycrow', 'tgs_dankcoin'), publicFeedUrl('tastycrow'));
+    // no node to hand it (the handle already is the node): unchanged
+    assert.equal(publicPersonUrl('tgs_dankcoin', 'tgs_dankcoin'), 'https://t.me/tgs_dankcoin');
+  });
+  test('a configured publicOrigin makes the same three absolute to that host', () => {
+    try {
+      // a trailing slash is what a config file gets typed with; it is not a
+      // second origin
+      assert.equal(setPublicOrigin('https://tgs.example/'), 'https://tgs.example');
+      assert.equal(publicOrigin(), 'https://tgs.example');
+      assert.equal(publicFeedUrl('waveloop_devlog'), 'https://tgs.example/f/waveloop_devlog');
+      assert.equal(publicNodeUrl('tgs_elijah'), 'https://tgs.example/n/tgs_elijah');
+      assert.equal(publicPersonUrl('tastycrow'), 'https://tgs.example/u/tastycrow');
+      // the arrival handle, not the node it resolved to: the reader on the
+      // other end follows the backlink again (PUBLIC §4)
+      assert.equal(publicPersonUrl('tastycrow', 'tgs_dankcoin'), 'https://tgs.example/u/tastycrow');
+      assert.equal(setPublicOrigin('http://localhost:8080'), 'http://localhost:8080');
+      assert.equal(publicFeedUrl('waveloop_devlog'), 'http://localhost:8080/f/waveloop_devlog');
+    } finally {
+      setPublicOrigin(null);
+    }
+  });
+  // A refused origin is not a crash and not a broken link: it falls back to
+  // the same t.me link an unset one does.
+  test('setPublicOrigin refuses anything that is not a bare http(s) origin', () => {
+    for (const bad of [undefined, null, '', '   ', 42, 'tgs.example', '//tgs.example',
+      'javascript:alert(1)', 'https://tgs.example/tgsocial', 'https://tgs.example/?a=b', 'https://tgs example']) {
+      assert.equal(setPublicOrigin(bad), null, `refused: ${String(bad)}`);
+      assert.equal(publicFeedUrl('waveloop_devlog'), 'https://t.me/waveloop_devlog');
+    }
+  });
+  // Minting a link is a choice about this deployment; recognising one is not.
+  // Somebody else's /f/ URL has to keep routing here whatever we mint.
+  test('parsePublicPath stays origin-blind whatever is configured', () => {
+    try {
+      setPublicOrigin('https://tgs.example');
+      assert.deepEqual(parsePublicPath('/f/waveloop_devlog'), { name: 'channel', username: 'waveloop_devlog' });
+      assert.deepEqual(parsePublicPath(new URL('https://someone.else/u/tastycrow').pathname), { name: 'person', username: 'tastycrow' });
+    } finally {
+      setPublicOrigin(null);
+    }
   });
   test('publicPath round-trips every public route', () => {
     for (const path of ['/u/tastycrow', '/f/waveloop_devlog', '/n/tgs_elijah']) {

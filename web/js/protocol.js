@@ -260,22 +260,70 @@ export function channelLink(username) {
 
 // ── public links (PRODUCT §2.13) ───────────────────────────────────────────
 
-/** The canonical web host (PRODUCT §0). Public links are always absolute to it. */
-export const PUBLIC_ORIGIN = 'https://tgsocial.lucianlabs.ca';
+/**
+ * The origin the public pages are served from — `publicOrigin` in
+ * config.json, handed here once by boot() (js/app.js). Unset is the default
+ * and the only state a fresh clone has: tgsocial is source you run, not a
+ * service anyone hosts, so there is no canonical web host to hardcode and no
+ * server every reader is guaranteed to have.
+ *
+ * With none configured, sharing hands out the t.me link instead. That link
+ * works for everybody, costs nobody a deploy, and points at where the post
+ * actually is — Telegram is the storage layer (PROTOCOL §1), so it is the
+ * honest default rather than a degraded one.
+ *
+ * This is the one piece of mutable state in an otherwise pure module. The
+ * alternative is threading an origin through every screen that has a `Copy
+ * Link`, and the public screens have no config object to thread it from:
+ * boot() enters public mode without building one (PRODUCT §2.13).
+ */
+let configuredOrigin = null;
 
-/** `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies for a channel. */
+/**
+ * Take the origin from config, or refuse it. Scheme and host only — the public
+ * routes are root-anchored (`parsePublicPath`, and nginx's SPA fallback under
+ * them), so an origin carrying a path would mint links this very module cannot
+ * read back. Absent, blank, a bare host, a `javascript:` URL: all refused, and
+ * a refusal is not fatal, it just leaves sharing on t.me. Returns what it
+ * accepted so the caller can say which of the two it got.
+ */
+export function setPublicOrigin(origin) {
+  const s = typeof origin === 'string' ? origin.trim().replace(/\/+$/, '') : '';
+  configuredOrigin = /^https?:\/\/[^/?#\s]+$/.test(s) ? s : null;
+  return configuredOrigin;
+}
+
+/** The configured origin, or null when public links are t.me links. */
+export function publicOrigin() {
+  return configuredOrigin;
+}
+
+/** `<origin>/f/<channel>`, or `https://t.me/<channel>` — the link `Copy Link` copies for a channel. */
 export function publicFeedUrl(username) {
-  return `${PUBLIC_ORIGIN}/f/${username}`;
+  return configuredOrigin ? `${configuredOrigin}/f/${username}` : channelLink(username);
 }
 
-/** `https://tgsocial.lucianlabs.ca/n/<node>`. */
+/** `<origin>/n/<node>`, or the node's own channel on t.me. */
 export function publicNodeUrl(username) {
-  return `${PUBLIC_ORIGIN}/n/${username}`;
+  return configuredOrigin ? `${configuredOrigin}/n/${username}` : channelLink(username);
 }
 
-/** `https://tgsocial.lucianlabs.ca/u/<name>` — the link `Copy Link` copies for a person. */
-export function publicPersonUrl(username) {
-  return `${PUBLIC_ORIGIN}/u/${username}`;
+/**
+ * `<origin>/u/<name>` — the link `Copy Link` copies for a person — or the
+ * person's node channel on t.me.
+ *
+ * Two usernames because the two branches answer different questions. `name` is
+ * the handle the visitor arrived by, which may be a feed the resolver followed
+ * a backlink from (PUBLIC §4); with an origin that is the right thing to mint,
+ * because the reader on the other end resolves it again. With no origin there
+ * is no reader to do that resolving, so the link has to name the person
+ * itself, and the t.me analogue of a person is the node channel — its pinned
+ * message *is* the card (PROTOCOL §3). Falling back to the arrival handle
+ * would hand out one feed's channel, which is a different thing, and the exact
+ * string `publicFeedUrl` already mints for it.
+ */
+export function publicPersonUrl(username, node = username) {
+  return configuredOrigin ? `${configuredOrigin}/u/${username}` : channelLink(node);
 }
 
 /** Route name ↔ public path prefix (PRODUCT §2.13). */
@@ -293,6 +341,11 @@ export function publicPath({ name, username }) {
  * `/n/<node>` → the node profile. Anything else (including `/` and
  * `/index.html`) → null, and the hash router keeps the signed-in app exactly
  * as it was.
+ *
+ * Deliberately blind to the origin, and stays that way whatever
+ * `setPublicOrigin` holds: a link minted by somebody else's deployment is
+ * still a tgsocial link, and it has to open on the screen it names here.
+ * Recognising a link and minting one are not the same question.
  *
  * Total on any string: a malformed percent-escape (`/f/%zz`) is a bad
  * username, not an exception. `decodeURIComponent` throws URIError on those,

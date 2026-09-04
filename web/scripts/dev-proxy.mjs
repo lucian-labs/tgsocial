@@ -46,7 +46,7 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-const UA = 'tgsocial/1.0 (+https://tgsocial.lucianlabs.ca)';
+const UA = 'tgsocial/1.0 (+https://github.com/lucian-labs/tgsocial)';
 const TTL_MS = 60 * 1000;
 /** key → { at, body, status } — nginx's `proxy_cache_valid 200 60s`, in a Map. */
 const cache = new Map();

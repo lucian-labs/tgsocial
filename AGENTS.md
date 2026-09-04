@@ -19,6 +19,10 @@ Rules for any agent working in this repo. `CLAUDE.md` points here.
   — all gitignored, each with a committed `.example`.
 - **No server.** If a feature needs a backend, it is out of scope for this
   repo; the whole point is that Telegram is the backend.
+- **No hosted instance.** Nothing here may point at a host we run — there
+  isn't one, and a URL that 404s is worse than no URL. A public web origin is
+  optional per-deployment config; with none set, share actions hand out
+  `t.me` links (`PUBLIC.md`, `PRODUCT §2.13`).
 - **Tokens, never values.** Colours, radii, spacing, type come from
   `HPTokens` / `var(--token)`. Zero raw hex outside `design/tokens.json`.
   Regenerate with `node design/build.mjs --sync`; never edit generated files.
@@ -37,16 +41,22 @@ Rules for any agent working in this repo. `CLAUDE.md` points here.
 ```
 PROTOCOL.md  PRODUCT.md  README.md  AGENTS.md  LICENSE
 design/      tokens.json, build.mjs, COMPONENTS.md, fonts/, swift/, kotlin/, web/
-ios/         xcodegen project (project.yml), Sources/, Makefile
+ios/         xcodegen project (project.yml), Sources/, Makefile, scripts/
 android/     Gradle project, app/
-web/         static site (index.html, js/, vendor/), deployed to tgsocial.lucianlabs.ca
-scripts/     device install, archive, release helpers
-docs/        App Store / Play listing copy, privacy policy, screenshots
+web/         static site (index.html, js/, vendor/) — self-hosted, no deploy from here
+docs/        App Store / Play listing copy, privacy policy, building + forking notes
 ```
 
 ## Deploy
 
-`web/` deploys automatically on push to `main`; the host keeps its own
-`config.json` (see `web/README.md`). Never SSH, rsync, or run deploy scripts by
-hand. iOS ships through `scripts/archive.sh` → TestFlight; Android through
+**`web/` does not deploy anywhere.** There is no tgsocial web host and no
+deploy hook; the directory is a static bundle a self-hoster copies to their
+own origin, with their own `config.json` and the `/tg/s/` proxy from
+`PUBLIC.md §1`. `web/README.md` is the instructions for them, not a runbook
+for us — do not add a deploy step, a host, or a URL to it.
+
+iOS ships out of its own Makefile — `make archive` → `make export` → `make
+upload` (altool, App Store Connect key from `Secrets.xcconfig`, `ios/README.md`)
+→ TestFlight. There is no root `scripts/`; every release step lives in the
+platform directory it belongs to. Android ships through
 `./gradlew :app:bundleRelease`.

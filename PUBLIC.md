@@ -4,6 +4,14 @@ How a tgsocial page renders for someone with no account: it reads Telegram's
 own public preview, `https://t.me/s/<channel>`, which Telegram serves to
 anonymous browsers.
 
+**This is a spec for what you deploy, not a description of something we run.**
+There is no hosted tgsocial. If you want URLs like `/u/<name>` that a person
+with no Telegram client can open, you stand up the web bundle on an origin you
+control and add the one nginx location in §1 — that is the entire server side
+of it, and everything below is written from where you are standing. Skip it
+and the apps still work; share actions just hand out `t.me` links instead
+(`PRODUCT §2.13`), which cost nobody a host.
+
 This exists because **TDLib cannot help here**. Every chat read —
 `searchPublicChat`, `getChat`, `getChatHistory` — returns `401 Unauthorized`
 before authorization; only `getOption`-class calls answer. That was measured
@@ -14,7 +22,8 @@ data, and it is the door browsers are allowed through.
 ## 1. The proxy
 
 `t.me` sends no `Access-Control-Allow-Origin`, so a browser cannot fetch it
-directly. nginx proxies it under our own origin and caches it:
+directly. nginx proxies it under your own origin and caches it — the deployable
+form, with the reasoning, is `web/nginx-public.conf`:
 
 ```
 location /tg/s/ {
@@ -22,7 +31,7 @@ location /tg/s/ {
 
     proxy_pass https://t.me/s/;
     proxy_set_header Host t.me;
-    proxy_set_header User-Agent "tgsocial/1.0 (+https://tgsocial.lucianlabs.ca)";
+    proxy_set_header User-Agent "tgsocial/1.0 (+https://github.com/lucian-labs/tgsocial)";
 
     proxy_ignore_headers Set-Cookie Cache-Control Expires;
     proxy_hide_header Set-Cookie;
@@ -64,17 +73,19 @@ Rules this proxy obeys, and why:
   This only works because of `proxy_ignore_headers`: t.me sends `Set-Cookie`
   and `Cache-Control: no-store` on every response, and nginx stores neither
   kind — without those two lines the whole cache is decoration. The cookie is
-  hidden as well as ignored; a Telegram session cookie does not belong on our
+  hidden as well as ignored; a Telegram session cookie does not belong on your
   origin.
 - **No storage beyond the cache.** Nothing is written to a database. The page
   is a lens: delete the post on Telegram and it is gone here on the next
   fetch.
 - **Identifies itself.** A real User-Agent with a contact URL, because
   scraping anonymously and lying about it is how you get blocked, and
-  deservedly.
+  deservedly. It points at the repo, since that is the thing that exists no
+  matter whose origin is serving; put your own contact there if you would
+  rather field the mail yourself.
 
 The site itself carries a second wall — a `Content-Security-Policy` in
-`web/index.html` pinning scripts, frames and objects to our own origin — so
+`web/index.html` pinning scripts, frames and objects to its own origin — so
 that "nothing from the preview is adopted into the live page" (§3) is enforced
 by the browser and not only by the parser's discipline.
 
@@ -100,8 +111,8 @@ as they are in the app.
 
 ## 3. The parser
 
-One module, `web/js/public/preview.js`, used by every public surface (the
-tgsocial site and any domain front-end). Pure: HTML string in, tgsocial
+One module, `web/js/public/preview.js`, used by every public surface (a
+tgsocial deployment and any domain front-end). Pure: HTML string in, tgsocial
 model out — the same `Post` shape §2.3 renders, so the public page and the
 signed-in page share every component.
 

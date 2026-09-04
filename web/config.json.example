@@ -1,5 +1,6 @@
 {
   "apiId": 0,
   "apiHash": "replace_me",
-  "indexGroup": "tgsocial_index"
+  "indexGroup": "tgsocial_index",
+  "_publicOrigin": "OPTIONAL, and left out on purpose. Drop the underscore and set it to your own https origin (no path) only if you deploy the public pages; with no publicOrigin, Copy Link and Share hand out t.me links, which work for everyone and need no server."
 }

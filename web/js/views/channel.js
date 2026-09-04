@@ -85,8 +85,11 @@ export function render(app, { username }) {
 }
 
 /**
- * PRODUCT §2.6 — the header kebab. `Copy Link` copies the tgsocial public
- * link (§2.13), not the t.me one, on public routes and signed-in alike.
+ * PRODUCT §2.6 — the header kebab. `Copy Link` copies the public link (§2.13),
+ * the same one on public routes and signed-in alike: this deployment's
+ * `/f/<channel>` when config.json names a `publicOrigin`, and the t.me link
+ * when it does not — which is the default, since a clone of this repo is not
+ * a web host until somebody makes it one.
  */
 function channelMenu(app, username) {
   return kebabMenu([

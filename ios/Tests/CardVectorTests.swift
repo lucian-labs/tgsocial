@@ -109,12 +109,62 @@ final class CardVectorTests: XCTestCase {
         }
     }
 
-    /// PRODUCT §2.6 / §2.13: `Copy Link` copies the absolute public URL for the channel.
-    func testPublicLinks() {
-        XCTAssertEqual(PublicLink.feed(username: "waveloop_devlog"),
-                       "https://tgsocial.lucianlabs.ca/f/waveloop_devlog")
-        XCTAssertEqual(PublicLink.node(username: "tgs_ana"),
-                       "https://tgsocial.lucianlabs.ca/n/tgs_ana")
+    /// The default, and the only state for anyone who just cloned this: no `TGS_PUBLIC_ORIGIN`,
+    /// so `Copy Link` (PRODUCT §2.6) copies the t.me link. A feed and a node are both public
+    /// channels, so that link resolves for a reader with no server of ours in the picture.
+    func testPublicLinksFallBackToTelegram() {
+        XCTAssertEqual(PublicLink.feed(username: "waveloop_devlog", origin: nil),
+                       "https://t.me/waveloop_devlog")
+        XCTAssertEqual(PublicLink.node(username: "tgs_ana", origin: nil),
+                       "https://t.me/tgs_ana")
+    }
+
+    /// PRODUCT §2.13: a self-hoster who configures an origin gets the absolute public URLs back.
+    func testPublicLinksWithConfiguredOrigin() {
+        let origin = "https://tgsocial.example.com"
+        XCTAssertEqual(PublicLink.feed(username: "waveloop_devlog", origin: origin),
+                       "https://tgsocial.example.com/f/waveloop_devlog")
+        XCTAssertEqual(PublicLink.node(username: "tgs_ana", origin: origin),
+                       "https://tgsocial.example.com/n/tgs_ana")
+    }
+
+    /// The setting is optional, so the Info.plist value is routinely absent, empty (an xcconfig
+    /// key nobody defined substitutes to nothing) or an unexpanded `$(…)`. All three mean unset.
+    /// A trailing slash is trimmed so the path concatenation above cannot double the separator.
+    func testPublicOriginNormalisation() {
+        XCTAssertNil(PublicLink.normalise(nil))
+        XCTAssertNil(PublicLink.normalise(""))
+        XCTAssertNil(PublicLink.normalise("   "))
+        XCTAssertNil(PublicLink.normalise("$(TGS_PUBLIC_ORIGIN)"))
+        XCTAssertNil(PublicLink.fromBundle(Bundle(for: CardVectorTests.self)))
+        XCTAssertEqual(PublicLink.normalise("  https://tgsocial.example.com  "),
+                       "https://tgsocial.example.com")
+        XCTAssertEqual(PublicLink.normalise("http://localhost:8080"), "http://localhost:8080")
+        XCTAssertEqual(PublicLink.feed(username: "x", origin: PublicLink.normalise("https://e.com//")),
+                       "https://e.com/f/x")
+    }
+
+    /// Scheme and host or nothing (`setPublicOrigin` in `web/js/protocol.js` draws the same line):
+    /// the public routes are root-anchored, so an origin carrying a path mints links the reader
+    /// cannot route. The first case is the one this platform actually produces — xcconfig starts a
+    /// comment at `//`, so `TGS_PUBLIC_ORIGIN = https://host` reaches Info.plist as `https:` — and
+    /// accepting it would put `https:/f/waveloop_devlog` on the clipboard. Rejecting is not fatal:
+    /// no origin means the t.me link, which works.
+    func testPublicOriginRejectsMalformedValues() {
+        for bad in ["https:",                          // xcconfig ate the host after `//`
+                    "https://",                        // and the same with the slashes kept
+                    "tgsocial.example.com",            // bare host, no scheme
+                    "https://tgsocial.example.com/f",  // carries a path
+                    "https://tgsocial.example.com/f/", // ditto, trailing slash trimmed first
+                    "https://example.com?x=1",
+                    "https://exa mple.com",
+                    "javascript:alert(1)"] {
+            XCTAssertNil(PublicLink.normalise(bad), "normalise(\(bad))")
+        }
+        XCTAssertEqual(PublicLink.feed(username: "waveloop_devlog", origin: PublicLink.normalise("https:")),
+                       "https://t.me/waveloop_devlog")
+        XCTAssertEqual(PublicLink.node(username: "tgs_ana", origin: PublicLink.normalise("https:")),
+                       "https://t.me/tgs_ana")
     }
 
     func testBacklinkVectors() throws {

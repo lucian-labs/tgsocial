@@ -22,7 +22,7 @@ import { h, button, tabs, toast, replace } from '../vendor/house-pour.js';
 import { Td } from './td.js';
 import { Repo } from './repo.js';
 import { Activity } from './activity.js';
-import { normaliseUsername, parsePublicPath, publicPath, usernameKey } from './protocol.js';
+import { normaliseUsername, parsePublicPath, publicPath, setPublicOrigin, usernameKey } from './protocol.js';
 import { audioRowStats, closeViewer, currentAudio, useHost, watchMedia } from './media.js';
 import { stripStats } from './strip.js';
 import { PublicSource } from './public/source.js';
@@ -75,6 +75,25 @@ function hasLocalSession() {
     return false;
   }
   return false;
+}
+
+/**
+ * `/config.json`, or null when it is absent or unparseable.
+ *
+ * Nothing is judged here, because the same file means two different things
+ * depending on which shell boot() is about to build: the app cannot start
+ * without an `apiId`/`apiHash`, while a public page (PRODUCT §2.13) never
+ * needed one and reads this only for the optional `publicOrigin`. So this
+ * fetches and parses, and boot() decides what a missing field costs.
+ */
+async function loadConfig() {
+  try {
+    const res = await fetch('/config.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 class App {
@@ -597,6 +616,18 @@ class App {
       if (this.publicMode) this.render();
     });
 
+    // The config comes first because both shells below want something out of
+    // it: the app needs the api credentials, and a public page needs the
+    // optional `publicOrigin` — the origin this deployment answers on, which
+    // is the difference between `Copy Link` copying one of our own /u/ /f/ /n/
+    // URLs and copying the t.me link. Nobody has one by default, and a share
+    // that falls back to t.me is a working share, so a config with no
+    // `publicOrigin` (or no config at all, on a public page) is not an error.
+    const config = await loadConfig();
+    if (config?.publicOrigin && !setPublicOrigin(config.publicOrigin)) {
+      console.warn(`[app] config.json publicOrigin is not an https origin, ignoring: ${config.publicOrigin}`);
+    }
+
     // PRODUCT §2.13 — a public link with no session on this device is a public
     // page: rendered from Telegram's preview, with no TDLib booted at all. A
     // reader who has signed in here falls through to the app on the same URL.
@@ -608,12 +639,10 @@ class App {
       return;
     }
 
-    try {
-      const res = await fetch('/config.json', { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this.config = await res.json();
-      if (!this.config.apiId || !this.config.apiHash || this.config.apiHash === 'replace_me') throw new Error('placeholder');
-    } catch (e) {
+    // Past here TDLib is going to boot, and it cannot without an api id and
+    // hash of your own from my.telegram.org (web/README.md: they end up in the
+    // page, as they do in every Telegram web client).
+    if (!config || !config.apiId || !config.apiHash || config.apiHash === 'replace_me') {
       this.config = null;
       this.fatal = h('div.card',
         h('h2', 'Missing config.json.'),
@@ -623,6 +652,7 @@ class App {
       this.render();
       return;
     }
+    this.config = config;
     // PRODUCT §2.13: a public link is a destination, not a mode. TDLib
     // refuses every chat read before authorization, so a visitor with no
     // session signs in first; this remembers where they were going, and the

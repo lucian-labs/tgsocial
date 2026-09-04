@@ -2,9 +2,13 @@
 
 Static site. No bundler, no framework, no server: plain HTML, CSS, and ES
 modules talking to Telegram through [tdweb](https://github.com/tdlib/td/tree/master/example/web)
-(TDLib compiled to WebAssembly). Deployed by copying this directory to an
-nginx host at https://tgsocial.lucianlabs.ca; runs locally from
-`python3 -m http.server`.
+(TDLib compiled to WebAssembly). Runs locally from `python3 -m http.server`.
+
+**There is no tgsocial web host.** If you want one, it is yours: copy this
+directory to an origin you control, add the `/tg/s/` proxy from `PUBLIC.md
+§1`, and you have the whole thing — files on disk, an SPA fallback, and one
+nginx location. Nothing in this repo deploys it and nothing in it knows where
+it lives.
 
 ## Configure
 
@@ -12,13 +16,27 @@ nginx host at https://tgsocial.lucianlabs.ca; runs locally from
 cp config.json.example config.json     # gitignored
 ```
 
-Fill in `apiId` / `apiHash` from https://my.telegram.org/apps. `indexGroup` is
-the public supergroup used for directory announcements (`tgsocial_index` by
-default, PROTOCOL §5.3). The app fetches `/config.json` at boot; when it is
-missing or still holds the placeholder it renders a "Missing config.json."
-card instead of starting TDLib. The hash ends up in the page, which is how
-every Telegram web client works — treat it as public and keep the app id's
-rate limits in mind.
+Fill in `apiId` / `apiHash` from https://my.telegram.org/apps — your own,
+registered against your own Telegram account. `indexGroup` is the public
+supergroup used for directory announcements (`tgsocial_index` by default,
+PROTOCOL §5.3). `publicOrigin` is optional and unset by default; set it only
+if you deploy, and set it to *your* origin — scheme and host, no path and no
+query, since the public routes are root-anchored (see **Public links** below).
+A trailing slash is what a config file gets typed with, so it is trimmed
+rather than refused; a bare host, a path or a `javascript:` URL *is* refused,
+and sharing stays on `t.me`. The app fetches `/config.json` at boot; when it
+is missing or still holds the placeholder it renders a "Missing config.json."
+card instead of starting TDLib.
+
+**A web deployment's credentials are public. There is no version of this
+where they are not.** TDLib runs in the page, so the page has to be handed the
+`api_id`/`api_hash` — anyone who opens devtools reads them, and moving them
+into a bundle, an env var at build time or a header only changes how long it
+takes. That is architecture, not an oversight, and it is the same for every
+Telegram web client there has ever been. Two consequences worth acting on:
+register a **separate pair** for the web build, so a scraped web id cannot get
+your iOS and Android builds rate-limited or banned alongside it; and treat the
+id's flood limits as shared with every visitor, because they are.
 
 ## Run
 
@@ -92,9 +110,10 @@ the signed-in reader getting the ordinary screen on the same URLs with no nag
 — including the pre-auth 401 that made the preview necessary in the first
 place.
 
-Its static server does what the deploy host's nginx does — `try_files $uri
-$uri/ /index.html`, plus `/tg/s/<channel>` (from `test/fixtures/`, so the run
-stays offline) — so a public link resolves the same way it does in production.
+Its static server does what a deployment's nginx does — `try_files $uri $uri/
+/index.html`, plus `/tg/s/<channel>` (from `test/fixtures/`, so the run stays
+offline) — so a public link resolves locally the way it will once you host
+it.
 
 ## Layout
 
@@ -115,7 +134,7 @@ js/public/source.js   PUBLIC §1: the client for /tg/s/, with the proxy's own 60
 js/public/feed.js     PUBLIC §4: the public feed — FeedSession with the reader seams overridden
 js/public/resolve.js  PUBLIC §4: /u/<name> → node (directly or by backlink); public: no is refused
 js/views/*.js         one module per screen + shared composites (views/public.js is the three public screens)
-nginx-public.conf     the /tg/s/ proxy for the deploy host — an include, applied by hand once
+nginx-public.conf     the /tg/s/ proxy for whoever hosts this — an include, applied by hand once
 scripts/dev-proxy.mjs the same proxy + SPA fallback for local runs (node built-ins only)
 vendor/house-pour.css GENERATED from design/tokens.json + upstream stylesheet + design/web/house-pour.components.css (do not edit)
 vendor/house-pour.js  design-kit helpers (toast, modal, tabs, toggle, media, avatar, DOM) — copy of design/web/house-pour.js
@@ -155,9 +174,9 @@ Only preauthentication requests answer — `PREAUTH_QUERIES` in `js/td.js`.
 is served to anonymous browsers and carries everything the protocol needs:
 post text, media, `<time datetime>`, view counts, `data-post` message ids, the
 channel description with its backlink, and the pinned card message itself. It
-sends no `Access-Control-Allow-Origin`, so nginx proxies it under our origin
-and caches it for 60 s (`nginx-public.conf`, PUBLIC §1). A different door onto
-the same public data — and the door browsers are allowed through.
+sends no `Access-Control-Allow-Origin`, so nginx proxies it under the site's
+own origin and caches it for 60 s (`nginx-public.conf`, PUBLIC §1). A different
+door onto the same public data — and the door browsers are allowed through.
 
 The reading path is four small modules:
 
@@ -187,7 +206,8 @@ reader somewhere to go. There is no `innerHTML` anywhere in `js/`, and
 behind all of that: the proxy relabels Telegram's HTML `text/plain` and
 sandboxes it, so a direct visit to `/tg/s/<channel>` runs nothing on the
 origin that stores the TDLib session, and `index.html` carries a
-`Content-Security-Policy` pinning scripts, frames and objects to our origin.
+`Content-Security-Policy` pinning scripts, frames and objects to its own
+origin.
 
 **Which shell a visitor gets is decided before TDLib boots.** `App.boot()`
 looks for `tgs.*` local state: absent on a public URL means a visitor, so the
@@ -206,16 +226,38 @@ not a route at all: `parsePublicPath` swallows the `URIError` and returns null,
 because it runs in `boot()` before there is a repo or a view to render an error
 into.
 
-**Deploying the proxy.** `nginx-public.conf` is an `include` for the host's
+**Deploying the proxy.** `nginx-public.conf` is an `include` for your
 `server { }` block plus the `proxy_cache_path` line it needs in `http { }`.
-The deploy webhook does not edit nginx config, so it is a one-time
-manual step on the host; the file documents it. Until it is in place the public
-pages degrade to the §2.6 empty card rather than a blank page. Nothing in
+Nothing in this repo applies it — there is no deploy step here to apply it
+*from* — so it is a one-time manual edit on your host; the file's header is
+the instructions. Until it is in place the public pages degrade to the §2.6
+empty card rather than a blank page. Nothing in
 `npm test` exercises that file — `test/smoke.mjs` runs the dev proxy, a second
 implementation of the same rules — so its header carries a `docker run
 nginx:alpine` recipe for checking the real thing, and the four promises worth
 checking: text/plain out, no `Set-Cookie`, `X-Cache: HIT` on a repeat, and 404
 for any query that is not `?before=<digits>`.
+
+**Public links are opt-in.** `publicOrigin` is optional and stays unset unless
+you put it in `config.json`; while it is unset, the `Copy Link` on a person,
+feed or node header copies `https://t.me/<channel>` — on a person page, the
+node the page resolved to rather than the handle in the URL, since only the
+node names the person (PRODUCT §2.13). That is
+the right default for a clone that is not hosted anywhere: there is no origin
+to link to, and the channel is public on Telegram regardless. Set it to your
+own https origin once the three routes are genuinely served there — an origin
+that 404s is worse than a `t.me` link, which is exactly the failure this
+default exists to prevent.
+
+A post's **Share** button sits outside all of this. `deepLink()` mints
+`https://t.me/<channel>/<id>` in every configuration, because there is no
+public route for a single message to point at — `publicPath` /
+`parsePublicPath` know `u`, `f` and `n` and nothing else. Setting an origin
+moves the three header links and leaves post links exactly where they are.
+
+Reading is not affected either way: `parsePublicPath` accepts a `/u/ /f/ /n/`
+path on any host, so links copied out of somebody else's deployment still open
+here.
 
 ## vendor/tdweb provenance
 

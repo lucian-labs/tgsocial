@@ -40,6 +40,7 @@ import ca.lucianlabs.tgsocial.ui.components.FooterNote
 import ca.lucianlabs.tgsocial.ui.components.PostCard
 import ca.lucianlabs.tgsocial.ui.components.copyToClipboard
 import ca.lucianlabs.tgsocial.ui.components.openLink
+import ca.lucianlabs.tgsocial.ui.components.publicOrigin
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
 
 /** PRODUCT §2.6 — channel header, then its posts chronologically. */
@@ -72,7 +73,7 @@ fun LazyListScope.FeedChannelItems(vm: AppViewModel, c: ChannelUi) {
                                 })
                                 HPMenuItem("Copy Link", {
                                     menuOpen = false
-                                    copyToClipboard(context, PublicLink.feed(src.username))
+                                    copyToClipboard(context, PublicLink.feed(src.username, publicOrigin))
                                     vm.toast.show("Link copied.", HPToastTone.GOOD)
                                 }, isLast = true)
                             }

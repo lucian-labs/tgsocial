@@ -42,7 +42,13 @@ function loading() {
   return h('div.card', h('p.muted', 'Loading…'));
 }
 
-/** PRODUCT §2.6 header kebab, on every public screen; `Copy Link` copies this page's URL. */
+/**
+ * PRODUCT §2.6 header kebab, on every public screen. `Copy Link` copies this
+ * page's own URL when the deployment serving it set a `publicOrigin` in
+ * config.json (§2.13); with none set it copies the t.me link instead — the
+ * page cannot name itself from a config it was never given, and t.me is where
+ * the posts are anyway.
+ */
 function publicMenu(app, { channel, url }) {
   return kebabMenu([
     { label: 'Open in Telegram', onSelect: () => openExternal(channelLink(channel)) },
@@ -160,8 +166,11 @@ export function renderPerson(app, { username }) {
       link: card.link,
       verified: false,
       // §2.13 Sharing: a person page copies /u/<name> — the handle the visitor
-      // arrived by, which is the one people actually know
-      copyUrl: publicPersonUrl(username),
+      // arrived by, which is the one people actually know — or, when this
+      // deployment configured no origin of its own, the node's own channel:
+      // with no reader to resolve the backlink a second time, only @node names
+      // the person, and `@<name>` may be one of their feeds (PUBLIC §4)
+      copyUrl: publicPersonUrl(username, node),
     });
     replace(root, header);
     if (!card.feeds.length) {

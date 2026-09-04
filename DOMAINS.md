@@ -1,7 +1,7 @@
 # Serving a tgsocial person on your own domain
 
 Any domain can serve any tgsocial person. `yourname.com` shows your merged
-feed, styled how you like, powered by the same public reader the main site
+feed, styled how you like, powered by the same public reader the web client
 uses (`PUBLIC.md`) — no account needed to read it, and nothing of yours moves
 off Telegram.
 
@@ -40,8 +40,10 @@ Three things, none of them a database:
 - `look` — which design kit to load. `house-pour` today; a domain is exactly
   the place a different identity belongs, and the kit is swappable because
   every component is written against token *names* (`design/COMPONENTS.md`).
-- `poweredBy` — show the "powered by tgsocial" link back to the main site.
-  Default true; it is a link, not a badge, and it is not load-bearing.
+- `poweredBy` — show the "powered by tgsocial" link. There is no hosted
+  tgsocial to point it at, so it goes to the repo,
+  `github.com/lucian-labs/tgsocial`. Default true; it is a link, not a badge,
+  and it is not load-bearing.
 
 ## 2. Two-way verification (optional, recommended)
 

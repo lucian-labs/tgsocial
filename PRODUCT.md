@@ -10,7 +10,9 @@ contract is `PROTOCOL.md`. The look is `design/` (House Pour).
   (Kaushan Script) wherever it appears as a wordmark. In running text it is
   `tgsocial` in the body face.
 - Bundle / package id: `ca.lucianlabs.tgsocial`.
-- Web: `https://tgsocial.lucianlabs.ca`.
+- Web: no canonical host. The client in [`web/`](./web/) is self-hosted, so a
+  deployment's origin is whatever its operator owns ([`PUBLIC.md`](./PUBLIC.md)).
+  Nothing in the product names one.
 - Repo: `github.com/lucian-labs/tgsocial` (MIT).
 
 ## 1. Shell
@@ -322,8 +324,9 @@ shadow, anchored under the button (a modal sheet on small screens), holding
 one `HPListItem` per action, body text, ink, 40pt rows:
 
 - `Open in Telegram`
-- `Copy Link` (public routes and signed-in alike — copies the
-  `tgsocial.lucianlabs.ca/f/<channel>` URL, toast `Link copied.`)
+- `Copy Link` (public routes and signed-in alike — copies the channel's share
+  URL: `t.me/<channel>` unless the build has a public origin configured
+  (§2.13), toast `Link copied.`)
 
 `Open in Telegram` appears nowhere else in this header. Dismiss by tapping
 outside or pressing Escape (web) / swiping down (native sheet).
@@ -629,7 +632,9 @@ Behaviour:
 ### 2.13 Public pages — a URL for every feed and every person
 
 Anyone can read a public tgsocial page without an account, without the app,
-and without waiting for a 14 MB wasm to boot. Three routes:
+and without waiting for a 14 MB wasm to boot. Three routes — served by whoever
+hosts the web client, since nobody hosts it centrally, so read every path
+below as relative to *that* origin ([`PUBLIC.md`](./PUBLIC.md)):
 
 | Route | Shows |
 | --- | --- |
@@ -680,9 +685,33 @@ neutral `Public` pill.
 A signed-in visitor on the same URL gets the full screen — tab bar, Follow,
 Comment — with no nag. The public page is the same product seen from outside.
 
-**Sharing.** `Copy Link` in the channel kebab (§2.6) copies the
-`tgsocial.lucianlabs.ca/u/<name>` URL for a person and `/f/<channel>` for a
-channel.
+**Sharing.** Two controls hand out links, and only one of them reads config.
+
+**Share** on a post (§2.3) is always `https://t.me/<channel>/<id>`. The three
+routes above address a person, a channel and a card — there is no route for a
+single message — so a public origin has nothing to substitute here and does
+not try. The post is on Telegram; the link says so.
+
+**`Copy Link`** in the header kebab (§2.6) — the channel screen, and the
+person, feed and node pages — copies one URL, and which one is decided by a
+single piece of build config: the **public origin**, unset by default.
+
+- **Unset** — the default, and the only state for a fresh clone:
+  `https://t.me/<channel>`, on all three. A node and a feed *are* public
+  channels (`PROTOCOL §3`), so it opens for anyone with Telegram, it needs no
+  host, and it points at where the content is actually stored. A network whose
+  storage layer is Telegram has no business handing out a link that dies when
+  somebody stops paying for a droplet. On a person page the channel is the
+  **node the page resolved to** (`PUBLIC §4`), not the handle in the URL: with
+  no reader on the other end to follow the backlink a second time, only the
+  node names the person, and the handle may be one of their feeds.
+- **Set** — a self-hoster who deployed the reader (`PUBLIC.md`): absolute URLs
+  to that origin, `<origin>/u/<name>` for a person, `/f/<channel>` for a
+  channel, `/n/<node>` for a node. The same three, one for one.
+
+Reading a link is not symmetrical with writing one. Every build recognises a
+tgsocial `/u/ /f/ /n/` path on **any** host, configured or not, so a link
+copied out of somebody else's deployment still lands on the right screen here.
 
 **Native.** iOS and Android register these paths as universal/app links, so a
 tapped link opens the installed app on that screen. An unsigned-in app shows

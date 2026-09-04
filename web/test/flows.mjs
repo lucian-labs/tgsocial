@@ -508,12 +508,14 @@ try {
   await page.waitForFunction(() => !document.querySelector('.menu[role="menu"]'), null, { timeout: 5000 });
   ok(true, 'channel: Escape dismisses the menu');
 
-  // §2.13 Copy Link — the tgsocial URL, not the t.me one, signed in as well
+  // §2.13 Copy Link — with no `publicOrigin` in config.json, which is the
+  // default and what this repo's own config.json has, the shareable link is
+  // the t.me one: it works for everyone and needs nobody's deployment
   await page.click('#view .head-actions button.kebab');
   await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
   await page.click('.menu[role="menu"] button.list-item:has-text("Copy Link")');
   await waitToast(/Link copied\./);
-  ok((await page.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/ana_notes', 'channel: Copy Link copies the tgsocial URL and toasts');
+  ok((await page.evaluate(() => navigator.clipboard.readText())) === 'https://t.me/ana_notes', 'channel: Copy Link copies the t.me link and toasts');
 
   await snap('channel');
   await page.click('#topbar-lead .btn');
@@ -2507,13 +2509,18 @@ try {
       ok(area.v >= 40 && area.h >= 40, `rule 6: ${what} still exposes a ${area.h}×${area.v} hit area past its painted bounds`);
     }
 
-    // Copy Link: /u/<name> on a person page, /f/<channel> on a channel page
+    // Copy Link, on a deployment that set no `publicOrigin`: the page cannot
+    // name itself from a config it was never given, so it shares the t.me link
+    // rather than a URL only this host knows it answers on. This page was
+    // reached as /u/tastycrow and resolved through the backlink, so the link
+    // that names the person is @tgs_dankcoin's channel — the same chat the
+    // menu's `Open in Telegram` opens, and not @tastycrow, which is one feed.
     await pub.click('#view .head-actions button.kebab');
     await pub.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
     await pub.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
     await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
-    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/u/tastycrow',
-      'public: Copy Link on a person page copies /u/<name>');
+    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://t.me/tgs_dankcoin',
+      'public: Copy Link on a person page copies the resolved node\'s t.me link with no origin configured');
 
     // tapping the channel subheading pushes the channel page, with ‹ Back
     await pub.click('#view .post-sub >> nth=0');
@@ -2525,8 +2532,10 @@ try {
     await pub.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
     await pub.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
     await pub.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
-    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/tastycrow',
-      'public: Copy Link on a channel page copies /f/<channel>');
+    // and the channel page shares the channel — a different string from the
+    // person page above, which is the whole point: /u/ and /f/ are two screens
+    ok((await pub.evaluate(() => navigator.clipboard.readText())) === 'https://t.me/tastycrow',
+      'public: Copy Link on a channel page copies that channel\'s t.me link with no origin configured');
 
     // ── the merge is the app's own, across two feeds, newest first ─────────
     await pub.goto(`${base}/u/tgs_merge`, { waitUntil: 'load' });
@@ -2626,6 +2635,50 @@ try {
     await pubCtx.close();
   }
 
+  // ── §2.13 a deployment that configured an origin of its own ───────────────
+  // Every assertion above reads the default: no `publicOrigin` in config.json,
+  // so sharing is t.me. Someone who actually serves /u/ /f/ /n/ sets that one
+  // key, and the same Copy Link becomes absolute to their host. That is the
+  // whole difference, so it is asserted the same way — by answering
+  // /config.json with it for this context alone.
+  {
+    const hostCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['clipboard-read', 'clipboard-write'] });
+    await hostCtx.route('**/config.json', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      // the trailing slash is how a config file gets typed; it is not a second origin
+      body: JSON.stringify({ apiId: 1, apiHash: 'flows', indexGroup: 'tgsocial_index', publicOrigin: 'https://tgs.example/' }),
+    }));
+    await hostCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    await hostCtx.route(/telesco\.pe|telegram-cdn\.org/, (route) => route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL }));
+    const host = await hostCtx.newPage();
+    host.on('console', (m) => {
+      if (m.type() === 'error') errors.push(`self-hosted: ${m.text()}`);
+    });
+    host.on('pageerror', (e) => errors.push(`self-hosted pageerror: ${e.message}`));
+    await host.goto(`${base}/f/tastycrow`, { waitUntil: 'load' });
+    await host.waitForSelector('#view article.post', { timeout: 20000 });
+    await host.click('#view .head-actions button.kebab');
+    await host.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await host.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
+    await host.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    ok((await host.evaluate(() => navigator.clipboard.readText())) === 'https://tgs.example/f/tastycrow',
+      'self-hosted: a configured publicOrigin makes Copy Link absolute to that host');
+    // The person page keeps minting the handle the visitor arrived by, even
+    // though it resolved through the backlink to @tgs_dankcoin: this host
+    // serves /u/, so its own reader follows that backlink again (PUBLIC §4).
+    // Only the t.me fallback has to name the node itself.
+    await host.goto(`${base}/u/tastycrow`, { waitUntil: 'load' });
+    await host.waitForSelector('#view article.post', { timeout: 20000 });
+    await host.click('#view .head-actions button.kebab');
+    await host.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await host.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
+    await host.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    ok((await host.evaluate(() => navigator.clipboard.readText())) === 'https://tgs.example/u/tastycrow',
+      'self-hosted: a person page still shares /u/<arrival handle>, which that host resolves again');
+    await hostCtx.close();
+  }
+
   // ── §2.13 signed in on the same URLs ──────────────────────────────────────
   // A reader who has signed in on this device gets the app on a public link,
   // not the public page: the tab bar, Comment, Follow, and no nag. The
@@ -2694,13 +2747,13 @@ try {
     ok(landed.kebab && !landed.headerTelegram, 'signed in: the header carries the kebab, not a standalone Open in Telegram');
     await snapPage(fresh, 'public-signedin');
 
-    // §2.13 Sharing — Copy Link copies the tgsocial URL, not the t.me one
+    // §2.13 Sharing — the same link the public page copies, from the app
     await fresh.click('#view .head-actions button.kebab');
     await fresh.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
     await fresh.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
     await fresh.waitForFunction(() => /Link copied\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
-    ok((await fresh.evaluate(() => navigator.clipboard.readText())) === 'https://tgsocial.lucianlabs.ca/f/waveloop_devlog',
-      'signed in: Copy Link copies the tgsocial URL');
+    ok((await fresh.evaluate(() => navigator.clipboard.readText())) === 'https://t.me/waveloop_devlog',
+      'signed in: Copy Link copies the t.me link with no origin configured');
 
     await newCtx.close();
   }

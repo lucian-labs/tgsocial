@@ -17,17 +17,25 @@ and the usernames are tappable — the network is navigable without this app.
 - Ideas not yet built: [`BACKLOG.md`](./BACKLOG.md)
 - Fork it: [`docs/FORKING.md`](./docs/FORKING.md) — keep the card + comment
   format and your fork stays on the same network
+- Host the web client: [`web/README.md`](./web/README.md), and
+  [`PUBLIC.md`](./PUBLIC.md) for the one nginx location it needs
 
 | Build | Stack | Where |
 | --- | --- | --- |
 | iOS | SwiftUI · TDLib via [TDLibKit](https://github.com/Swiftgram/TDLibKit) | [`ios/`](./ios/) |
 | Android | Kotlin · Jetpack Compose · TDLib | [`android/`](./android/) |
-| Web | static HTML/CSS/JS · [tdweb](https://github.com/tdlib/td/tree/master/example/web) (TDLib wasm) | [`web/`](./web/) → https://tgsocial.lucianlabs.ca |
+| Web | static HTML/CSS/JS · [tdweb](https://github.com/tdlib/td/tree/master/example/web) (TDLib wasm) | [`web/`](./web/) — any static host, at the origin root |
 
 ## Run it
 
+There is no hosted tgsocial and there will not be one. The network is already
+running — it is Telegram — so the only thing left to host is a client, and a
+client is better off being yours: your build, your credentials, your rate
+limits, nothing of yours passing through a box someone else owns.
+
 Every build needs a Telegram `api_id` / `api_hash` from
-https://my.telegram.org/apps. They are never committed.
+https://my.telegram.org/apps. They are never committed, and a fork ships its
+own pair ([`docs/FORKING.md`](./docs/FORKING.md)).
 
 ```bash
 # iOS
@@ -42,6 +50,26 @@ cd android && ./gradlew :app:installDebug
 cp web/config.json.example web/config.json
 cd web && python3 -m http.server 8080                   # then open http://localhost:8080
 ```
+
+## Sharing
+
+Two controls, and only one of them reads config.
+
+**Share**, on a post, always hands out `https://t.me/<channel>/<id>`. That is
+where the post actually is, it opens for anyone who has Telegram, and no
+server of yours is in the path. There is no public route for a single post, so
+nothing you configure changes this one.
+
+**Copy Link**, in a channel, person or node header, is the one config touches.
+By default it copies `https://t.me/<channel>` — a feed and a node *are* public
+channels, so that link works with nobody's server running. Stand up the web
+client, put its origin in the build's config, and it points at your reader
+instead: `<origin>/f/<channel>` and `/n/<node>` from the apps, plus
+`/u/<name>` on the reader's own person pages ([`PUBLIC.md`](./PUBLIC.md)).
+That is the only thing a public origin changes.
+
+Incoming links are unaffected either way — a tgsocial URL is recognised
+whatever host it carries, so links people already hold keep resolving.
 
 ## Design kit
 

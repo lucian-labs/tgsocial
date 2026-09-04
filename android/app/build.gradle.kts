@@ -15,6 +15,9 @@ val secrets = Properties().apply {
 }
 val tgApiId: String = secrets.getProperty("TG_API_ID", "0")
 val tgApiHash: String = secrets.getProperty("TG_API_HASH", "")
+// PRODUCT §2.13 — the public reader is self-hosted (PUBLIC.md), so its origin is optional and empty by
+// default; with none configured `Copy Link` copies the t.me link instead. See secrets.properties.example.
+val publicOrigin: String = secrets.getProperty("TGS_PUBLIC_ORIGIN", "").trim()
 
 android {
     namespace = "ca.lucianlabs.tgsocial"
@@ -29,6 +32,7 @@ android {
 
         buildConfigField("int", "TG_API_ID", tgApiId)
         buildConfigField("String", "TG_API_HASH", "\"$tgApiHash\"")
+        buildConfigField("String", "PUBLIC_ORIGIN", "\"$publicOrigin\"")
         buildConfigField("String", "TDLIB_VERSION", "\"1.8.65\"")
     }
 

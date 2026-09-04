@@ -73,6 +73,12 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         TGApiId: $(TG_API_ID)
         TGApiHash: $(TG_API_HASH)
+        # PRODUCT §2.13: optional. Set TGS_PUBLIC_ORIGIN in Secrets.xcconfig only if you
+        # are running your own public reader; unset (the default) substitutes to empty and
+        # `Copy Link` falls back to t.me. Whatever lands here is validated at runtime —
+        # scheme and host or nothing, which is what catches the `https:` an unescaped `//`
+        # leaves behind. See PublicLink in Sources/Protocol/Links.swift.
+        TGSPublicOrigin: $(TGS_PUBLIC_ORIGIN)
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.social-networking
         LSRequiresIPhoneOS: true

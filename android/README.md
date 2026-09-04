@@ -24,6 +24,9 @@ printf 'sdk.dir=%s\n' "$HOME/Library/Android/sdk" > local.properties
 ```
 
 Both files are gitignored. `app/build.gradle.kts` reads them into `BuildConfig.TG_API_ID` / `BuildConfig.TG_API_HASH`.
+`TGS_PUBLIC_ORIGIN` is optional (PRODUCT §2.13): set it to the origin of a public reader you host yourself
+(`PUBLIC.md`) and `Copy Link` copies `https://<origin>/f/<channel>`; leave it unset — the default — and
+`Copy Link` copies the `t.me` link, which needs no server of your own.
 A release keystore is optional: put `release.keystore` next to `secrets.properties` with
 `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD` in `secrets.properties`; without it the
 release build signs with the debug key so `assembleRelease` / `bundleRelease` still succeed.

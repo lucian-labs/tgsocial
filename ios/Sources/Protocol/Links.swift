@@ -25,16 +25,68 @@ public enum DeepLink {
     }
 }
 
-/// The tgsocial web addresses (PRODUCT §2.13): every channel and node has one, always absolute.
+/// The tgsocial web addresses (PRODUCT §2.13) — optional configuration, unset by default.
+///
+/// There is no hosted tgsocial. The repo ships source and you run your own build against your
+/// own Telegram credentials (README "Run it"), so a public origin is *configuration*, not a
+/// constant: `TGS_PUBLIC_ORIGIN` in Secrets.xcconfig, surfaced through Info.plist beside
+/// `TGApiId`/`TGApiHash`, read once at launch. A fresh clone has none, and that is the normal
+/// state — the public reader (`PUBLIC.md`) is something a self-hoster chooses to stand up.
+///
+/// With no origin configured, `Copy Link` copies the **t.me link** instead. That is the honest
+/// fallback for a network whose storage layer is Telegram: it points at where the post actually
+/// lives, it works with nobody's server running, and a node or a feed *is* a public channel
+/// (PROTOCOL §3). Configure an origin and the absolute `/f/` and `/n/` links of §2.13 come back
+/// exactly as they were.
 public enum PublicLink {
-    /// The canonical web host (PRODUCT §0).
-    public static let origin = "https://tgsocial.lucianlabs.ca"
+    /// The Info.plist key that `TGS_PUBLIC_ORIGIN` lands on (project.yml `info.properties`).
+    static let infoKey = "TGSPublicOrigin"
 
-    /// `https://tgsocial.lucianlabs.ca/f/<channel>` — the link `Copy Link` copies.
-    public static func feed(username: String) -> String { "\(origin)/f/\(username)" }
+    /// The configured origin, or nil. A `static let` because the bundle cannot change under a
+    /// running process — re-reading it per link would be the same answer, slower.
+    public static let origin: String? = fromBundle()
 
-    /// `https://tgsocial.lucianlabs.ca/n/<node>`
-    public static func node(username: String) -> String { "\(origin)/n/\(username)" }
+    /// Reads `TGSPublicOrigin` the way `TGSecrets.fromBundle` reads the api credentials. Nil unless
+    /// the value is a usable origin — the key is routinely missing, blank (an xcconfig key nobody
+    /// defined substitutes to empty), the literal `$(TGS_PUBLIC_ORIGIN)` (an unexpanded build
+    /// setting can survive verbatim), or mangled by the xcconfig parser; `normalise` decides.
+    public static func fromBundle(_ bundle: Bundle = .main) -> String? {
+        normalise(bundle.infoDictionary?[infoKey] as? String)
+    }
+
+    /// Trims, drops trailing slashes so `<origin>` + `/f/x` cannot double the separator, and then
+    /// accepts scheme-and-host only — the shape `setPublicOrigin` accepts in `web/js/protocol.js`,
+    /// for the same reason: the public routes are root-anchored (`/u/`, `/f/`, `/n/`), so an origin
+    /// carrying a path mints links the reader cannot route back.
+    ///
+    /// Everything else is unset: blank, an unexpanded `$(…)`, a bare host, a `javascript:` URL —
+    /// and the one that bites hardest on this platform, a bare `https:`. xcconfig begins a comment
+    /// at `//`, so `TGS_PUBLIC_ORIGIN = https://host` is the *value* `https:` and the rest is a
+    /// comment; without this check that truncation reaches the clipboard as `https:/f/<channel>`.
+    /// `Secrets.xcconfig.example` documents the `https:/$()/host` form that survives the parser.
+    ///
+    /// Refusing is not fatal. A rejected origin is no origin, which leaves sharing on the t.me
+    /// link — a working link is the whole point of the fallback.
+    public static func normalise(_ value: String?) -> String? {
+        guard var s = value?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        while s.hasSuffix("/") { s.removeLast() }
+        let isOrigin = s.range(of: #"^https?://[^/?#\s]+$"#, options: .regularExpression) != nil
+        return isOrigin ? s : nil
+    }
+
+    /// `<origin>/f/<channel>` — the link `Copy Link` copies (§2.6). With no origin configured,
+    /// `https://t.me/<channel>`: the channel is the feed.
+    public static func feed(username: String, origin: String? = PublicLink.origin) -> String {
+        guard let origin else { return DeepLink.chat(username: username) }
+        return "\(origin)/f/\(username)"
+    }
+
+    /// `<origin>/n/<node>` — the card view. With no origin configured, `https://t.me/<node>`:
+    /// the card is that channel's pinned message, readable in plain Telegram.
+    public static func node(username: String, origin: String? = PublicLink.origin) -> String {
+        guard let origin else { return DeepLink.chat(username: username) }
+        return "\(origin)/n/\(username)"
+    }
 }
 
 public enum Backlink {

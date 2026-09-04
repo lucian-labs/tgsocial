@@ -18,7 +18,15 @@ cp Secrets.xcconfig.example Secrets.xcconfig   # gitignored
 `Secrets.xcconfig` is the build configuration for both Debug and Release. The values flow into
 `Info.plist` as `TGApiId` / `TGApiHash` and are read at runtime from `Bundle.main.infoDictionary`
 (`TGSecrets.fromBundle()`). Nothing is hardcoded; the app shows a developer-facing card if they are missing.
-The same file optionally carries `ASC_API_KEY` / `ASC_API_ISSUER` (App Store Connect API key id and
+The same file optionally carries `TGS_PUBLIC_ORIGIN` — the origin of a public reader you host
+yourself ([PRODUCT §2.13](../PRODUCT.md), [`PUBLIC.md`](../PUBLIC.md)). There is no hosted tgsocial,
+so it is unset by default and `Copy Link` copies the `t.me` link instead; set it and the absolute
+`/f/` and `/n/` links come back (`PublicLink`, `Sources/Protocol/Links.swift`). Write it as
+`https:/$()/host` — xcconfig treats `//` as the start of a comment, so a plain `https://host` sets
+the value to `https:` and comments the host away. Only a scheme-and-host origin is accepted;
+anything else (including that truncation) is treated as unset, and sharing stays on `t.me`.
+It also carries
+`ASC_API_KEY` / `ASC_API_ISSUER` (App Store Connect API key id and
 issuer id) for `make upload`; environment variables of the same names override them.
 
 ## Build, run, test
