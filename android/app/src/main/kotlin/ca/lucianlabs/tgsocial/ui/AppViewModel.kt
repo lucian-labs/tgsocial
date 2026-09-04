@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ca.lucianlabs.housepour.HPToastState
 import ca.lucianlabs.housepour.HPToastTone
+import ca.lucianlabs.tgsocial.BuildConfig
 import ca.lucianlabs.tgsocial.TgApp
 import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.CommentNode
@@ -20,7 +21,13 @@ import ca.lucianlabs.tgsocial.protocol.CardFormat
 import ca.lucianlabs.tgsocial.protocol.CommentFormat
 import ca.lucianlabs.tgsocial.protocol.CommentTarget
 import ca.lucianlabs.tgsocial.protocol.FeedOrder
+import ca.lucianlabs.tgsocial.protocol.Replies
 import ca.lucianlabs.tgsocial.protocol.ReplyTarget
+import ca.lucianlabs.tgsocial.protocol.ReportEmail
+import ca.lucianlabs.tgsocial.protocol.ReportMail
+import ca.lucianlabs.tgsocial.protocol.ReportSubject
+import ca.lucianlabs.tgsocial.protocol.SafetyFilter
+import ca.lucianlabs.tgsocial.protocol.SafetyLists
 import ca.lucianlabs.tgsocial.protocol.Username
 import ca.lucianlabs.tgsocial.repo.ActivityRegistry
 import ca.lucianlabs.tgsocial.repo.CardFullException
@@ -55,6 +62,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        /** PRODUCT §6 — the version string the You footer shows. */
+        val VERSION: String = "tgsocial ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+
+        /** PRODUCT §2.15 — the same string plus the platform, which is the report email's `App:` line. */
+        val APP_VERSION: String = "$VERSION · Android"
+    }
+
     private val app = application as TgApp
     private val tg get() = app.tg
     private val store get() = app.store
@@ -80,6 +95,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val sheet: StateFlow<Sheet?> = _sheet.asStateFlow()
     private val _viewer = MutableStateFlow<ViewerUi?>(null)
     val viewer: StateFlow<ViewerUi?> = _viewer.asStateFlow()
+
+    // ---- safety (PRODUCT §2.15–§2.18, PROTOCOL §7.1)
+    /**
+     * The reader's own block, mute and report lists. Every surface reads them through the `visible*` flows
+     * below rather than filtering as it renders, so one list change repaints all of them and nothing has to
+     * remember to ask.
+     */
+    private val _safety = MutableStateFlow(SafetyLists())
+    val safety: StateFlow<SafetyLists> = _safety.asStateFlow()
+    private val _report = MutableStateFlow(ReportUi())
+    val report: StateFlow<ReportUi> = _report.asStateFlow()
+    private val _deleteNode = MutableStateFlow(DeleteNodeUi())
+    val deleteNode: StateFlow<DeleteNodeUi> = _deleteNode.asStateFlow()
 
     // ---- status (PRODUCT §2.10)
     /** The live list of in-flight operations; the Status sheet's `Pending` rows. */
@@ -152,8 +180,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val cards get() = nodes.cards
 
+    // ---- the default filter (PRODUCT §2.18)
+    //
+    // Filtered *views* of the state, never filtered state: `_feed`, `_channel` and the comment index keep
+    // everything they loaded, so an `Unblock` in Settings repaints the next frame instead of waiting for a
+    // refresh to fetch the same posts again.
+
+    /** The main feed: blocked nodes, reported posts, and — here only — muted feeds are gone (§2.17). */
+    val visibleFeed: StateFlow<FeedUi> = combine(_feed, _safety) { f, s ->
+        f.filtered(s)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, FeedUi())
+
+    /** A feed channel's own screen stays complete when muted; blocked and reported still drop (§2.17). */
+    val visibleChannel: StateFlow<ChannelUi> = combine(_channel, _safety) { c, s ->
+        c.copy(posts = SafetyFilter.posts(c.posts, s, mainFeed = false), muted = s.isMuted(c.username))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ChannelUi())
+
+    val visibleExplore: StateFlow<ExploreUi> = combine(_explore, _safety) { e, s ->
+        e.copy(nearby = SafetyFilter.nodes(e.nearby, s), directory = SafetyFilter.nodes(e.directory, s))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ExploreUi())
+
+    /** §2.18 — a blocked node is not in `DIRECT · 12` or `+1 · 84`; the counts are these lists' sizes. */
+    val visibleGraph: StateFlow<GraphUi> = combine(_graph, _safety) { g, s ->
+        g.copy(direct = SafetyFilter.nodes(g.direct, s), plusOne = SafetyFilter.nodes(g.plusOne, s))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, GraphUi())
+
+    val visibleProfile: StateFlow<ProfileUi> = combine(_profile, _safety) { p, s ->
+        p.copy(blocked = s.isBlocked(p.username))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ProfileUi())
+
     // ---- comments (PRODUCT §2.12)
-    val commentIndex: StateFlow<Map<String, List<Comment>>> get() = commentRepo.index
+    /**
+     * The comment index every surface reads — filtered (§2.18). Counts and trees derive from this map, so a
+     * blocked commenter leaves no residue in `N comments` and takes the replies under them with them.
+     */
+    val commentIndex: StateFlow<Map<String, List<Comment>>> = combine(commentRepo.index, _safety) { index, s ->
+        SafetyFilter.comments(index, s)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     fun postTargetKey(post: Post): String = CommentFormat.postKey(post.sourceUsername, post.messageId)
     fun commentCount(post: Post, index: Map<String, List<Comment>>): Int = commentRepo.countFor(postTargetKey(post), index)
@@ -263,12 +326,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (bootstrapped) return
         bootstrapped = true
         viewModelScope.launch {
+            // PRODUCT §2.18 — the filter is on and there is no switch, which includes the first frame. The
+            // lists come off disk first, before anything paints: they are local state (PROTOCOL §7.1) and
+            // nothing about reading them needs Telegram, so nothing about them may wait on Telegram. Behind
+            // `myNodeRepo.me()` — a request TelegramClient bounds at 40 s — a degraded network meant the
+            // cached feed painted blocked nodes and reported posts for as long as that call took to give up.
+            restoreSafety()
             nodes.restore()
             _tab.value = Tab.entries[store.lastTab().coerceIn(0, Tab.entries.lastIndex)]
             // Cold start: the last cached feed first, never a blank screen behind a spinner.
             val cached = feedRepo.cachedFeed()
             if (cached.isNotEmpty()) _feed.update { it.copy(posts = FeedOrder.sort(cached), ready = true) }
-            _phone.value = runCatching { myNodeRepo.me()?.phoneNumber }.getOrNull().orEmpty()
+            val account = runCatching { myNodeRepo.me() }.getOrNull()
+            _phone.value = account?.phoneNumber.orEmpty()
+            adoptSafetyAccount(account?.id)
             val pointer = store.myNode()
             if (pointer != null) {
                 _myNode.value = pointer
@@ -380,15 +451,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_viewer.value != null) { closeViewer(); return true }
         if (_stack.value.size > 1) {
             _stack.update { it.dropLast(1) }
-            // The pushed-screen state is single-slot; reload whatever is now on top.
-            when (val top = _stack.value.last()) {
-                is Screen.Profile -> loadProfile(top.username)
-                is Screen.FeedChannel -> loadChannel(top.username)
-                else -> Unit
-            }
+            reloadTop()
             return true
         }
         return false
+    }
+
+    /** The pushed-screen state is single-slot; whatever is now on top has to be reloaded into it. */
+    private fun reloadTop() {
+        when (val top = _stack.value.last()) {
+            is Screen.Profile -> loadProfile(top.username)
+            is Screen.FeedChannel -> loadChannel(top.username)
+            else -> Unit
+        }
+    }
+
+    /**
+     * PRODUCT §2.18 — a post that has just landed on a safety list takes its own Thread screen with it. The
+     * thread *is* the post: §2.15's toast says it is hidden here now, and §2.16 promises a blocked node's
+     * posts leave "your feed, your threads, your graph, and search". Leaving the card painted under the toast
+     * makes both of those untrue, and the comment tree below it hangs off a post that is gone.
+     *
+     * Not [back]: back closes the innermost layer, which on this path could be a viewer opened over the same
+     * post's media, and the thread would survive underneath it.
+     */
+    fun dismissThread(post: Post) {
+        val stack = _stack.value
+        val next = stack.filterNot { it is Screen.Thread && it.post.key == post.key }
+        if (next.size == stack.size || next.isEmpty()) return
+        _stack.value = next
+        reloadTop()
     }
 
     fun openSheet(s: Sheet) {
@@ -396,7 +488,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             is Sheet.Compose -> prepareCompose(s.feedUsername)
             Sheet.EditCard -> _editCard.value = EditCardUi(name = myCard?.name.orEmpty(), bio = myCard?.bio.orEmpty(), link = myCard?.link.orEmpty())
             is Sheet.CommentComposer -> prepareCommentComposer(s.post, s.target)
-            Sheet.SignOut, Sheet.Status, is Sheet.DeleteComment, is Sheet.PostSheet -> Unit
+            // PRODUCT §2.21 — the field opens empty every time; a typed username is not a standing permission.
+            Sheet.DeleteNode -> _deleteNode.value = DeleteNodeUi()
+            Sheet.SignOut, Sheet.Status, Sheet.Report, is Sheet.Block,
+            is Sheet.DeleteComment, is Sheet.PostSheet, is Sheet.CommentSheet,
+            -> Unit
         }
         _sheet.value = s
     }
@@ -404,6 +500,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun closeSheet() {
         if (_sheet.value is Sheet.Compose && _compose.value.posting) return
         if (_sheet.value is Sheet.CommentComposer && _commentComposer.value.posting) return
+        // PRODUCT §2.21 — while the delete runs the modal cannot be dismissed.
+        if (_sheet.value is Sheet.DeleteNode && _deleteNode.value.running) return
         _sheet.value = null
     }
 
@@ -540,7 +638,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun prepareCommentComposer(post: Post, target: CommentTarget) {
         val needsChannel = myCard != null && myCard?.replies == null
-        val suggested = _myNode.value?.username?.let { "${it}_r".take(32) }.orEmpty()
+        val suggested = _myNode.value?.username?.let { Replies.convention(it) }.orEmpty()
         _commentComposer.value = CommentComposerUi(
             target = target,
             postTarget = ReplyTarget.forPost(post),
@@ -678,6 +776,192 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { commentRepo.delete(comment) }
                 .onFailure { e -> if (!isCancelled(e)) fail(e) }
         }
+    }
+
+    // ------------------------------------------------------------------ safety (PRODUCT §2.15–§2.21)
+
+    /**
+     * PROTOCOL §7.1 — the record, off disk, as written. This takes no account id and runs before anything
+     * else in `bootstrap`: whose lists they are is a question only Telegram can answer, and the filter is not
+     * allowed to wait for that answer (PRODUCT §2.18). Applying a record that turns out to belong to a
+     * previous account for a few hundred milliseconds over-filters; not applying one under-filters, and only
+     * one of those is a screen the reader asked never to see again.
+     */
+    private suspend fun restoreSafety() {
+        _safety.value = store.moderation()
+    }
+
+    /**
+     * PROTOCOL §7.1 — key the record to this account, once `getMe` has named it. A failed `getMe` (offline at
+     * boot) passes null and the record is kept as written: the lists are only ever replaced when Telegram has
+     * actually named a *different* user.
+     */
+    private suspend fun adoptSafetyAccount(accountId: Long?) {
+        val stored = _safety.value
+        val mine = stored.forAccount(accountId ?: stored.userId)
+        _safety.value = mine
+        if (mine != stored) store.saveModeration(mine)
+    }
+
+    /** One write path, so nothing can change a list in memory and forget to persist it. */
+    private fun updateSafety(transform: (SafetyLists) -> SafetyLists) {
+        val next = transform(_safety.value)
+        if (next == _safety.value) return
+        _safety.value = next
+        viewModelScope.launch { store.saveModeration(next) }
+    }
+
+    /** PRODUCT §2.16 — confirmed. The blocked node is not told: there is nowhere for a notification to come from. */
+    fun block(username: String) {
+        _sheet.value = null
+        updateSafety { it.block(username) }
+        toast.show("Blocked @$username.", HPToastTone.GOOD)
+    }
+
+    /** One tap, no confirm — from the blocked node's own profile or from Settings. */
+    fun unblock(username: String) {
+        updateSafety { it.unblock(username) }
+        toast.show("Unblocked @$username.", HPToastTone.GOOD)
+    }
+
+    /** PRODUCT §2.17 — no confirm: it is one tap to undo in the same two places. [title] is the channel's. */
+    fun muteFeed(username: String, title: String) {
+        updateSafety { it.mute(username) }
+        toast.show("Muted $title.", HPToastTone.GOOD)
+    }
+
+    fun unmuteFeed(username: String, title: String) {
+        updateSafety { it.unmute(username) }
+        toast.show("Unmuted $title.", HPToastTone.GOOD)
+    }
+
+    fun unhide(key: String) {
+        updateSafety { it.unhide(key) }
+        toast.show("Unhidden. It's back in your feed.", HPToastTone.GOOD)
+    }
+
+    /** PRODUCT §2.15 — `Report Post` / `Report Comment` replaces the sheet with the report confirm. */
+    fun openReport(subject: ReportSubject) {
+        _report.value = ReportUi(subject = subject)
+        _sheet.value = Sheet.Report
+    }
+
+    fun pickReportReason(reason: String) {
+        _report.update { it.copy(reason = reason) }
+    }
+
+    /** The mail `Send Report` hands to the platform composer, or null before a reason is picked. */
+    fun reportMail(): ReportMail? {
+        val r = _report.value
+        val subject = r.subject ?: return null
+        val reason = r.reason ?: return null
+        return ReportEmail.compose(subject, reason, APP_VERSION)
+    }
+
+    /**
+     * PRODUCT §2.15 — hiding is immediate and **unconditional**. The app cannot know whether a mail was
+     * actually sent, and the reader has already said they do not want to see this; so [mailOpened] changes
+     * the toast and nothing else.
+     */
+    fun confirmReport(mailOpened: Boolean) {
+        val r = _report.value
+        val subject = r.subject ?: return
+        val reason = r.reason ?: return
+        _sheet.value = null
+        _report.value = ReportUi()
+        updateSafety { it.hide(subject.key, reason, nowIso()) }
+        if (mailOpened) toast.show("Reported. It's hidden here now.", HPToastTone.GOOD)
+        else toast.show("No mail app. Write to ${ReportEmail.ADDRESS}.", HPToastTone.BAD)
+    }
+
+    /** PROTOCOL §7.1 — `at`, ISO 8601 UTC to the second. */
+    private fun nowIso(): String = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
+
+    // ---- delete my node (PRODUCT §2.21)
+
+    fun setDeleteNodeInput(value: String) {
+        _deleteNode.update { it.copy(input = value) }
+    }
+
+    /** Case-insensitive, and a missing `@` is not a reason to refuse someone their own username. */
+    fun deleteNodeConfirmed(input: String): Boolean =
+        _myNode.value?.username?.equals(input.trim().removePrefix("@"), ignoreCase = true) == true
+
+    fun deleteMyNode() {
+        val node = _myNode.value ?: return
+        if (!deleteNodeConfirmed(_deleteNode.value.input) || _deleteNode.value.running) return
+        if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
+        _deleteNode.update { it.copy(running = true, message = null, openUsername = null) }
+        viewModelScope.launch {
+            val result = try {
+                myNodeRepo.deleteNode(node, myCard, commentsAlreadyGone = _deleteNode.value.commentsGone)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                MyNodeRepo.DeleteResult.Failed(node.username, errorCopy(e))
+            }
+            when (result) {
+                is MyNodeRepo.DeleteResult.Deleted -> {
+                    _sheet.value = null
+                    _deleteNode.value = DeleteNodeUi()
+                    discardNodeState()
+                    toast.show("Your node is gone.", HPToastTone.GOOD)
+                }
+                is MyNodeRepo.DeleteResult.NotOwner -> _deleteNode.update {
+                    it.copy(
+                        running = false,
+                        message = "Telegram won't let you delete @${result.username} — only the channel's owner can. Open it in Telegram to see who owns it.",
+                        openUsername = result.username,
+                    )
+                }
+                is MyNodeRepo.DeleteResult.Failed -> _deleteNode.update {
+                    it.copy(running = false, message = "Couldn't delete @${result.username} — Telegram said: ${result.error}. Nothing was deleted.", openUsername = null)
+                }
+                is MyNodeRepo.DeleteResult.NodeFailed -> {
+                    // PROTOCOL §4.11 step 2 stripped `replies:` on Telegram; the copy held here has to follow.
+                    // `Try Again` passes this card straight back in, and the comment composer reads it too —
+                    // both would go on pointing at a channel that no longer exists.
+                    _me.update { snap -> snap?.card?.let { snap.copy(card = it.copy(replies = null)) } ?: snap }
+                    _deleteNode.update {
+                        it.copy(running = false, commentsGone = true, message = "Your comments channel is gone. @${result.username} is still there — Telegram said: ${result.error}.", openUsername = null)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * PRODUCT §2.21 — both channels went. Local state is wiped exactly as Sign Out wipes it (the safety lists
+     * included: `LocalStore.wipe` keeps them, and they protect the person, not the node), but there is no
+     * `logOut` — the session stays authorized and the client is nodeless, so it lands on Setup.
+     */
+    private suspend fun discardNodeState() {
+        feedJob?.cancel()
+        candidatesJob?.cancel()
+        candidateRefreshJob?.cancel()
+        store.wipe()
+        nodes.clear()
+        commentRepo.clear()
+        feedRepo.reset()
+        app.media.clear()
+        app.strips.clear()
+        app.playback.stopAudio()
+        app.activity.clear()
+        _myNode.value = null
+        _me.value = null
+        _feed.value = FeedUi()
+        _explore.value = ExploreUi()
+        _graph.value = GraphUi()
+        _profile.value = ProfileUi()
+        _channel.value = ChannelUi()
+        _setup.value = SetupUi()
+        _compose.value = ComposeUi()
+        _commentComposer.value = CommentComposerUi()
+        _stack.value = listOf(Screen.Home)
+        _viewer.value = null
+        _tab.value = Tab.FEED
+        _setupNeeded.value = true
+        prepareSetup()
     }
 
     // ------------------------------------------------------------------ explore
@@ -1082,6 +1366,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.value = SetupUi()
         _compose.value = ComposeUi()
         _commentComposer.value = CommentComposerUi()
+        // PROTOCOL §7.1 — `_safety` is deliberately NOT reset here. The record outlives sign-out and is keyed
+        // to the account that wrote it, so the next sign-in either gets its own lists back or starts empty.
+        _report.value = ReportUi()
+        _deleteNode.value = DeleteNodeUi()
         _stack.value = listOf(Screen.Home)
         _sheet.value = null
         _viewer.value = null

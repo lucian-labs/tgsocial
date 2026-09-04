@@ -80,6 +80,16 @@ under any preset. `GET /scope` reports the current preset and the resolved
 username list; there is no endpoint that changes scope — that is deliberate,
 and it is done in the app.
 
+**The reader's safety lists apply on top of scope.** Settings says "Blocked and
+reported content is hidden everywhere in the app" (`PRODUCT §2.20`) and the
+filter has no switch (`§2.18`), so it covers the bridge as well as the screens:
+a blocked node's posts and comments are absent from `/feed`, `/feed/{username}`,
+`/search`, `/thread` and `/graph`; a muted feed leaves `/feed` only, and its own
+route still answers with the whole channel; and a reported post is simply not
+there — `404` on `/thread` and `/media` like any other id the bridge cannot
+serve. The lists themselves never cross: there is no endpoint that reads them,
+and nothing in a response says why something is missing (`PROTOCOL §7.1`).
+
 ## 4. Endpoints
 
 ### Read

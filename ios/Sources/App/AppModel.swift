@@ -43,6 +43,8 @@ enum Route: Hashable {
     case profile(username: String)
     case feedChannel(username: String)
     case manageFeeds
+    /// PRODUCT §2.20: the safety lists, contact, and the two destructive actions.
+    case settings
     /// PRODUCT §2.12: the post with its comment tree.
     case thread(post: Post)
     #if targetEnvironment(macCatalyst)
@@ -64,8 +66,30 @@ enum Modal: Equatable {
     case comment(targeting: CommentTargeting)
     /// PRODUCT §2.12: `Delete this comment?` confirm.
     case deleteComment(Comment)
-    /// PRODUCT §2.3: the long-press post sheet — Posted, Views, Feed, Open in Telegram.
+    /// PRODUCT §2.3: the long-press post sheet — Posted, Views, Feed, Open in Telegram, SAFETY.
     case postSheet(Post)
+    /// PRODUCT §2.12: the same sheet for a comment, with the comment's own rows.
+    case commentSheet(Comment)
+    /// PRODUCT §2.15: the report confirm — the reason list and the email it sends.
+    case report(ReportSubject)
+    /// PRODUCT §2.16: `Block @tgs_ana?`
+    case block(username: String)
+    /// PRODUCT §2.21: type-the-username confirm, then the two deletes in order.
+    case deleteNode
+}
+
+/// How `deleteMyNode` ended (PRODUCT §2.21, PROTOCOL §4.11). Every case but `.deleted` names what
+/// is still there, because "nothing was deleted" and "your comments channel is gone" are different
+/// situations and the modal has to say which one happened.
+enum DeleteNodeResult: Equatable {
+    case deleted
+    case offline
+    /// `canBeDeletedForAllUsers` is false on this channel; nothing was deleted.
+    case notOwner(username: String)
+    /// The comments channel failed. The node channel was not touched.
+    case commentsFailed(username: String, error: String)
+    /// The node failed after the comments channel went; `replies:` has been stripped from the card.
+    case nodeFailed(username: String, error: String)
 }
 
 /// The fields of a supergroup that decide feed candidacy (PRODUCT §2.2): its usernames, the
@@ -95,6 +119,9 @@ final class AppModel {
     // Infrastructure
     @ObservationIgnored private(set) var td: TDClient!
     @ObservationIgnored let store = LocalStore()
+    /// The block / mute / report lists and the filter every surface renders through
+    /// (PRODUCT §2.18, PROTOCOL §7.1). Observable: a block repaints the app on the next render.
+    let moderation: ModerationStore
     @ObservationIgnored let sends = SendTracker()
     /// Every in-flight operation registers here (PRODUCT §2.10); the pill derives from it.
     let activity = ActivityRegistry()
@@ -126,6 +153,9 @@ final class AppModel {
     var tab: Tab = .feed
     var path: [Route] = []
     var modal: Modal?
+    /// PRODUCT §2.21: "while the delete runs … the modal cannot be dismissed". The scrim and the
+    /// binding both go through `dismissModal`, so there is one place that can refuse.
+    var modalLocked = false
     /// The full-screen media viewer (PRODUCT §2.11); non-nil hides topbar and tab bar.
     var viewer: ViewerRequest?
     var toast: HPToastMessage?
@@ -205,6 +235,7 @@ final class AppModel {
     // MARK: Init
 
     init() {
+        moderation = ModerationStore(store: store)
         // §2.11 both ways: a starting video pauses audio (VideoCoordinator.willPlay), and
         // starting or resuming audio pauses the audible inline video.
         audio.onWillPlay = { [weak self] in self?.video.pauseActive() }
@@ -534,6 +565,10 @@ final class AppModel {
         // No blanket counter here: each operation on this path registers itself with the
         // activity registry, so the pill reflects what is actually in flight.
         me = try? await td.api.getMe()
+        // PROTOCOL §7.1: the safety lists belong to the account that wrote them. Same id, they
+        // carry over a sign-out; a different id and they are replaced with empty ones, because a
+        // shared device must not hand one person another person's judgement.
+        if let me { moderation.adopt(userId: me.id) }
         if myNode == nil {
             if let (node, info) = try? await nodes.findMyNode() { adopt(node: node, info: info) }
         } else {
@@ -960,20 +995,21 @@ final class AppModel {
         return links
     }
 
-    /// "Comments from your network" — the honest, serverless number (PRODUCT §2.12).
+    /// "Comments from your network" — the honest, serverless number (PRODUCT §2.12), through the
+    /// filter: a hidden comment is not in the post footer's `N comments` (PRODUCT §2.18).
     func commentCount(for post: Post) -> Int {
-        comments.count(forTargets: commentTargets(for: post))
+        threadComments(for: post).count
     }
 
     func threadComments(for post: Post) -> [Comment] {
-        comments.comments(forTargets: commentTargets(for: post))
+        threadComments(targets: commentTargets(for: post))
     }
 
     /// The comments on a chosen set of links. The Thread screen passes every album item; the
     /// carousel passes just the one it is showing, which is what "paging … re-targets the thread to
     /// that item's post" means (PRODUCT §2.12).
     func threadComments(targets: [String]) -> [Comment] {
-        comments.comments(forTargets: targets)
+        moderation.lists.filtered(comments: comments.comments(forTargets: targets))
     }
 
     // MARK: The reply target (PRODUCT §2.12)
@@ -1085,7 +1121,169 @@ final class AppModel {
         }
     }
 
+    // MARK: Safety (PRODUCT §2.15–§2.20, PROTOCOL §7.1)
+
+    /// The main feed, filtered. Mute applies here and only here: a muted feed stays complete on its
+    /// own screen (PRODUCT §2.17).
+    var visiblePosts: [Post] { moderation.lists.filtered(posts: posts, inMainFeed: true) }
+
+    /// A single channel's posts (PRODUCT §2.6): blocked and reported drop out, muted does not.
+    func visible(posts list: [Post]) -> [Post] {
+        moderation.lists.filtered(posts: list, inMainFeed: false)
+    }
+
+    var visibleNearby: [DirectoryEntry] { moderation.lists.filtered(entries: nearby) }
+    var visibleDirectory: [DirectoryEntry] { moderation.lists.filtered(entries: directory) }
+    var visibleDirect: [NodeInfo] { moderation.lists.filtered(nodes: direct) }
+    var visibleEdges: [String: [String]] { moderation.lists.filtered(edges: edges) }
+
+    func isBlocked(_ username: String) -> Bool { moderation.isBlocked(username) }
+    func isMuted(feed username: String) -> Bool { moderation.isMuted(feed: username) }
+
+    /// PRODUCT §2.16. The card is never touched: rewriting `follows:` to enforce a block would
+    /// publish the block, which is the one thing this feature promises to keep private.
+    func block(_ username: String) {
+        modal = nil
+        moderation.block(username)
+        showToast("Blocked @\(username).")
+    }
+
+    /// One tap, no confirm, here and in Settings (PRODUCT §2.16).
+    func unblock(_ username: String) {
+        moderation.unblock(username)
+        showToast("Unblocked @\(username).")
+    }
+
+    /// PRODUCT §2.17. `title` is what the toast names — the channel's title, not its username.
+    func mute(feed username: String, title: String) {
+        moderation.mute(feed: username)
+        showToast("Muted \(title).")
+    }
+
+    func unmute(feed username: String, title: String) {
+        moderation.unmute(feed: username)
+        showToast("Unmuted \(title).")
+    }
+
+    func unhide(_ item: HiddenItem) {
+        moderation.unhide(key: item.key)
+        showToast("Unhidden. It's back in your feed.")
+    }
+
+    /// The version line the You footer and the report email share (PRODUCT §2.15, §6), so the two
+    /// cannot drift apart.
+    var versionLine: String { "tgsocial \(appVersion) (\(buildNumber))" }
+    /// `App:` in the report email — the same string plus the platform.
+    var reportAppLine: String { versionLine + " \u{00B7} " + Self.platformName }
+
+    #if targetEnvironment(macCatalyst)
+    static let platformName = "Mac"
+    #else
+    static let platformName = "iOS"
+    #endif
+
+    /// PRODUCT §2.15: hiding is immediate and unconditional — it does not wait on the mail, because
+    /// the app cannot know whether anything was sent and the reader has already said they do not
+    /// want to see it. Only the toast depends on whether a composer opened, and it arrives when
+    /// that composer closes rather than behind it (`MailLauncher`).
+    func sendReport(_ subject: ReportSubject, reason: String) {
+        modal = nil
+        moderation.hide(key: subject.hiddenKey, reason: reason)
+        MailLauncher.shared.send(to: ReportMail.to,
+                                 subject: ReportMail.subject(reason: reason),
+                                 body: ReportMail.body(subject: subject, reason: reason, app: reportAppLine)) { [weak self] opened in
+            self?.showToast(opened ? "Reported. It's hidden here now."
+                                   : "No mail app. Write to \(Moderation.contactAddress).")
+        }
+    }
+
+    /// The contact address, opened as a plain composer (PRODUCT §2.19). No subject, no body: this
+    /// is a person writing to a person.
+    func contactByMail() {
+        MailLauncher.shared.send(to: Moderation.contactAddress, subject: "", body: "") { [weak self] opened in
+            guard !opened else { return }
+            self?.showToast("No mail app. Write to \(Moderation.contactAddress).")
+        }
+    }
+
+    /// Closing a modal goes through here so the delete-my-node run can refuse (PRODUCT §2.21).
+    func dismissModal() {
+        guard !modalLocked else { return }
+        modal = nil
+    }
+
+    // MARK: Delete my node (PRODUCT §2.21, PROTOCOL §4.11)
+
+    /// Comments channel first, node channel second: deleting the node first and then failing would
+    /// leave a public comments channel backlinking to a node that no longer exists, with no route
+    /// back to it from an app now sitting at Setup.
+    ///
+    /// Both ownership checks run *before* either delete. §4.11 checks each channel as it reaches
+    /// it, but §2.21 promises that "not the owner" means nothing was deleted — and with the checks
+    /// inline, a node I do not own would be discovered only after its comments channel was already
+    /// gone. Checking both first is what makes that promise true.
+    func deleteMyNode() async -> DeleteNodeResult {
+        guard let node = myNode else { return .deleted }
+        if isOffline { showToast("You're offline.", tone: .bad); return .offline }
+        let repliesUsername = myCard?.replies
+        var repliesChat: Chat?
+        if let repliesUsername {
+            do {
+                // A card pointing at a channel that is already gone has nothing to delete; that is
+                // step one being skipped, not a failure.
+                repliesChat = try await nodes.publicChat(username: repliesUsername)
+            } catch {
+                return .commentsFailed(username: repliesUsername, error: TDFailure(error).message)
+            }
+            if let chat = repliesChat, !chat.canBeDeletedForAllUsers {
+                return .notOwner(username: repliesUsername)
+            }
+        }
+        do {
+            let nodeChat = try await perform { try await self.td.api.getChat(chatId: node.chatId) }
+            guard nodeChat.canBeDeletedForAllUsers else { return .notOwner(username: node.username) }
+        } catch {
+            // Nothing has been deleted yet, so this reads as the first failure it is.
+            return .commentsFailed(username: node.username, error: TDFailure(error).message)
+        }
+        if let chat = repliesChat, let repliesUsername {
+            do { try await perform { _ = try await self.td.api.deleteChat(chatId: chat.id) } }
+            catch { return .commentsFailed(username: repliesUsername, error: TDFailure(error).message) }
+        }
+        do {
+            try await perform { _ = try await self.td.api.deleteChat(chatId: node.chatId) }
+        } catch {
+            let message = TDFailure(error).message
+            // The comments channel is gone; the card must stop pointing at it (PROTOCOL §4.4).
+            if repliesChat != nil, var next = myCard {
+                next.replies = nil
+                await writeCard(next)
+            }
+            return .nodeFailed(username: node.username, error: message)
+        }
+        // PROTOCOL §4.11 step 3: everything §7 calls discardable goes, the session stays authorized,
+        // and the client is nodeless — no logOut. The safety lists survive (LocalStore.clear).
+        discardLocalState()
+        nodeLookupDone = true
+        modal = nil
+        showToast("Your node is gone.", tone: .good)
+        return .deleted
+    }
+
     // MARK: Sign out (wipes local state)
+
+    /// Everything PROTOCOL §7 calls discardable, in one place: sign out and delete-my-node both
+    /// wipe exactly this, and only sign out also drops the session.
+    private func discardLocalState() {
+        store.clear()
+        myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        setupSkipped = false; inSetup = false
+        posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
+        feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
+        path = []; tab = .feed
+        feedReady = false; feedStale = false; feedExhausted = false
+        lastFeedRefresh = nil; myCardFetchedAt = nil
+    }
 
     func signOut() async {
         #if targetEnvironment(macCatalyst)
@@ -1098,15 +1296,12 @@ final class AppModel {
         audio.stop()
         auth = .loggingOut
         _ = try? await td.api.logOut()
-        store.clear()
-        myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil; me = nil
-        setupSkipped = false; nodeLookupDone = false; inSetup = false
-        posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
-        feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
+        // The safety lists survive this by design (PROTOCOL §7.1); LocalStore.clear keeps them.
+        discardLocalState()
+        me = nil
+        nodeLookupDone = false
         resetCandidacyMemory()
-        path = []; tab = .feed
-        feedReady = false; feedStale = false; feedExhausted = false
-        lastError = nil; lastFeedRefresh = nil; myCardFetchedAt = nil
+        lastError = nil
     }
 
     // MARK: Links

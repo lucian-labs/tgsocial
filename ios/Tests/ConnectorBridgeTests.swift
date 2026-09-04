@@ -30,6 +30,9 @@ final class StubConnectorReader: ConnectorReader {
     var writes = ConnectorWrites.none
     var isSignedIn = true
     var inputs = ConnectorFixture.inputs
+    /// Empty by default: every existing expectation in this suite is what an unfiltered reader
+    /// sees, and the safety tests set the lists they need.
+    var safety = SafetyLists()
 
     /// One post from a source in scope, one from a source that is not. The out-of-scope post is
     /// here to be *absent* from every response.
@@ -404,6 +407,123 @@ final class ConnectorBridgeTests: XCTestCase {
 
         let reported = try await get("/scope")
         XCTAssertEqual(reported.json?["preset"] as? String, "graph")
+    }
+
+    // MARK: 2b — the safety lists (PRODUCT §2.15–§2.20, PROTOCOL §7.1)
+
+    /// A second in-scope post in the same channel, by a node the reader has not blocked, so every
+    /// test below can tell "the blocked one is gone" apart from "the response came back empty".
+    private func addUnblockedPost() async -> Post {
+        let post = ConnectorFixture.post(feed: "waveloop_devlog", title: "WaveLoop devlog",
+                                         node: "tgs_bob", nodeName: "Bob",
+                                         messageId: 145 << 20, date: 1_787_501_920, text: "still here")
+        await MainActor.run { reader.window.insert(post, at: 0) }
+        return post
+    }
+
+    /// Settings, verbatim: "Blocked and reported content is hidden everywhere in the app" (§2.20),
+    /// and §2.18's filter has no switch. The bridge is one of the places it is hidden.
+    func testABlockedNodesPostsAreNotServedAnywhere() async throws {
+        _ = await addUnblockedPost()
+        await MainActor.run { reader.safety = SafetyLists(blocked: ["tgs_ana"]) }
+
+        let feed = try await get("/feed")
+        XCTAssertEqual((feed.json?["posts"] as? [[String: Any]])?.map { $0["node"] as? String }, ["tgs_bob"])
+        XCTAssertFalse(feed.body.contains("shipped the sequencer"))
+
+        // The channel's own route, which the app filters too (§2.16: "feed channel screens").
+        let channel = try await get("/feed/waveloop_devlog")
+        XCTAssertEqual((channel.json?["posts"] as? [[String: Any]])?.map { $0["node"] as? String }, ["tgs_bob"])
+
+        // And search, whose corpus is the same window (§2.18 names it).
+        let search = try await get("/search?q=sequencer")
+        XCTAssertEqual((search.json?["posts"] as? [[String: Any]])?.count, 0)
+    }
+
+    /// The case number 2 in §2.15: reported, hidden immediately, and hidden everywhere — including
+    /// the bytes behind it, which are the post.
+    func testAReportedPostIsGoneAndItsThreadAndMediaAre404() async throws {
+        _ = await addUnblockedPost()
+        let hidden = HiddenItem(key: "waveloop_devlog/144", reason: "Spam", at: "2026-09-04T21:02:11Z")
+        await MainActor.run {
+            reader.safety = SafetyLists(hidden: [hidden])
+            reader.window[1].media = [ConnectorFixture.photo()]
+        }
+        let reported = await MainActor.run { reader.window[1] }
+
+        let feed = try await get("/feed")
+        XCTAssertEqual((feed.json?["posts"] as? [[String: Any]])?.map { $0["node"] as? String }, ["tgs_bob"])
+
+        let thread = try await get("/thread/waveloop_devlog/144")
+        XCTAssertEqual(thread.status, 404)
+        XCTAssertEqual(thread.error, "not found")
+        // The reason the reader gave is theirs; nothing about the list crosses the bridge.
+        XCTAssertFalse(thread.body.contains("Spam"))
+
+        let media = try await get("/media/\(reported.id)/0")
+        XCTAssertEqual(media.status, 404)
+    }
+
+    /// A block reaches the comment tree as well, and transitively (PRODUCT §2.18) — the post it
+    /// hangs under is someone else's and stays.
+    func testABlockedNodesCommentsLeaveTheThread() async throws {
+        let post = await addUnblockedPost()
+        await MainActor.run { reader.safety = SafetyLists(blocked: ["tgs_ana"]) }
+
+        let thread = try await get("/thread/waveloop_devlog/145")
+        XCTAssertEqual(thread.status, 200)
+        XCTAssertEqual((thread.json?["post"] as? [String: Any])?["id"] as? String, post.id)
+        XCTAssertEqual((thread.json?["comments"] as? [[String: Any]])?.count, 0)
+        XCTAssertFalse(thread.body.contains("nice"))
+    }
+
+    /// Mute is the softer one (§2.17): the feed's posts leave the merge and nothing else changes,
+    /// so the channel's own route still answers with the whole channel.
+    func testAMutedFeedLeavesTheMergedFeedAndNothingElse() async throws {
+        await MainActor.run { reader.safety = SafetyLists(mutedFeeds: ["waveloop_devlog"]) }
+
+        let feed = try await get("/feed")
+        XCTAssertEqual((feed.json?["posts"] as? [[String: Any]])?.count, 0)
+
+        let channel = try await get("/feed/waveloop_devlog")
+        XCTAssertEqual((channel.json?["posts"] as? [[String: Any]])?.count, 1)
+    }
+
+    /// §2.16 removes a blocked node from "both graph lists"; this is the same graph.
+    func testABlockedNodeIsNotInTheGraph() async throws {
+        let before = try await get("/graph?depth=2")
+        XCTAssertTrue(before.body.contains("tgs_ana"), "the fixture graph has to contain them to prove they leave")
+
+        await MainActor.run { reader.safety = SafetyLists(blocked: ["tgs_ana"]) }
+        let after = try await get("/graph?depth=2")
+        XCTAssertEqual(after.status, 200)
+        XCTAssertFalse(after.body.contains("tgs_ana"))
+    }
+
+    /// A page the filter thinned still hands back a cursor: §2.18 says pagination compensates, and
+    /// a short page whose `nextBefore` was null would strand every older post behind the one that
+    /// was dropped.
+    func testAThinnedChannelPageStillOffersACursor() async throws {
+        _ = await addUnblockedPost()
+        await MainActor.run { reader.safety = SafetyLists(blocked: ["tgs_ana"]) }
+
+        // Two posts in the channel, one of them blocked, asked for two.
+        let response = try await get("/feed/waveloop_devlog?limit=2")
+        XCTAssertEqual((response.json?["posts"] as? [[String: Any]])?.count, 1)
+        // The oldest post considered was @tgs_ana's, so that is where the next page starts.
+        XCTAssertEqual(response.json?["nextBefore"] as? String, "2026-08-23T16:02:00Z")
+    }
+
+    /// The lists are compared through `usernameKey` (PROTOCOL §7.1), so a card that spells the
+    /// username with capitals is not a hole in the filter.
+    func testTheFilterIsCaseInsensitive() async throws {
+        _ = await addUnblockedPost()
+        await MainActor.run {
+            reader.window[1].authorUsername = "TGS_Ana"
+            reader.safety = SafetyLists(blocked: ["tgs_ana"])
+        }
+        let feed = try await get("/feed")
+        XCTAssertEqual((feed.json?["posts"] as? [[String: Any]])?.map { $0["node"] as? String }, ["tgs_bob"])
     }
 
     // MARK: 3 — writes

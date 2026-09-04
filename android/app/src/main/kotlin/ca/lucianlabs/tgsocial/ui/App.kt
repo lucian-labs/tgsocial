@@ -51,14 +51,18 @@ import ca.lucianlabs.housepour.HPWordmark
 import ca.lucianlabs.housepour.HousePourTheme
 import ca.lucianlabs.housepour.hpColumnWidth
 import ca.lucianlabs.tgsocial.protocol.Format
+import ca.lucianlabs.tgsocial.protocol.SafetyFilter
 import ca.lucianlabs.tgsocial.ui.components.PullToRefresh
 import ca.lucianlabs.tgsocial.ui.components.StatusPill
 import ca.lucianlabs.tgsocial.ui.media.PlaybackHub
 import ca.lucianlabs.tgsocial.ui.media.PostViewer
 import ca.lucianlabs.tgsocial.ui.media.rememberTgApp
+import ca.lucianlabs.tgsocial.ui.screens.BlockSheet
 import ca.lucianlabs.tgsocial.ui.screens.CommentComposerSheet
+import ca.lucianlabs.tgsocial.ui.screens.CommentSheet
 import ca.lucianlabs.tgsocial.ui.screens.ComposeSheet
 import ca.lucianlabs.tgsocial.ui.screens.DeleteCommentSheet
+import ca.lucianlabs.tgsocial.ui.screens.DeleteNodeSheet
 import ca.lucianlabs.tgsocial.ui.screens.EditCardSheet
 import ca.lucianlabs.tgsocial.ui.screens.ExploreItems
 import ca.lucianlabs.tgsocial.ui.screens.FeedChannelItems
@@ -66,6 +70,8 @@ import ca.lucianlabs.tgsocial.ui.screens.FeedItems
 import ca.lucianlabs.tgsocial.ui.screens.GraphItems
 import ca.lucianlabs.tgsocial.ui.screens.PostSheet
 import ca.lucianlabs.tgsocial.ui.screens.ProfileItems
+import ca.lucianlabs.tgsocial.ui.screens.ReportSheet
+import ca.lucianlabs.tgsocial.ui.screens.SettingsItems
 import ca.lucianlabs.tgsocial.ui.screens.SetupItems
 import ca.lucianlabs.tgsocial.ui.screens.SignInScreen
 import ca.lucianlabs.tgsocial.ui.screens.SignOutSheet
@@ -99,6 +105,7 @@ private fun Shell(vm: AppViewModel) {
     val tab by vm.tab.collectAsStateWithLifecycle()
     val setupNeeded by vm.setupNeeded.collectAsStateWithLifecycle()
     val viewer by vm.viewer.collectAsStateWithLifecycle()
+    val safety by vm.safety.collectAsStateWithLifecycle()
     val screen = stack.last()
     val pushed = stack.size > 1
 
@@ -135,22 +142,34 @@ private fun Shell(vm: AppViewModel) {
                     Screen.Setup -> SetupHost(vm, feedsOnly = false)
                     Screen.ManageFeeds -> SetupHost(vm, feedsOnly = true)
                     is Screen.Profile -> {
-                        val profile by vm.profile.collectAsStateWithLifecycle()
+                        val profile by vm.visibleProfile.collectAsStateWithLifecycle()
                         val me by vm.me.collectAsStateWithLifecycle()
                         ColumnList(key = screen, state = remember(screen) { LazyListState() }) { ProfileItems(vm, profile, me) }
                     }
                     is Screen.FeedChannel -> {
-                        val channel by vm.channel.collectAsStateWithLifecycle()
+                        val channel by vm.visibleChannel.collectAsStateWithLifecycle()
                         val state = remember(screen) { LazyListState() }
                         LoadMoreWhenNear(state) { vm.loadMoreChannel() }
                         ColumnList(key = screen, state = state) { FeedChannelItems(vm, channel) }
+                    }
+                    Screen.Settings -> {
+                        val myNode by vm.myNode.collectAsStateWithLifecycle()
+                        ColumnList(key = screen, state = remember(screen) { LazyListState() }) { SettingsItems(vm, safety, myNode) }
                     }
                     is Screen.Thread -> {
                         // PRODUCT §2.12 — the thread refreshes its comment index when opened; pull-to-refresh re-scans.
                         val refreshing by vm.commentsRefreshing.collectAsStateWithLifecycle()
                         val state = remember(screen) { LazyListState() }
-                        PullToRefresh(refreshing = refreshing, topInset = LocalTopInset.current, onRefresh = { vm.refreshComments(force = true) }) {
-                            ColumnList(key = screen, state = state) { ThreadItems(vm, screen.post) }
+                        // PRODUCT §2.18 names Thread as one of the surfaces the filter clears, and the post at
+                        // the top of one is a captured value no list filters. Reporting it — or blocking its
+                        // node — from the sheet opened right here has to take the screen with it; the comment
+                        // tree already reads the filtered index, so only the card would be left standing.
+                        val hidden = !SafetyFilter.keeps(screen.post, safety, mainFeed = false)
+                        LaunchedEffect(hidden) { if (hidden) vm.dismissThread(screen.post) }
+                        if (!hidden) {
+                            PullToRefresh(refreshing = refreshing, topInset = LocalTopInset.current, onRefresh = { vm.refreshComments(force = true) }) {
+                                ColumnList(key = screen, state = state) { ThreadItems(vm, screen.post) }
+                            }
                         }
                     }
                 }
@@ -185,7 +204,13 @@ private fun Shell(vm: AppViewModel) {
         // the pager — whose `initialPage` rememberSaveable is keyed on an empty inputs array and so is read once
         // per slot. The second viewer would then open on the first one's page, silently, and keep its zoom and
         // dismiss state. The key drops all of it, which is what a new viewer means.
-        viewer?.let { key(it.post.key) { PostViewer(vm, it) } }
+        viewer?.let { open ->
+            // §2.18 again: a full-screen photo of a post that has just been reported is that post, still on a
+            // surface. The viewer closes rather than repainting around it.
+            val hidden = !SafetyFilter.keeps(open.post, safety, mainFeed = false)
+            LaunchedEffect(hidden) { if (hidden) vm.closeViewer() }
+            if (!hidden) key(open.post.key) { PostViewer(vm, open) }
+        }
     }
 
     // One modal host that stays composed: it fades in when a sheet opens and keeps the last sheet's content
@@ -201,6 +226,10 @@ private fun Shell(vm: AppViewModel) {
             is Sheet.CommentComposer -> CommentComposerSheet(vm)
             is Sheet.DeleteComment -> DeleteCommentSheet(vm, s.comment)
             is Sheet.PostSheet -> PostSheet(vm, s.post)
+            is Sheet.CommentSheet -> CommentSheet(vm, s.comment)
+            Sheet.Report -> ReportSheet(vm)
+            is Sheet.Block -> BlockSheet(vm, s.username)
+            Sheet.DeleteNode -> DeleteNodeSheet(vm)
             null -> Unit
         }
     }
@@ -287,9 +316,10 @@ private fun SetupHost(vm: AppViewModel, feedsOnly: Boolean) {
 
 @Composable
 private fun Home(vm: AppViewModel, tab: Tab) {
-    val feed by vm.feed.collectAsStateWithLifecycle()
-    val explore by vm.explore.collectAsStateWithLifecycle()
-    val graph by vm.graph.collectAsStateWithLifecycle()
+    // PRODUCT §2.18 — every list on this screen reads the filtered view; nothing here can forget to.
+    val feed by vm.visibleFeed.collectAsStateWithLifecycle()
+    val explore by vm.visibleExplore.collectAsStateWithLifecycle()
+    val graph by vm.visibleGraph.collectAsStateWithLifecycle()
     val me by vm.me.collectAsStateWithLifecycle()
     val myNode by vm.myNode.collectAsStateWithLifecycle()
     val cards by vm.cards.collectAsStateWithLifecycle()
@@ -302,6 +332,12 @@ private fun Home(vm: AppViewModel, tab: Tab) {
     val state = remember(tab) { LazyListState() }
     if (tab == Tab.FEED) {
         LoadMoreWhenNear(state) { vm.loadMoreFeed() }
+        // PRODUCT §2.18 — "a page whose items are all filtered fetches the next one rather than rendering an
+        // empty list". `LoadMoreWhenNear` cannot do it: a page that vanishes whole into the filter changes
+        // nothing the list can measure, so its predicate never leaves `true` and never emits again. `chaining`
+        // is exactly that state — pages loaded, none of them visible, more to fetch — and this is the ask the
+        // scroll has no way to make. It stops the moment a post survives or the feed runs out.
+        LaunchedEffect(feed.chaining, feed.loading) { if (feed.chaining && !feed.loading) vm.loadMoreFeed() }
         // A completed refresh replaces the window with the newest page, so the reader has to land on it. From
         // pull-to-refresh that is a no-op (already at the top); from the `Newer posts` jump, after pages of
         // load-more have slid the window's head down, it is the whole point.

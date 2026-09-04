@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.housepour.HPAvatar
@@ -26,24 +27,28 @@ import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
 import ca.lucianlabs.housepour.HPCard
 import ca.lucianlabs.housepour.HPH2
+import ca.lucianlabs.housepour.HPHitTarget
 import ca.lucianlabs.housepour.HPListItem
 import ca.lucianlabs.housepour.HPMonoSmall
 import ca.lucianlabs.housepour.HPMuted
 import ca.lucianlabs.housepour.HPPill
 import ca.lucianlabs.housepour.HPPillTone
 import ca.lucianlabs.housepour.HPSectionMark
+import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPToggle
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.tgsocial.BuildConfig
 import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.MyNode
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
+import ca.lucianlabs.tgsocial.protocol.ReportEmail
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Screen
 import ca.lucianlabs.tgsocial.ui.Sheet
 import ca.lucianlabs.tgsocial.ui.columnItem
 import ca.lucianlabs.tgsocial.ui.components.EmptyCard
 import ca.lucianlabs.tgsocial.ui.components.FeedRow
+import ca.lucianlabs.tgsocial.ui.components.openMail
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
 
 /** PRODUCT §2.8 — You. Compose is the one gold action on this screen. */
@@ -54,8 +59,8 @@ fun LazyListScope.YouItems(vm: AppViewModel, me: NodeSnapshot?, node: MyNode?) {
                 EmptyCard("No node yet.", "Make your node to pick feeds, follow people, and post.", "Make your node") { vm.push(Screen.Setup) }
             }
         }
-        item(key = "you-signout-only") {
-            Box(Modifier.columnItem()) { HPButton("Sign Out", { vm.openSheet(Sheet.SignOut) }, style = HPButtonStyle.DANGER) }
+        item(key = "you-settings-only") {
+            Box(Modifier.columnItem()) { HPButton("Settings", { vm.push(Screen.Settings) }, style = HPButtonStyle.GHOST) }
         }
         item(key = "you-footer-only") { Footer(null) }
         return
@@ -67,8 +72,8 @@ fun LazyListScope.YouItems(vm: AppViewModel, me: NodeSnapshot?, node: MyNode?) {
                 EmptyCard("Newer card. Update the app.", "@${me.username} was written by a newer tgsocial. This version can read it once updated.")
             }
         }
-        item(key = "you-signout-newer") {
-            Box(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) { HPButton("Sign Out", { vm.openSheet(Sheet.SignOut) }, style = HPButtonStyle.DANGER) }
+        item(key = "you-settings-newer") {
+            Box(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) { HPButton("Settings", { vm.push(Screen.Settings) }, style = HPButtonStyle.GHOST) }
         }
         item(key = "you-footer-newer") { Footer(node) }
         return
@@ -134,16 +139,30 @@ fun LazyListScope.YouItems(vm: AppViewModel, me: NodeSnapshot?, node: MyNode?) {
     item(key = "you-view") {
         Box(Modifier.columnItem()) { HPButton("View as others see it", { vm.push(Screen.Profile(me.username)) }, style = HPButtonStyle.GHOST) }
     }
-    item(key = "you-signout") {
-        Box(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) { HPButton("Sign Out", { vm.openSheet(Sheet.SignOut) }, style = HPButtonStyle.DANGER) }
+    // PRODUCT §2.8 / §2.20 — Sign Out lives in Settings now, next to Delete My Node; You pushes Settings.
+    item(key = "you-settings") {
+        Box(Modifier.columnItem().padding(top = HPTokens.Space.rowGap)) { HPButton("Settings", { vm.push(Screen.Settings) }, style = HPButtonStyle.GHOST) }
     }
     item(key = "you-footer") { Footer(node) }
 }
 
+/**
+ * PRODUCT §2.19 — the published address, above the version line, reachable from inside the app. Tapping it
+ * opens the mail composer; the line under it is the commitment a serverless client can actually keep.
+ */
 @androidx.compose.runtime.Composable
 private fun Footer(node: MyNode?) {
-    Box(Modifier.columnItem().padding(top = HPTokens.Space.cardGap), contentAlignment = Alignment.Center) {
-        val parts = listOf("tgsocial ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", "TDLib ${BuildConfig.TDLIB_VERSION}") + listOfNotNull(node?.let { "node @${it.username}" })
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier.columnItem().padding(top = HPTokens.Space.cardGap),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        HPHitTarget({ openMail(context, ReportEmail.ADDRESS) }, contentDescription = "Write to ${ReportEmail.ADDRESS}") {
+            HPMuted("Questions or reports: ${ReportEmail.ADDRESS}", maxLines = 1)
+        }
+        HPText("Reports are read by a person within 24 hours.", HPTokens.Type.small, HPTokens.Colors.faint, maxLines = 1)
+        Spacer(Modifier.height(HPTokens.Space.rowGap))
+        val parts = listOf(AppViewModel.VERSION, "TDLib ${BuildConfig.TDLIB_VERSION}") + listOfNotNull(node?.let { "node @${it.username}" })
         HPMonoSmall(parts.joinToString(" · "), color = HPTokens.Colors.faint)
     }
 }

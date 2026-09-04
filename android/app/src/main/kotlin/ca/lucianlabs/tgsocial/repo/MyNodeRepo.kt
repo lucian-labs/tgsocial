@@ -7,12 +7,15 @@ import ca.lucianlabs.tgsocial.protocol.Backlink
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CardFormat
 import ca.lucianlabs.tgsocial.protocol.CardParse
+import ca.lucianlabs.tgsocial.protocol.Replies
+import ca.lucianlabs.tgsocial.protocol.RepliesTarget
 import ca.lucianlabs.tgsocial.protocol.Username
 import ca.lucianlabs.tgsocial.td.TdError
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import ca.lucianlabs.tgsocial.td.orNull
 import ca.lucianlabs.tgsocial.td.orThrow
 import dev.g000sha256.tdl.TdlResult
+import dev.g000sha256.tdl.dto.Chat
 import dev.g000sha256.tdl.dto.ChatListMain
 import dev.g000sha256.tdl.dto.ChatMemberStatusAdministrator
 import dev.g000sha256.tdl.dto.ChatMemberStatusCreator
@@ -30,6 +33,7 @@ import dev.g000sha256.tdl.dto.MessageSendOptions
 import dev.g000sha256.tdl.dto.MessageText
 import dev.g000sha256.tdl.dto.PublicChatTypeHasUsername
 import dev.g000sha256.tdl.dto.User
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -243,7 +247,7 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
         }
         val chat = tg.call {
             createNewSupergroupChat(
-                title = username, isForum = false, isChannel = true, description = "tgsocial v1 replies · @${node.username}",
+                title = username, isForum = false, isChannel = true, description = Replies.description(node.username),
                 location = null, messageAutoDeleteTime = 0, forImport = false,
             )
         }
@@ -258,6 +262,88 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
         val updated = writeCard(node, next)
         return updated to next
     }
+
+    /** PROTOCOL §4.11 — what a delete did, in the reader's terms (PRODUCT §2.21 names each outcome). */
+    sealed class DeleteResult {
+        data object Deleted : DeleteResult()
+        /** `canBeDeletedForAllUsers` was false on [username]; nothing was deleted. */
+        data class NotOwner(val username: String) : DeleteResult()
+        /** [username] refused to go and nothing else was touched. */
+        data class Failed(val username: String, val error: String) : DeleteResult()
+        /** The comments channel went, [username] (the node) did not; the card no longer points at the dead one. */
+        data class NodeFailed(val username: String, val error: String) : DeleteResult()
+    }
+
+    /**
+     * PROTOCOL §4.11 — delete the two channels this client created. **Order is fixed**: the comments channel,
+     * then the node. Deleting the node first and then failing would leave a public comments channel backlinking
+     * to a node that no longer exists, with no route to it from an app now sitting at Setup.
+     *
+     * Both ownership checks run *before* either delete, because PRODUCT §2.21 promises "nothing is deleted" for
+     * the not-owner outcome and that has to be true when it is the second channel that is not mine. Feeds listed
+     * in `feeds:` are never touched: this client did not create them.
+     */
+    suspend fun deleteNode(node: MyNode, card: Card?, commentsAlreadyGone: Boolean = false): DeleteResult = activity.track("Deleting your node") {
+        val target = Replies.target(card, node.username)
+        val found = target.username?.let { tg.callOrNull { searchPublicChat(username = it) } }
+        // A declared channel is the node's by the card's own word. A guessed one counts only when Telegram
+        // agrees it is this node's comments channel — §6.4's description backlink — and is otherwise somebody
+        // else's channel that happens to fit the convention, which is nothing to do with this delete. Once it
+        // counts it is checked for ownership like any other, so a comments channel this account cannot delete
+        // still stops the run rather than being skipped past on the way to the node.
+        val repliesChat = when (target) {
+            is RepliesTarget.None -> null
+            is RepliesTarget.Declared -> found
+            is RepliesTarget.Guessed -> found?.takeIf { isRepliesChannelFor(it, node.username) }
+        }
+        val repliesUsername = if (repliesChat != null) target.username else null
+        // Nothing left to delete, but not nothing deleted: `commentsAlreadyGone` is a `Try Again` after this
+        // flow destroyed the channel and the node refused, and a card still naming a channel that no longer
+        // resolves is the same state seen from the other side (or an owner who deleted it from Telegram).
+        // Either way "Nothing was deleted" would be a lie further down.
+        val repliesAlreadyGone = commentsAlreadyGone || (target is RepliesTarget.Declared && found == null)
+        if (repliesChat != null && repliesUsername != null && !repliesChat.canBeDeletedForAllUsers) {
+            return@track DeleteResult.NotOwner(repliesUsername)
+        }
+        val nodeChat = tg.callOrNull { getChat(chatId = node.chatId) }
+        if (nodeChat != null && !nodeChat.canBeDeletedForAllUsers) return@track DeleteResult.NotOwner(node.username)
+
+        if (repliesChat != null && repliesUsername != null) {
+            try {
+                tg.call { deleteChat(chatId = repliesChat.id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@track DeleteResult.Failed(repliesUsername, errorText(e))
+            }
+        }
+        try {
+            tg.call { deleteChat(chatId = node.chatId) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // §4.11 step 2 — the comments channel is gone, so drop `replies:` rather than leave the card
+            // pointing at a channel that no longer exists. `repliesAlreadyGone` is the retry of exactly this:
+            // the write may have failed the first time round, and either way the reader is owed §2.21's
+            // "Your comments channel is gone" rather than a sentence claiming nothing was deleted.
+            if (repliesChat != null || repliesAlreadyGone) {
+                if (card?.replies != null) runCatching { writeCardInner(node, card.copy(replies = null)) }
+                return@track DeleteResult.NodeFailed(node.username, errorText(e))
+            }
+            return@track DeleteResult.Failed(node.username, errorText(e))
+        }
+        store.saveMyNode(null)
+        DeleteResult.Deleted
+    }
+
+    /** PROTOCOL §6.4 — the description backlink, read off the supergroup this chat is. */
+    private suspend fun isRepliesChannelFor(chat: Chat, nodeUsername: String): Boolean {
+        val full = tg.callOrNull { getSupergroupFullInfo(supergroupId = chat.supergroupId) } ?: return false
+        return Replies.describesRepliesFor(full.description, nodeUsername)
+    }
+
+    /** Telegram's own words, which is what §2.21's modals quote back. */
+    private fun errorText(e: Throwable): String = (e as? TdError)?.message ?: e.message ?: "no reason given"
 
     /** §3 — append `tgsocial: @node` to a feed's description. */
     suspend fun verifyFeed(feedChatId: Long, currentDescription: String, node: String) {

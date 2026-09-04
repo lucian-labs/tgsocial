@@ -42,6 +42,23 @@ fun shareLink(context: Context, url: String) {
     runCatching { context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
+/**
+ * PRODUCT §2.15 / §2.19 — the mail composer, `ACTION_SENDTO` on a `mailto:` URI so only mail apps answer.
+ *
+ * Returns whether one did. That is the whole of what the app can know about a report: the composer is the
+ * user's, and nothing after this point tells us whether they pressed send — which is why hiding does not wait
+ * for it (§2.15). A device with no mail app returns false and the toast names the address instead.
+ */
+fun openMail(context: Context, to: String, subject: String = "", body: String = ""): Boolean {
+    val query = buildList {
+        if (subject.isNotEmpty()) add("subject=${Uri.encode(subject)}")
+        if (body.isNotEmpty()) add("body=${Uri.encode(body)}")
+    }.joinToString("&")
+    val uri = runCatching { Uri.parse("mailto:$to" + if (query.isEmpty()) "" else "?$query") }.getOrNull() ?: return false
+    val intent = Intent(Intent.ACTION_SENDTO, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return runCatching { context.startActivity(intent) }.isSuccess
+}
+
 /** PRODUCT §2.6 / §2.13 — `Copy Link` puts the public URL on the clipboard (the t.me one when no origin is set). */
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return

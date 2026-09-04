@@ -37,7 +37,7 @@
  *     `MAX_SAMPLES` (`spectro.analysisRate`), so one clip's floats are ~19 MB
  *     however long it is — against a total media budget of 12–48 MB;
  *   · the silhouette-only band past the duration cap is charged against its own
- *     `ENVELOPE_MAX_SAMPLES` (~38 MB) instead, because it decodes a much longer
+ *     `ENVELOPE_MAX_SAMPLES` (~43 MB) instead, because it decodes a much longer
  *     clip at a much coarser rate and the FFT never sees the result — the mono
  *     copy it leaves behind is still capped at `MAX_SAMPLES` by the box average
  *     below;

@@ -254,6 +254,19 @@ export function deepLink(username, messageId) {
   return `https://t.me/${username}/${serverMessageId(messageId)}`;
 }
 
+/**
+ * The server id inside a t.me post link. `post.id` is NOT one thing across
+ * this app — TDLib hands us a shifted id, the public preview parser hands us
+ * the bare server id already (js/public/preview.js) — but `link` is built the
+ * same way on both paths, so it is the only id the two agree on. §2.15's
+ * `Message:` line and PROTOCOL §7's hidden key both come from here, which is
+ * what stops one report naming two different messages.
+ */
+export function linkMessageId(link) {
+  const key = targetKey(link);
+  return key ? Number(key.slice(key.indexOf('/') + 1)) : null;
+}
+
 export function channelLink(username) {
   return `https://t.me/${username}`;
 }

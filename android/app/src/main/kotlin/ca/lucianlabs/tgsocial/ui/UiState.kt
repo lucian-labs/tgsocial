@@ -8,6 +8,9 @@ import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.CommentTarget
+import ca.lucianlabs.tgsocial.protocol.ReportSubject
+import ca.lucianlabs.tgsocial.protocol.SafetyFilter
+import ca.lucianlabs.tgsocial.protocol.SafetyLists
 
 enum class AuthStep { LOADING, PHONE, CODE, PASSWORD, OTHER_DEVICE, REGISTRATION, READY }
 
@@ -29,6 +32,8 @@ sealed class Screen {
     data class FeedChannel(val username: String) : Screen()
     /** PRODUCT §2.12 — the thread screen for one post. */
     data class Thread(val post: Post) : Screen()
+    /** PRODUCT §2.20 — the safety lists, the contact card, and the two destructive actions. */
+    data object Settings : Screen()
 }
 
 sealed class Sheet {
@@ -46,6 +51,14 @@ sealed class Sheet {
     data class DeleteComment(val comment: Comment) : Sheet()
     /** PRODUCT §2.3 — the long-press post sheet: exact date, views, feed, and the one `Open in Telegram`. */
     data class PostSheet(val post: Post) : Sheet()
+    /** PRODUCT §2.12 / §2.15 — the long-press comment sheet: the same modal with the comment's own rows. */
+    data class CommentSheet(val comment: Comment) : Sheet()
+    /** PRODUCT §2.15 — the report confirm; what is being reported lives in [ReportUi]. */
+    data object Report : Sheet()
+    /** PRODUCT §2.16 — `Block @tgs_ana?`. */
+    data class Block(val username: String) : Sheet()
+    /** PRODUCT §2.21 — type the username to confirm. */
+    data object DeleteNode : Sheet()
 }
 
 /**
@@ -75,7 +88,26 @@ data class FeedUi(
      * `FeedOrder.window`). The feed shows a `Newer posts` jump rather than losing it silently; a refresh clears it.
      */
     val newerAvailable: Boolean = false,
-)
+    /**
+     * PRODUCT §2.18 — how many of [posts] the filter took on the way to the screen. Zero on the unfiltered
+     * state the view model holds; set by [filtered], which is the only thing a screen renders.
+     */
+    val filteredOut: Int = 0,
+) {
+    /**
+     * PRODUCT §2.18 — "a page whose items are all filtered fetches the next one rather than rendering an
+     * empty list". This is that state: pages have loaded, the filter took every one of them, and there is
+     * more to fetch. It is **not** an empty feed, so the screen must not say `Nothing here yet.` — and the
+     * scroll cannot ask for the next page, because nothing it can see changed when the page vanished.
+     */
+    val chaining: Boolean get() = ready && posts.isEmpty() && filteredOut > 0 && !exhausted
+
+    /** The reader's view of this feed: filtered, and told how much the filter took (§2.18). */
+    fun filtered(lists: SafetyLists): FeedUi {
+        val visible = SafetyFilter.posts(posts, lists, mainFeed = true)
+        return copy(posts = visible, filteredOut = posts.size - visible.size)
+    }
+}
 
 data class ExploreUi(
     val query: String = "",
@@ -100,6 +132,12 @@ data class ProfileUi(
     val newerVersion: Boolean = false,
     val feeds: List<FeedSource> = emptyList(),
     val follows: List<NodeEntry> = emptyList(),
+    /**
+     * PRODUCT §2.16 — the one place a blocked node is drawn at all. Everywhere else it is dropped; a profile
+     * is reached deliberately (a t.me link, a public URL, an exact-username search) and an empty screen there
+     * reads as a broken app, so it says so and offers `Unblock`.
+     */
+    val blocked: Boolean = false,
 )
 
 data class ChannelUi(
@@ -110,6 +148,8 @@ data class ChannelUi(
     val cursor: Long? = null,
     val exhausted: Boolean = false,
     val verified: Boolean = false,
+    /** PRODUCT §2.17 — the kebab reads `Unmute Feed`; the channel's own screen stays complete either way. */
+    val muted: Boolean = false,
 )
 
 enum class Availability { UNKNOWN, CHECKING, AVAILABLE, TAKEN }
@@ -141,6 +181,36 @@ data class EditCardUi(
     val bio: String = "",
     val link: String = "",
     val saving: Boolean = false,
+)
+
+/**
+ * PRODUCT §2.15 — the report confirm. [reason] is null until a row is picked, which is exactly when
+ * `Send Report` becomes tappable: an email whose subject line is blank helps nobody.
+ */
+data class ReportUi(val subject: ReportSubject? = null, val reason: String? = null) {
+    val canSend: Boolean get() = subject != null && reason != null
+}
+
+/**
+ * PRODUCT §2.21 — Delete my node. [input] is matched case-insensitively and tolerates a missing `@`;
+ * [running] disables the button (`Deleting…`) and holds the modal open.
+ *
+ * [message] is the outcome the modal shows when Telegram refused. [openUsername] is set only for the
+ * not-the-owner outcome, where the answer is in Telegram rather than in a retry — so it decides between
+ * `( Open in Telegram )` and `( Try Again )`.
+ */
+data class DeleteNodeUi(
+    val input: String = "",
+    val running: Boolean = false,
+    val message: String? = null,
+    val openUsername: String? = null,
+    /**
+     * PRODUCT §2.21 — this run already destroyed the comments channel and the node refused. `Try Again` has
+     * to remember it: PROTOCOL §4.11 step 2 rewrote the card without `replies:`, so nothing the retry can
+     * read still says the channel existed, and it would report `Nothing was deleted.` over a channel it had
+     * just deleted.
+     */
+    val commentsGone: Boolean = false,
 )
 
 /**

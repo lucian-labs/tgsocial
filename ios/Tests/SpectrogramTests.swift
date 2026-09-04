@@ -459,6 +459,70 @@ final class SpectrogramBuilderTests: XCTestCase {
         }
     }
 
+    /// §2.11.1 opens with "a short-time FFT **across the clip**" — the strip is a picture of the
+    /// whole clip, not a periodic sample of it. Web holds that with one invariant, `hop <= fftSize`
+    /// (js/spectro.js `framePlan`, and the `MAX_FRAMES` note above it): every sample sits inside at
+    /// least one window. iOS lays the STFT out per column rather than per frame, so the same
+    /// invariant reads "every column's windows cover the column's slice" — and until this test it
+    /// did not hold past about ninety seconds.
+    ///
+    /// Measured rather than argued: 150 s at 16 kHz across a phone-width strip puts 3428 samples in
+    /// a column and, with one 2048-point window centred in it, leaves 690 samples blind at each end
+    /// — 43 ms of clip, per column, that no FFT ever reads. The burst below is 32 ms of 2 kHz
+    /// dropped squarely in that blind head, and it is the only sound in the file: if the column
+    /// stays dark, the strip painted silence over a transient that is really there.
+    func testABurstBetweenTheWindowsStillLightsItsColumn() {
+        let columns = 700, rows = 64
+        let n = Int(150 * rate)
+        let column = 400
+        let start = column * n / columns
+        let end = (column + 1) * n / columns
+        let fftSize = SpectrogramSpec.fftSize
+        XCTAssertGreaterThan(end - start, fftSize, "pick a length whose columns are wider than a window")
+
+        // The blind head is everything before the centred window opens.
+        let windowOpens = (start + end) / 2 - fftSize / 2
+        let burst = sine(hz: 2_000, seconds: 0.032, amplitude: 0.8, rate: rate)
+        let burstAt = start + 64
+        XCTAssertLessThan(burstAt + burst.count, windowOpens,
+                          "the burst has to land in the gap, not in the window")
+
+        var samples = [Float](repeating: 0, count: n)
+        for i in 0..<burst.count { samples[burstAt + i] = burst[i] }
+
+        let grid = SpectrogramBuilder.grid(samples: samples, rate: rate, columns: columns, rows: rows)
+        let row = LogFrequency.row(frequency: 2_000, rows: rows, fMax: axis)
+        let lit = grid.values[column * rows + row]
+        print("[spectrogram] burst at +\(burstAt - start) of a \(end - start)-sample column → \(lit)")
+        XCTAssertGreaterThan(lit, 0.5,
+                             "the burst is inside column \(column) and the column is dark: the strip sampled the clip instead of covering it")
+    }
+
+    /// …and the invariant behind it, at the two ends of the rate band: a column's windows leave no
+    /// sample of that column unread. This is `framePlan`'s `hop <= fftSize` in iOS's per-column
+    /// shape, and it is what stops the burst above from being one lucky offset.
+    func testAColumnsWindowsCoverEverySampleInIt() {
+        let fftSize = SpectrogramSpec.fftSize
+        for seconds in [30.0, 150.0, 600.0] {
+            let r = SpectrogramSpec.rate(forDuration: seconds)
+            let n = Int(seconds * r)
+            let columns = 700
+            for column in [0, 1, 349, 699] {
+                let start = column * n / columns
+                let end = (column + 1) * n / columns
+                let frames = SpectrogramBuilder.frames(start: start, end: end, sampleCount: n, fftSize: fftSize)
+                var reach = frames.offset(0)
+                XCTAssertLessThanOrEqual(reach, start, "column \(column) starts unread at \(seconds)s")
+                for f in 0..<frames.count {
+                    let o = frames.offset(f)
+                    XCTAssertLessThanOrEqual(o, reach, "a \(o - reach)-sample gap opened at \(seconds)s, column \(column)")
+                    reach = max(reach, o + fftSize)
+                }
+                XCTAssertGreaterThanOrEqual(reach, end, "column \(column) ends unread at \(seconds)s")
+            }
+        }
+    }
+
     /// The envelope is the shape of the take: a burst in the middle peaks in the middle columns and
     /// the silence around it stays flat.
     func testTheEnvelopeFollowsTheShapeOfTheTake() {

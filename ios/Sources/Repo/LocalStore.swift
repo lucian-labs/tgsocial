@@ -29,10 +29,18 @@ final class LocalStore {
         try? data.write(to: url(name), options: .atomic)
     }
 
-    /// Wipe everything (sign out).
+    /// Wipe everything (sign out) — except the safety lists, which survive by design.
+    ///
+    /// PROTOCOL §7.1: the block, mute and report record protects the person holding the phone, not
+    /// the session. This wipes the directory, so the record is read out first and written back
+    /// after; `adopt(userId:)` is what decides on the next sign-in whether it still belongs to
+    /// whoever signs in. Delete my node (PRODUCT §2.21) comes through here too, and keeps it for
+    /// the same reason.
     func clear() {
+        let safety = try? Data(contentsOf: url(Self.moderation))
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let safety { try? safety.write(to: url(Self.moderation), options: .atomic) }
     }
 
     // MARK: Versioned caches (PRODUCT §2.3)
@@ -69,4 +77,7 @@ final class LocalStore {
     static let setupSkipped = "setupSkipped"
     static let feedCandidates = "candidates"
     static let commentIndex = "comments"
+    /// PROTOCOL §7.1: stored apart from every cache and never versioned with them — a cache bump
+    /// discards caches and must never discard a block list.
+    static let moderation = "moderation"
 }

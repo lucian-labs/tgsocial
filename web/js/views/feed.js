@@ -116,7 +116,9 @@ export function render(app, { cacheOnly = false } = {}) {
         done = true;
         return;
       }
-      session = app.repo.feedSession(sources);
+      // §2.17/§2.18: this is the main feed, the one place a muted feed's posts
+      // are dropped
+      session = app.repo.feedSession(sources, { applyMute: true });
       const first = await app.busy(session.loadMore(PAGE));
       if (mine !== gen) return;
       posts = first;
@@ -202,6 +204,8 @@ export function render(app, { cacheOnly = false } = {}) {
   const pendingAlbums = new Map(); // `${chat_id}:${album}` → { msgs, src, timer }
   const insertPost = (post) => {
     if (!root.isConnected || posts.some((p) => p.key === post.key)) return;
+    // §2.18 is a render rule, so it holds for a post that arrives live too
+    if (session && !session.keepPost(post)) return;
     const i = insertIndex(posts, post.date, post.id);
     posts.splice(i, 0, post);
     // an empty feed keeps its empty-state (or error) card inside `list`:

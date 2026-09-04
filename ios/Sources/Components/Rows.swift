@@ -70,8 +70,16 @@ struct FeedRow: View {
     let feed: FeedInfo?
     let username: String
     let verified: Bool
+    /// PRODUCT §2.17: a muted feed stays listed on its node's profile, wearing a faint pill.
+    let muted: Bool
     let isLast: Bool
     let onOpen: () -> Void
+
+    init(feed: FeedInfo?, username: String, verified: Bool, muted: Bool = false,
+         isLast: Bool, onOpen: @escaping () -> Void) {
+        self.feed = feed; self.username = username; self.verified = verified
+        self.muted = muted; self.isLast = isLast; self.onOpen = onOpen
+    }
 
     var body: some View {
         HPListItem(isLast: isLast) {
@@ -82,6 +90,7 @@ struct FeedRow: View {
                         HPMonoSmall("@" + username).lineLimit(1)
                     }
                     if verified { HPPill("Verified", tone: .gold) }
+                    if muted { HPPill("Muted", tone: .neutral) }
                 }
                 .contentShape(Rectangle())
             }

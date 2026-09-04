@@ -54,6 +54,18 @@ import { rampStops } from '../vendor/house-pour.js';
 import { MOSAIC_AREAS, MOSAIC_MAX_TILES, mosaicPlan, mosaicRatio, tileArea } from '../js/mosaic.js';
 import { replyTarget } from '../js/views/comments.js';
 import {
+  CONTACT_ADDRESS,
+  MODERATION_KEY,
+  REPORT_REASONS,
+  SafetyLists,
+  keepsComment,
+  keepsPost,
+  mailtoUrl,
+  normaliseRecord,
+  reportBody,
+  reportSubject,
+} from '../js/moderation.js';
+import {
   analyse,
   analysisPlan,
   analysisRate,
@@ -1080,11 +1092,25 @@ test('strip: the plan splits at the duration ceiling — spectrum, then silhouet
     'one second past the cap at 8 kHz is a silhouette, not a hairline');
   assert.equal(analysisPlan(720, { envelopeRate: 8000 }).mode, 'envelope',
     '12 minutes at 8 kHz is the silhouette iOS draws at the same duration');
-  assert.equal(analysisPlan(1200, { envelopeRate: 8000 }).mode, 'envelope',
-    '20 minutes lands exactly on the envelope budget, and is still inside it');
-  assert.equal(analysisPlan(1201, { envelopeRate: 8000 }).mode, 'none',
+  assert.equal(analysisPlan(1350, { envelopeRate: 8000 }).mode, 'envelope',
+    '22.5 minutes lands exactly on the envelope budget, and is still inside it');
+  assert.equal(analysisPlan(1351, { envelopeRate: 8000 }).mode, 'none',
     'and one second past it is refused — the budget is a real ceiling');
-  assert.equal(1200 * 8000, ENVELOPE_MAX_SAMPLES, 'which is where that boundary comes from');
+  assert.equal(1350 * 8000, ENVELOPE_MAX_SAMPLES, 'which is where that boundary comes from');
+
+  // …and on an engine that decodes as coarsely as the band ASKS for, the budget
+  // is not a ceiling at all: ENVELOPE_CAP_S is, which is the one iOS runs
+  // (SpectrogramPlan.forDuration — a pure duration split, nothing else in it).
+  // The band used to stop at ENVELOPE_MAX_SAMPLES / ENVELOPE_RATE = 3200 s, so
+  // a 55 minute set drew a silhouette on iOS and the bare §2.11 hairline on
+  // web, from a round number rather than from anything §2.11.1 says.
+  assert.equal(ENVELOPE_MAX_SAMPLES, ENVELOPE_CAP_S * ENVELOPE_RATE,
+    'the budget IS the band: its own ceiling at its own rate');
+  assert.equal(analysisPlan(3201).mode, 'envelope', 'the old 3200 s ceiling is now mid-band');
+  assert.equal(analysisPlan(ENVELOPE_CAP_S).mode, 'envelope',
+    'and the hour §2.11.1 names is reachable, as it is on iOS');
+  assert.equal(analysisPlan(ENVELOPE_CAP_S).reason, 'too-long',
+    'reached as the silhouette band, not as a refusal that happens to say envelope');
   // the coarse pass may decode more than the FFT's buffer holds, because
   // decodeMono's box average caps the mono copy at MAX_SAMPLES independently
   assert.ok(ENVELOPE_MAX_SAMPLES > MAX_SAMPLES, 'the two ceilings bound different buffers');
@@ -1259,4 +1285,128 @@ test('the reply target decides the re: line, and nothing else does', () => {
     're: https://t.me/tgs_ana_r/600', 'the written comment points at the comment');
   assert.equal(serialiseComment(replyTarget(post, null).link, 'Agreed.').split('\n')[0],
     're: https://t.me/waveloop_devlog/403', 'clearing it points at the post again');
+});
+
+// ── PRODUCT §2.15–§2.18 / PROTOCOL §7.1 — the safety lists ─────────────────
+
+/** localStorage over a Map, so the record's persistence is testable in node. */
+function fakeStorage(seed = null) {
+  const map = new Map();
+  if (seed !== null) map.set(MODERATION_KEY, typeof seed === 'string' ? seed : JSON.stringify(seed));
+  return {
+    map,
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, v),
+  };
+}
+
+test('the safety record survives a cache bump and a sign-out, but not a different account', () => {
+  // §7.1: `v` is the record's own version, not PRODUCT §2.3's cache schema, and
+  // an unknown one is read as best it can be rather than dropped.
+  const future = normaliseRecord({ v: 99, userId: 7, blocked: ['@TGS_Ana'], mutedFeeds: ['WaveLoop_devlog'], hidden: [{ key: 'WaveLoop_devlog/144', reason: 'Spam', at: '2026-09-04T21:02:11Z' }] }, 7);
+  assert.equal(future.v, 99, 'an unknown version is kept, not discarded');
+  assert.deepEqual(future.blocked, ['tgs_ana'], 'usernames normalise the way the card parser normalises them');
+  assert.deepEqual(future.mutedFeeds, ['waveloop_devlog'], '…so a list cannot miss @TGS_Ana and leave a hole in the filter');
+  assert.equal(future.hidden[0].key, 'waveloop_devlog/144', 'and the target key is lowercased the same way');
+
+  // sign-out keeps it FOR THE SAME ACCOUNT
+  const same = normaliseRecord({ v: 1, userId: 176543210, blocked: ['tgs_ana'], mutedFeeds: [], hidden: [] }, 176543210);
+  assert.deepEqual(same.blocked, ['tgs_ana'], 'the same account keeps its lists across a sign-out');
+  // a different account on a shared device inherits nothing
+  const other = normaliseRecord({ v: 1, userId: 176543210, blocked: ['tgs_ana'], mutedFeeds: ['x_feed'], hidden: [{ key: 'a/1', reason: 'Spam', at: '' }] }, 42);
+  assert.deepEqual([other.blocked, other.mutedFeeds, other.hidden], [[], [], []], 'a different account starts empty — that list is someone else’s judgement');
+  assert.equal(other.userId, 42, 'and the record becomes theirs');
+  // a record written before the account was known is adopted, not wiped
+  const adopted = normaliseRecord({ v: 1, userId: null, blocked: ['tgs_ana'], mutedFeeds: [], hidden: [] }, 42);
+  assert.deepEqual(adopted.blocked, ['tgs_ana'], 'a record with no id yet is adopted by the first account that reads it');
+});
+
+test('adopt repaints only when it replaced someone else’s lists', () => {
+  let repaints = 0;
+  const stamped = new SafetyLists({ storage: fakeStorage({ v: 1, userId: null, blocked: ['tgs_ana'], mutedFeeds: [], hidden: [] }), onChange: () => { repaints += 1; } });
+  stamped.adopt(42);
+  assert.deepEqual(stamped.blocked, ['tgs_ana'], 'stamping an id keeps the lists');
+  assert.equal(repaints, 0, 'and changes nothing anyone can see, so nothing repaints');
+
+  let wiped = 0;
+  const foreign = new SafetyLists({ storage: fakeStorage({ v: 1, userId: 7, blocked: ['tgs_ana'], mutedFeeds: [], hidden: [] }), onChange: () => { wiped += 1; } });
+  foreign.adopt(42);
+  assert.deepEqual(foreign.blocked, [], 'a foreign record is replaced');
+  assert.equal(wiped, 1, 'and that one does repaint');
+});
+
+test('the filter drops exactly what §2.18 says it drops, and mute only on the main feed', () => {
+  const storage = fakeStorage();
+  const lists = new SafetyLists({ storage });
+  const anaPost = { node: 'tgs_ana', username: 'ana_notes', link: 'https://t.me/ana_notes/12' };
+  const minePost = { node: 'tgs_elijah', username: 'waveloop_devlog', link: 'https://t.me/waveloop_devlog/144' };
+  const orphan = { node: null, username: 'waveloop_devlog', link: 'https://t.me/waveloop_devlog/145' };
+
+  assert.ok([anaPost, minePost, orphan].every((p) => keepsPost(p, lists)), 'a fresh install filters nothing');
+
+  lists.block('@TGS_Ana');
+  assert.equal(keepsPost(anaPost, lists), false, 'a blocked node’s post is dropped, whatever case the card wrote them in');
+  assert.equal(keepsPost(minePost, lists), true, 'and nobody else moves');
+  assert.equal(keepsComment({ node: 'tgs_ana', link: 'https://t.me/tgs_ana_r/600' }, lists), false, 'their comments go too');
+
+  lists.muteFeed('waveloop_devlog');
+  assert.equal(keepsPost(minePost, lists, { applyMute: true }), false, 'a muted feed leaves the merged feed');
+  assert.equal(keepsPost(minePost, lists), true, '…and stays complete on its own screen (§2.17)');
+
+  lists.hide('https://t.me/waveloop_devlog/145', 'Spam');
+  assert.equal(keepsPost(orphan, lists), false, 'a reported post is hidden everywhere, mute or no mute');
+  assert.equal(keepsComment({ node: 'tgs_bob', link: 'https://t.me/waveloop_devlog/145' }, lists), false,
+    'and one key filters a hidden post and a hidden comment alike (PROTOCOL §6.2)');
+  assert.equal(lists.hidden[0].reason, 'Spam', 'the reason is stored verbatim, so Settings can say what was reported');
+  assert.match(lists.hidden[0].at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, 'at is ISO 8601 UTC');
+
+  // the record on disk is what a rebuilt store reads back — the "survives" part
+  const reread = new SafetyLists({ storage });
+  assert.deepEqual(reread.blocked, ['tgs_ana'], 'the record round-trips through storage');
+  assert.equal(reread.isHidden('waveloop_devlog/145'), true, 'hidden keys included');
+
+  lists.unblock('tgs_ana');
+  lists.unmuteFeed('waveloop_devlog');
+  lists.unhide('waveloop_devlog/145');
+  assert.ok([anaPost, minePost, orphan].every((p) => keepsPost(p, lists, { applyMute: true })), 'and every undo puts it back');
+});
+
+test('the report email is §2.15’s, to the byte', () => {
+  const subject = reportSubject('Nudity or sexual content');
+  assert.equal(subject, 'tgsocial report — Nudity or sexual content', 'the subject is the reason, after an em dash');
+  assert.deepEqual(REPORT_REASONS, [
+    'Spam', 'Nudity or sexual content', 'Violence or threats', 'Hate or harassment',
+    'Child safety', 'Illegal content', 'Something else',
+  ], 'seven reasons, this order, every platform');
+
+  const body = reportBody({
+    reason: 'Spam',
+    link: 'https://t.me/waveloop_devlog/144',
+    channel: 'waveloop_devlog',
+    messageId: 144,
+    node: 'tgs_elijah',
+    kind: 'post',
+    app: 'tgsocial 1.0.0 (12) · iOS',
+  });
+  assert.equal(body, 'Reason: Spam\n'
+    + 'Link: https://t.me/waveloop_devlog/144\n'
+    + 'Channel: @waveloop_devlog\n'
+    + 'Message: 144\n'
+    + 'Node: @tgs_elijah\n'
+    + 'Kind: post\n'
+    + 'App: tgsocial 1.0.0 (12) · iOS\n'
+    + '\nAnything you want to add:\n\n', 'and the body ends on the blank line the cursor lands in');
+  assert.ok(body.endsWith('\n\n'), 'that blank line is not incidental');
+
+  const unattributed = reportBody({ reason: 'Spam', link: 'https://t.me/x/1', channel: 'x', messageId: 1, node: null, kind: 'comment', app: 'tgsocial 1.0.0 (1) · Web' });
+  assert.match(unattributed, /^Node: unattributed$/m, 'a post nobody is attributed for says so');
+  assert.match(unattributed, /^Kind: comment$/m, 'and a comment says which it is');
+  // nothing about the reader, and nothing about any list, ever leaves
+  assert.ok(!/blocked|muted|hidden/i.test(body), 'the email carries a link and a reason, and nothing about the lists');
+
+  const url = mailtoUrl(CONTACT_ADDRESS, subject, body);
+  assert.ok(url.startsWith('mailto:elijah@lucianlabs.ca?'), 'addressed to the published address');
+  const parsed = new URL(url);
+  assert.equal(parsed.searchParams.get('subject'), subject, 'subject survives percent-encoding');
+  assert.equal(parsed.searchParams.get('body'), body, 'and so does every newline in the body');
 });

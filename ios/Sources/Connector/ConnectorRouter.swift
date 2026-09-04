@@ -6,13 +6,19 @@
 //   1. Bearer token, compared in constant time. No token, wrong token → 401. Nothing below runs.
 //   2. Signed in. Not signed in → 409, because the bridge is the app's own TDLib session and
 //      there is nothing behind it when the app is signed out.
-//   3. Scope, resolved fresh from app state (`reader.scopeInputs()`), never from the request.
+//   3. Scope and the safety lists, both resolved fresh from app state (`reader.scopeInputs()`,
+//      `reader.safety`), never from the request.
 //   4. Dispatch. Reads take `ScopedSource`, which only `scope.admit` can mint, and every list of
 //      posts is filtered through `scope.contains` on the way out. A handler cannot name a chat
 //      the scope did not admit, and cannot return one it did not filter.
-//   5. Writes check their own switch first — post, comment and card are three separate grants —
+//   5. The safety filter (PRODUCT §2.18), on the same way out. Settings says, verbatim, "Blocked
+//      and reported content is hidden everywhere in the app" (§2.20) and the filter has no switch
+//      — so a bridge that served what the screens drop would be that switch, reachable by anything
+//      holding the token. It runs here rather than in the reader for the same reason scope does:
+//      one enforcement point, and no handler that can forget it.
+//   6. Writes check their own switch first — post, comment and card are three separate grants —
 //      and refuse with `read only` when it is off.
-//   6. Audit, always: on the way out of every branch, including the refusals, including the
+//   7. Audit, always: on the way out of every branch, including the refusals, including the
 //      failures. Counts and verdicts; never bodies.
 //
 // The "no code path widens its own scope" claim rests on there being no setter: `ScopeResolution`
@@ -54,8 +60,12 @@ protocol ConnectorReader: AnyObject {
     var maxMediaBytes: Int64 { get }
 
     func scopeInputs() -> ScopeInputs
+    /// The reader's own block, mute and report lists (PROTOCOL §7.1), read fresh per request like
+    /// the scope: a block takes effect on the next request, not the next launch.
+    var safety: SafetyLists { get }
 
-    /// The merged main feed as the app holds it (PROTOCOL §4.8). Unfiltered — the router filters.
+    /// The merged main feed as the app holds it (PROTOCOL §4.8). Unfiltered — the router applies
+    /// both the scope and the safety lists.
     func mergedPosts() async throws -> [Post]
     /// One channel's history, newest first. The source is already proved in scope.
     func channelPosts(_ source: ScopedSource, limit: Int, before: Date?) async throws -> [Post]
@@ -109,12 +119,15 @@ final class ConnectorRouter {
             return refuse(request, decision: "auth=ok", error: .signedOut, detail: "")
         }
 
-        // 3. Scope, derived. Nothing in `request` reaches this call.
+        // 3. Scope, derived. Nothing in `request` reaches this call. The safety lists come from
+        //    the same place and at the same moment, so an assistant polling `/feed` stops seeing a
+        //    node on the first request after the reader blocks them.
         let scope = ScopeResolver.resolve(preset: policy.preset, inputs: reader.scopeInputs())
+        let safety = reader.safety
         let decision = "scope=" + scope.preset.rawValue
 
         do {
-            let (response, detail) = try await dispatch(request, scope: scope, policy: policy)
+            let (response, detail) = try await dispatch(request, scope: scope, safety: safety, policy: policy)
             audit.append(AuditEntry(tool: request.tool, decision: auditDecision(request, fallback: decision),
                                     outcome: .ok, detail: detail))
             return response
@@ -166,7 +179,7 @@ final class ConnectorRouter {
 
     // MARK: Dispatch
 
-    private func dispatch(_ request: ConnectorRequest, scope: ScopeResolution,
+    private func dispatch(_ request: ConnectorRequest, scope: ScopeResolution, safety: SafetyLists,
                           policy: ConnectorPolicy) async throws -> (ConnectorResponse, String) {
         let segments = request.segments
         // Nouns that take no path argument: `/status/anything` is a 404, and rejecting it here
@@ -179,13 +192,13 @@ final class ConnectorRouter {
         case ("GET", "scope"): return (.json(200, ConnectorBodies.scope(scope)), "sources=\(scope.count)")
         case ("GET", "feeds"): return feeds(scope: scope)
         case ("GET", "audit"): return auditBody(request)
-        case ("GET", "graph"): return graph(request, scope: scope)
-        case ("GET", "search"): return try await search(request, scope: scope)
+        case ("GET", "graph"): return graph(request, scope: scope, safety: safety)
+        case ("GET", "search"): return try await search(request, scope: scope, safety: safety)
 
         case ("GET", "feed"):
-            if segments.count == 1 { return try await mergedFeed(request, scope: scope) }
+            if segments.count == 1 { return try await mergedFeed(request, scope: scope, safety: safety) }
             guard segments.count == 2 else { throw ConnectorError.notFound(request.path) }
-            return try await channelFeed(request, scope: scope, username: segments[1])
+            return try await channelFeed(request, scope: scope, safety: safety, username: segments[1])
 
         case ("GET", "node"):
             guard segments.count == 2 else { throw ConnectorError.notFound(request.path) }
@@ -195,13 +208,13 @@ final class ConnectorRouter {
             guard segments.count == 3, let messageId = Int64(segments[2]) else {
                 throw ConnectorError.notFound(request.path)
             }
-            return try await thread(scope: scope, username: segments[1], serverMessageId: messageId)
+            return try await thread(scope: scope, safety: safety, username: segments[1], serverMessageId: messageId)
 
         case ("GET", "media"):
             guard segments.count == 3, let index = Int(segments[2]) else {
                 throw ConnectorError.notFound(request.path)
             }
-            return try await media(scope: scope, postId: segments[1], index: index)
+            return try await media(scope: scope, safety: safety, postId: segments[1], index: index)
 
         case ("POST", "post"): return try await writePost(request, scope: scope, policy: policy)
         case ("POST", "comment"): return try await writeComment(request, scope: scope, policy: policy)
@@ -255,42 +268,64 @@ final class ConnectorRouter {
         return (.json(200, ConnectorBodies.audit(entries)), "entries=\(entries.count)")
     }
 
-    private func mergedFeed(_ request: ConnectorRequest, scope: ScopeResolution) async throws -> (ConnectorResponse, String) {
+    private func mergedFeed(_ request: ConnectorRequest, scope: ScopeResolution,
+                            safety: SafetyLists) async throws -> (ConnectorResponse, String) {
         let limit = request.intQuery("limit", default: Self.defaultLimit, max: Self.maxLimit)
         let before = request.dateQuery("before")
         let window = try await reader.mergedPosts()
-        let visible = filter(window, scope: scope, before: before, limit: limit)
+        // This *is* the main feed (§4: "the merged main feed … the same k-way merge the app
+        // shows"), so mute applies here — a muted feed's posts leave the merge and nothing else
+        // (PRODUCT §2.17).
+        let visible = filter(window, scope: scope, safety: safety, inMainFeed: true, before: before, limit: limit)
         let nextBefore = visible.count == limit ? visible.last.map { Date(timeIntervalSince1970: TimeInterval($0.date)) } : nil
         let body = ConnectorBodies.posts(visible, comments: { [reader] in reader.commentCount(for: $0) }, nextBefore: nextBefore)
         return (.json(200, body), "posts=\(visible.count)")
     }
 
-    private func channelFeed(_ request: ConnectorRequest, scope: ScopeResolution,
+    private func channelFeed(_ request: ConnectorRequest, scope: ScopeResolution, safety: SafetyLists,
                              username: String) async throws -> (ConnectorResponse, String) {
         let source = try scope.admit(username)
         let limit = request.intQuery("limit", default: Self.defaultLimit, max: Self.maxLimit)
         let before = request.dateQuery("before")
         let page = try await reader.channelPosts(source, limit: limit, before: before)
-        let visible = filter(page, scope: scope, before: before, limit: limit)
-        let nextBefore = visible.count == limit ? visible.last.map { Date(timeIntervalSince1970: TimeInterval($0.date)) } : nil
+        // One channel's own screen: blocked and reported drop out, muted does not (PRODUCT §2.17 —
+        // "the channel stays reachable and complete on its own screen").
+        let visible = filter(page, scope: scope, safety: safety, inMainFeed: false, before: before, limit: limit)
+        // A page the filter thinned is not the end of the channel, so the cursor follows the oldest
+        // post *considered* rather than the oldest returned: without that, blocking a prolific node
+        // would end pagination early on a short page and the history behind it would be unreachable
+        // (PRODUCT §2.18: "Pagination compensates").
+        let cursor = visible.count == limit ? visible.last : (page.count >= limit ? page.last : nil)
+        let nextBefore = cursor.map { Date(timeIntervalSince1970: TimeInterval($0.date)) }
         let body = ConnectorBodies.posts(visible, comments: { [reader] in reader.commentCount(for: $0) }, nextBefore: nextBefore)
         return (.json(200, body), "posts=\(visible.count)")
     }
 
     /// The output filter. Every list of posts the bridge emits passes through it, so a repository
     /// whose window is wider than the current preset (which is normal — the app's own feed is the
-    /// `graph` set whatever the connector's preset says) cannot leak the difference.
-    private func filter(_ posts: [Post], scope: ScopeResolution, before: Date?, limit: Int) -> [Post] {
+    /// `graph` set whatever the connector's preset says) cannot leak the difference, and neither
+    /// can one whose window predates a block.
+    ///
+    /// Dropping is silent and leaves no residue, exactly as on screen (PRODUCT §2.18): no
+    /// tombstone, no marker, no gap in the array. The page fills up to `limit` from whatever is
+    /// left of the window, and the callers carry the cursor past what was dropped.
+    private func filter(_ posts: [Post], scope: ScopeResolution, safety: SafetyLists,
+                        inMainFeed: Bool, before: Date?, limit: Int) -> [Post] {
         var out: [Post] = []
         let cutoff = before.map { Int($0.timeIntervalSince1970) }
         for post in posts where scope.contains(post.sourceUsername) {
             if let cutoff, post.date >= cutoff { continue }
+            guard safety.allows(post: post, inMainFeed: inMainFeed) else { continue }
             out.append(post)
             if out.count == limit { break }
         }
         return out
     }
 
+    /// Not filtered by the block list, deliberately: PRODUCT §2.16's one exception is the blocked
+    /// node's own profile, "reached deliberately — a `t.me` link, a public URL, an exact-username
+    /// search", and naming a node on this route is exactly that. What the block removes is their
+    /// content, and every route that carries content drops it.
     private func node(scope: ScopeResolution, username: String) async throws -> (ConnectorResponse, String) {
         let source = try scope.admit(username)
         let info = try await reader.nodeInfo(source)
@@ -303,7 +338,11 @@ final class ConnectorRouter {
 
     /// §4: my follows and, at depth 2, their follows. Only cards already in scope are walked, so
     /// under `mine` depth 2 yields nothing and under `custom` only the listed nodes expand.
-    private func graph(_ request: ConnectorRequest, scope: ScopeResolution) -> (ConnectorResponse, String) {
+    ///
+    /// A blocked node is in neither list and on neither end of an edge — PRODUCT §2.16 removes them
+    /// from "both graph lists", and this is the same graph read through a different door.
+    private func graph(_ request: ConnectorRequest, scope: ScopeResolution,
+                       safety: SafetyLists) -> (ConnectorResponse, String) {
         let depth = request.intQuery("depth", default: Self.defaultGraphDepth, max: Self.maxGraphDepth)
         var order: [String] = []
         var seen = Set<String>()
@@ -314,14 +353,15 @@ final class ConnectorRouter {
             order.append(username)
         }
 
-        var frontier = scope.sources.filter { $0.kind == .node || $0.kind == .listed }.map(\.username)
+        var frontier = scope.sources.filter { $0.kind == .node || $0.kind == .listed }
+            .map(\.username).filter { !safety.isBlocked($0) }
         frontier.forEach(note)
         for _ in 0..<depth {
             var next: [String] = []
             for username in frontier {
                 // Expansion reads a card, and a card is a chat: only in-scope ones are opened.
                 guard scope.contains(username), let card = reader.cachedCard(username) else { continue }
-                for follow in card.follows {
+                for follow in card.follows where !safety.isBlocked(follow) {
                     edges.append((from: username, to: follow))
                     note(follow)
                     next.append(follow)
@@ -339,16 +379,24 @@ final class ConnectorRouter {
         return (.json(200, ConnectorBodies.graph(nodes: nodes, edges: edges)), "nodes=\(nodes.count)")
     }
 
-    private func thread(scope: ScopeResolution, username: String,
+    private func thread(scope: ScopeResolution, safety: SafetyLists, username: String,
                         serverMessageId: Int64) async throws -> (ConnectorResponse, String) {
         let source = try scope.admit(username)
         let post = try await reader.findPost(source, serverMessageId: serverMessageId)
         _ = try scope.admit(post.sourceUsername)
+        // A reported post, or one by a blocked node, is gone from every surface (PRODUCT §2.18) —
+        // so it is not found here either. `not found` and not a refusal: what is on the reader's
+        // hidden list is nobody else's business, the assistant's included.
+        guard safety.allows(post: post, inMainFeed: false) else {
+            throw ConnectorError.notFound("post \(source.username)/\(serverMessageId)")
+        }
 
         // PROTOCOL §6.3 gives the network-scoped comment set; the connector narrows it again to
         // the comments channels the preset admits, so a thread can never be the way a chat that
-        // is not in scope gets read.
-        let visible = reader.threadComments(for: post).filter { scope.contains($0.channelUsername) }
+        // is not in scope gets read. The safety filter runs over the same set — transitively, so a
+        // reply under a dropped comment does not surface one indent to the left.
+        let visible = safety.filtered(comments: reader.threadComments(for: post))
+            .filter { scope.contains($0.channelUsername) }
         let rootKeys = reader.commentTargets(for: post).compactMap(CommentCodec.targetKey)
         var used = Set<String>()
 
@@ -372,7 +420,8 @@ final class ConnectorRouter {
         return (.json(200, body), "comments=\(visible.count)")
     }
 
-    private func search(_ request: ConnectorRequest, scope: ScopeResolution) async throws -> (ConnectorResponse, String) {
+    private func search(_ request: ConnectorRequest, scope: ScopeResolution,
+                        safety: SafetyLists) async throws -> (ConnectorResponse, String) {
         guard let query = request.query["q"]?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty else {
             throw ConnectorError.badRequest("q is required")
         }
@@ -382,7 +431,9 @@ final class ConnectorRouter {
         // which is the only way to be certain nothing outside the scope can come back.
         let window = try await reader.mergedPosts()
         var hits: [Post] = []
-        for post in window where scope.contains(post.sourceUsername) {
+        // §2.18 names search among the surfaces that drop blocked and reported content; the corpus
+        // is the merged feed, so a muted feed is not in it to be searched.
+        for post in window where scope.contains(post.sourceUsername) && safety.allows(post: post, inMainFeed: true) {
             let haystack = post.text.plain + " " + post.sourceTitle
             guard haystack.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil else { continue }
             hits.append(post)
@@ -392,9 +443,12 @@ final class ConnectorRouter {
         return (.json(200, body), "posts=\(hits.count)")
     }
 
-    private func media(scope: ScopeResolution, postId: String, index: Int) async throws -> (ConnectorResponse, String) {
+    private func media(scope: ScopeResolution, safety: SafetyLists, postId: String,
+                       index: Int) async throws -> (ConnectorResponse, String) {
         let post = try await reader.findPost(id: postId)
         _ = try scope.admit(post.sourceUsername)
+        // Hidden means hidden: the bytes of a reported post are the post (PRODUCT §2.18).
+        guard safety.allows(post: post, inMainFeed: false) else { throw ConnectorError.notFound("post \(postId)") }
         guard index >= 0, index < post.media.count else { throw ConnectorError.notFound("media index \(index)") }
         let (data, contentType) = try await reader.mediaBytes(post: post, index: index, maxBytes: reader.maxMediaBytes)
         return (.bytes(data, contentType: contentType), "bytes=\(data.count)")

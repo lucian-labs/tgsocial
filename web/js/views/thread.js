@@ -6,16 +6,34 @@
  * applies on the Thread screen; the carousel just hosts it over the media" —
  * there is one thread rendering, and this screen is one of its two hosts.
  * What belongs to this screen alone is the post card above it, the Refresh
- * ghost, and resolving the deep link that got here.
+ * ghost, resolving the deep link that got here, and leaving when the filter
+ * takes the post out from under it (§2.18).
  */
 import { h, button, replace } from '../../vendor/house-pour.js';
-import { sameUsername, serverMessageId } from '../protocol.js';
+import { sameUsername, serverMessageId, targetKey } from '../protocol.js';
 import { postCard, emptyCard } from './shared.js';
 import { commentsPanel } from './comments.js';
 import { releaseMedia } from '../media.js';
 
 export function render(app, { username, serverId, compose = false }) {
   const root = h('div');
+  // §2.18 names Thread among the screens that drop a reported or blocked post,
+  // and §2.16 forbids putting anything in its place — a "content hidden" row is
+  // the tombstone that section exists to refuse. A screen that is ABOUT one
+  // post therefore has nothing left to be, so it leaves: report or block from
+  // the sheet here and the repaint that follows (app.onSafetyChange) walks
+  // back, exactly as it empties the feed behind the sheet everywhere else.
+  //
+  // Reported is decided from the route alone, before anything is fetched, so a
+  // cold visit to a hidden thread never paints it at all. Blocked needs the
+  // post's attributed node (§2.3), so it is asked again once the post is here.
+  if (app.safety.isHidden(targetKey(`https://t.me/${username}/${serverId}`))) {
+    // the seed belongs to the visit that is not happening; leaving it set
+    // would hand it to whatever thread opens next
+    app.threadSeed = null;
+    app.back();
+    return root;
+  }
   // web substitute for §2.12's pull-to-refresh re-scan, same Refresh ghost
   // pattern as the feed (§2.3); the repaint arrives via the 'comments' notification
   const toolbar = h('div.toolbar',
@@ -52,6 +70,12 @@ export function render(app, { username, serverId, compose = false }) {
       return;
     }
     if (!alive) return;
+    // no `applyMute`: §2.18 mutes the main feed only, so a muted feed's post
+    // still opens here, complete, exactly as it does on its channel screen
+    if (!app.safety.keepsPost(post)) {
+      app.back();
+      return;
+    }
     replace(postHost, postCard(app, post, { thread: false }));
     panel = commentsPanel(app, post);
     replace(panelHost, panel);

@@ -43,6 +43,7 @@ import {
   targetKey,
   attributionNode,
 } from './protocol.js';
+import { keepsComment, keepsPost } from './moderation.js';
 
 const LS = {
   myNode: 'tgs.myNode',
@@ -170,9 +171,16 @@ export function canPostStatus(status) {
 }
 
 export class Repo {
-  constructor(td, config) {
+  /**
+   * `safety` is the reader's block/mute/hidden record (js/moderation.js). It is
+   * a constructor argument rather than something the repo owns because the
+   * public pages have one too and have no repo at all (PRODUCT §2.18: the
+   * filter is on everywhere, and it is one list).
+   */
+  constructor(td, config, safety = null) {
     this.td = td;
     this.config = config;
+    this.safety = safety;
     this.indexGroup = normaliseUsername(config?.indexGroup || DEFAULT_INDEX_GROUP) || DEFAULT_INDEX_GROUP;
     this.myNode = load(LS.myNode, null);
     this.cards = loadVersioned(LS.cards, {});
@@ -244,7 +252,9 @@ export class Repo {
   }
 
   notify(what) {
-    if (what === 'comments') this.commentIndexCache = null;
+    // a block or a report changes which comments the index may hand out, so it
+    // invalidates the memo exactly as a re-scan does (PRODUCT §2.18)
+    if (what === 'comments' || what === 'safety') this.commentIndexCache = null;
     for (const fn of this.listeners) {
       try {
         fn(what);
@@ -795,8 +805,13 @@ export class Repo {
     return list;
   }
 
-  feedSession(usernames) {
-    return new FeedSession(this, usernames);
+  /**
+   * `applyMute` is PRODUCT §2.17's "the main feed only": a muted feed leaves the
+   * merged feed and stays complete on its own screen, so §2.6 opens its session
+   * without it.
+   */
+  feedSession(usernames, { applyMute = false } = {}) {
+    return new FeedSession(this, usernames, { safety: this.safety, applyMute });
   }
 
   /**
@@ -807,7 +822,11 @@ export class Repo {
   cachedFeed() {
     const posts = loadVersioned(LS.feed, []);
     if (!Array.isArray(posts)) return [];
-    return [...posts].sort((a, b) => b.date - a.date || b.id - a.id);
+    return [...posts]
+      // §2.18 is a render rule, and a cold start is a render: a post blocked or
+      // reported since the cache was written must not paint on the way back in
+      .filter((p) => keepsPost(p, this.safety, { applyMute: true }))
+      .sort((a, b) => b.date - a.date || b.id - a.id);
   }
 
   cacheFeed(posts) {
@@ -944,7 +963,8 @@ export class Repo {
     await pmap(ranked, 3, (r) => this.readNode(r.username));
     return ranked
       .map((r) => ({ ...r, entry: this.cachedCard(r.username) }))
-      .filter((r) => r.entry?.card && r.entry.card.public !== false);
+      // §2.18: a blocked node is not in the +1 walk, and not in `+1 · 84`
+      .filter((r) => r.entry?.card && r.entry.card.public !== false && !this.safety?.isBlocked(r.username));
   }
 
   /** Username prefix search ∪ index group; returns cache entries for public nodes. */
@@ -983,7 +1003,10 @@ export class Repo {
       // no index group yet — fine
     }
     await pmap(found, 3, (u) => this.readNode(u));
-    return found.map((u) => this.cachedCard(u)).filter((e) => e?.card && e.card.public !== false);
+    return found
+      .filter((u) => !this.safety?.isBlocked(u)) // §2.18: not in search results either
+      .map((u) => this.cachedCard(u))
+      .filter((e) => e?.card && e.card.public !== false);
   }
 
   /** PROTOCOL §5.3: members post one message. Resolves false when my line is already in the last 200. */
@@ -1122,6 +1145,10 @@ export class Repo {
     const byTarget = new Map();
     for (const entry of Object.values(this.comments)) {
       for (const c of entry.comments ?? []) {
+        // §2.18 — a blocked commenter and a reported comment leave no residue
+        // in a count either, so they are dropped here, where the tree and the
+        // footer's "N comments" both read from
+        if (!keepsComment(c, this.safety)) continue;
         if (!byTarget.has(c.targetKey)) byTarget.set(c.targetKey, []);
         byTarget.get(c.targetKey).push(c);
       }
@@ -1234,6 +1261,68 @@ export class Repo {
     const msg = await this.td.send({ '@type': 'getMessage', chat_id: chat.id, message_id: serverId * 1048576 });
     if (!isPost(msg)) throw new Error('Post not found.');
     return this.toPost(msg, source);
+  }
+
+  // ── delete my node (PROTOCOL §4.11, PRODUCT §2.21) ───────────────────────
+
+  /**
+   * Removes the two channels this client created, comments channel first.
+   *
+   * The order is the whole reason this is one method: deleting the node first
+   * and then failing on the comments channel leaves a public channel
+   * backlinking to a node that no longer exists, in an app that is now sitting
+   * at Setup with no route back to it. The other way round is recoverable —
+   * strip `replies:` and let them try again.
+   *
+   * Ownership is checked on BOTH channels before either is touched, because
+   * §2.21 promises "nothing is deleted" when Telegram will not let the user
+   * delete one of them; finding that out halfway would already have broken it.
+   *
+   * Returns a result rather than throwing for the outcomes §2.21 draws a modal
+   * for; only the offline refusal (a PlainError from assertOnline) throws.
+   */
+  async deleteMyNode() {
+    if (!this.myNode) throw new Error('No node.');
+    this.assertOnline();
+    const node = this.myNode.username;
+    const replies = this.myCard?.replies ?? null;
+    return this.track('Deleting your node', async () => {
+      let repliesChat = null;
+      if (replies) {
+        // a `replies:` line pointing at nothing is not a failure: there is
+        // nothing to say about a channel that was never made (§2.21)
+        repliesChat = await this.chatByUsername(replies).catch((e) => {
+          if (isUnresolvableUsername(e)) return null;
+          throw e;
+        });
+        if (repliesChat && !repliesChat.can_be_deleted_for_all_users) {
+          return { ok: false, stage: 'not-owner', channel: replies };
+        }
+      }
+      const nodeChat = await this.chat(this.myNode.chatId);
+      if (!nodeChat.can_be_deleted_for_all_users) return { ok: false, stage: 'not-owner', channel: node };
+
+      if (repliesChat) {
+        try {
+          await this.td.send({ '@type': 'deleteChat', chat_id: repliesChat.id });
+        } catch (e) {
+          return { ok: false, stage: 'replies', channel: replies, message: e.message };
+        }
+      }
+      try {
+        await this.td.send({ '@type': 'deleteChat', chat_id: this.myNode.chatId });
+      } catch (e) {
+        // the comments channel is gone; the card must stop pointing at it (§4.4)
+        if (repliesChat) await this.writeCard((card) => ({ ...card, replies: null })).catch(() => null);
+        return { ok: false, stage: 'node', channel: node, message: e.message };
+      }
+      // §4.11 step 3: everything §7 calls discardable goes, the session stays
+      // authorized, and the client is nodeless. The safety lists are not in
+      // `LS` and survive — they protect the person, not the node (§7.1).
+      this.wipe();
+      this.notify('myNode');
+      return { ok: true };
+    });
   }
 
   // ── sign out ─────────────────────────────────────────────────────────────
@@ -1404,13 +1493,16 @@ export function pickPhotoSize(sizes, targetWidth) {
  * overrides exactly those to read Telegram's public preview instead of TDLib.
  */
 export class FeedSession {
-  constructor(repo, usernames, { cardMessageIds = {} } = {}) {
+  constructor(repo, usernames, { cardMessageIds = {}, safety = null, applyMute = false } = {}) {
     this.repo = repo;
     this.usernames = usernames;
     this.merge = createMerge(usernames.map(usernameKey));
     this.sources = new Map();
     this.cardMessageIds = cardMessageIds;
     this.primed = false;
+    /** PRODUCT §2.18's filter, or null where there is nothing to filter with. */
+    this.safety = safety;
+    this.applyMute = applyMute;
   }
 
   get exhausted() {
@@ -1493,13 +1585,34 @@ export class FeedSession {
     await pmap(Object.keys(this.merge.sources), 4, (k) => this.fill(k));
   }
 
+  /** PRODUCT §2.18 — what the reader's lists let through, applied at the merge. */
+  keepPost(post) {
+    return keepsPost(post, this.safety, { applyMute: this.applyMute });
+  }
+
   /**
    * Returns up to `count` post models in strict date-desc order (an album counts
    * as one post: its remaining items are drained off the buffer so a page
    * boundary never splits it in two).
+   *
+   * §2.18's "pagination compensates": a page whose posts are all filtered away
+   * fetches the next one instead of handing the caller an empty list, which the
+   * scrollers read as "that's everything". The loop stops when the merge is
+   * spent, so a wholly blocked feed ends rather than spins.
    */
   async loadMore(count = 20) {
     await this.prime();
+    const posts = [];
+    for (let round = 0; round < 12 && posts.length < count; round += 1) {
+      const batch = await this.loadBatch(count - posts.length);
+      for (const post of batch) if (this.keepPost(post)) posts.push(post);
+      if (!batch.length || this.exhausted) break;
+    }
+    return posts;
+  }
+
+  /** One merged batch, unfiltered — the k-way merge itself (PROTOCOL §4.8). */
+  async loadBatch(count) {
     const out = [];
     for (let guard = 0; guard < 40 && out.length < count; guard += 1) {
       const r = takeNext(this.merge, count - out.length);

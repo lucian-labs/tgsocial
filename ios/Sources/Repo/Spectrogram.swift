@@ -438,12 +438,10 @@ enum SpectrogramBuilder {
     /// The whole strip: short-time FFT across the clip, log-collapsed onto `rows`, tilted,
     /// AGC-normalised and colourised through the House Pour ramp, plus the envelope.
     ///
-    /// **Hop.** One column per strip pixel is the display constraint (§2.11.1 "no more"), so the
-    /// hop is `samples / columns` and the overlap is whatever that implies: at a phone's strip
-    /// width that is 80%+ for anything under about a minute and a half. Past that a column spans
-    /// more than a window, and the window is CENTRED in its column's slice — the strip samples
-    /// rather than covers, which is the same trade Wake makes by ticking at 30 Hz instead of
-    /// covering its input.
+    /// **Hop.** One column per strip pixel is the display constraint (§2.11.1 "no more"), so a
+    /// column's slice is `samples / columns` and the overlap is whatever that implies: at a phone's
+    /// strip width that is 80%+ for anything under about a minute and a half. Past that a column
+    /// spans more than one window and it takes SEVERAL — see `frames`.
     static func build(samples: [Float], rate: Double, columns requestedColumns: Int, rows requestedRows: Int) -> SpectrogramStrip {
         let g = grid(samples: samples, rate: rate, columns: requestedColumns, rows: requestedRows)
         let env = envelope(samples: samples, rate: rate, columns: g.columns)
@@ -458,6 +456,72 @@ enum SpectrogramBuilder {
             }
         }
         return SpectrogramStrip(columns: g.columns, rows: g.rows, pixels: pixels, envelope: env)
+    }
+
+    /// Where one column's FFT windows start, so that between them they COVER the column's slice.
+    ///
+    /// §2.11.1 asks for "a short-time FFT across the clip", and web states the invariant that makes
+    /// that sentence true: `hop <= fftSize`, every sample inside at least one window
+    /// (js/spectro.js `framePlan`). Web reaches it by GROWING the window when its frame budget runs
+    /// out, because its frames are laid out over the whole clip; iOS lays them out per column, so
+    /// the same invariant is reached from the other side — a column wide enough to hold more than
+    /// one window simply takes more than one.
+    ///
+    /// One window per column, centred, is what this replaced, and it was a sampler past about
+    /// ninety seconds — the point where a column's slice outgrows a window. Measured on the two
+    /// lengths `SpectrogramBuilderTests` pins, at a 700-column strip: a 150 s clip is 3428 samples
+    /// per column against a 2048 window, so 1380 of them (86 ms, 40% of the column) sat inside no
+    /// frame at all; at the 600 s cap the column is 6857 samples and 4809 of them were blind —
+    /// 601 ms, 70%. A short burst landing in that gap lit nothing, which is the one thing a
+    /// scrubber you navigate by must not do.
+    ///
+    /// The cost is per COLUMN, because that is where these windows are laid out — `n / fftSize` is
+    /// web's bound, for frames distributed over the whole clip, and it does NOT apply here. The
+    /// total is `Σ ceil(span / fftSize)` over the columns, which the per-column rounding puts at
+    /// `n / fftSize + columns` at worst: coverage, plus up to one spare window a column. So the
+    /// strip's width is part of the bill, and the worst case over every width is 4096 FFTs — at
+    /// `maxColumns`, where a column narrows to 2343 samples and still takes two windows. On a clip
+    /// at the sample cap that is 2800 FFTs at a 700-column strip and 2700 at 900 (3–4× the
+    /// single-window pass, which ran one per column), and exactly 2× at `maxColumns` — where it is
+    /// also twice web's `MAX_FRAMES` (2048). A clip short enough that its columns fit inside one
+    /// window is unchanged: `count == 1`, still sitting in the middle of its slice, which at 700
+    /// columns is everything under about ninety seconds.
+    struct ColumnFrames {
+        /// How many windows this column takes. Always at least one.
+        let count: Int
+        private let base: Int
+        private let reach: Int
+        private let limit: Int
+
+        init(count: Int, base: Int, reach: Int, limit: Int) {
+            self.count = max(1, count)
+            self.base = base
+            self.reach = reach
+            self.limit = limit
+        }
+
+        /// The sample index window `f` starts at.
+        func offset(_ f: Int) -> Int {
+            guard count > 1 else { return base }
+            let j = min(max(f, 0), count - 1)
+            return min(max(base + (j * reach) / (count - 1), 0), limit)
+        }
+    }
+
+    static func frames(start: Int, end: Int, sampleCount n: Int, fftSize: Int) -> ColumnFrames {
+        let span = max(1, end - start)
+        // The furthest a full window can start; a clip shorter than one window zero-pads instead.
+        let limit = max(0, n - fftSize)
+        guard span > fftSize else {
+            // The window is wider than the slice, so one of them centred already covers it.
+            let mid = (start + end) / 2
+            return ColumnFrames(count: 1, base: min(max(mid - fftSize / 2, 0), limit), reach: 0, limit: limit)
+        }
+        // ceil: `count - 1` gaps over `span - fftSize` samples is a hop of at most `fftSize`, which
+        // is the invariant. The first window opens on the slice's head and the last closes on its
+        // tail, so neighbouring columns abut rather than overlap.
+        let count = (span + fftSize - 1) / fftSize
+        return ColumnFrames(count: count, base: start, reach: span - fftSize, limit: limit)
     }
 
     /// The spectrum itself, before any colour: normalised 0…1 magnitudes indexed
@@ -515,22 +579,26 @@ enum SpectrogramBuilder {
             for c in 0..<columns {
                 let start = c * n / columns
                 let end = max(start + 1, (c + 1) * n / columns)
-                // The window is CENTRED in the column's slice, so a clip long enough that one
-                // column spans more than a window samples the middle of that slice, not its head.
-                let mid = (start + end) / 2
-                let offset = min(max(mid - fftSize / 2, 0), max(0, n - fftSize))
-                analyzer.magnitudes(head + offset, count: min(fftSize, n - offset), into: &mags)
-                mags.withUnsafeBufferPointer { m in
-                    guard let bin = m.baseAddress else { return }
-                    for r in 0..<rows {
-                        let lo = bandLo[r], hi = bandHi[r]
-                        var peak: Float = 0
-                        // vDSP rather than a Swift loop: summed over the rows this scans every bin
-                        // of every column — 1.4 M comparisons for one strip.
-                        if hi > lo { vDSP_maxv(bin + lo, 1, &peak, vDSP_Length(hi - lo)) }
-                        let v = Double(peak) * tilt[r]
-                        raw[c * rows + r] = Float(v)
-                        if v > globalPeak { globalPeak = v }
+                let plan = frames(start: start, end: end, sampleCount: n, fftSize: fftSize)
+                // Peak-picked across the column's windows, which is how web collapses frames onto
+                // columns too (js/spectro.js `analyse`): a column is "the loudest thing that
+                // happened in this slice", so a transient inside it survives being one window of
+                // several rather than being averaged into the quiet either side of it.
+                for f in 0..<plan.count {
+                    let offset = plan.offset(f)
+                    analyzer.magnitudes(head + offset, count: min(fftSize, n - offset), into: &mags)
+                    mags.withUnsafeBufferPointer { m in
+                        guard let bin = m.baseAddress else { return }
+                        for r in 0..<rows {
+                            let lo = bandLo[r], hi = bandHi[r]
+                            var peak: Float = 0
+                            // vDSP rather than a Swift loop: summed over the rows this scans every
+                            // bin of every column — 1.4 M comparisons for one strip.
+                            if hi > lo { vDSP_maxv(bin + lo, 1, &peak, vDSP_Length(hi - lo)) }
+                            let v = Double(peak) * tilt[r]
+                            if f == 0 || Float(v) > raw[c * rows + r] { raw[c * rows + r] = Float(v) }
+                            if v > globalPeak { globalPeak = v }
+                        }
                     }
                 }
             }

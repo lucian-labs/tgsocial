@@ -186,7 +186,7 @@ struct PostTextBlock: View {
 }
 
 /// The long-press post sheet (PRODUCT §2.3): a House Pour modal with the exact timestamp, views,
-/// and the feed — and the card's one hand-off, Open in Telegram.
+/// and the feed — the card's one hand-off, Open in Telegram — and the SAFETY block (§2.15).
 struct PostSheetModal: View {
     @Environment(AppModel.self) private var model
     let post: Post
@@ -202,9 +202,30 @@ struct PostSheetModal: View {
                 model.open(post.deepLink)
             }
             .padding(.top, HPTokens.Space.rowPad)
+            SafetyBlock(primary: (subject.buttonLabel, true, { model.modal = .report(subject) }),
+                        block: blockRow, mute: muteRow)
             HPButton("Close", style: .ghost) { model.modal = nil }
                 .padding(.top, HPTokens.Space.rowGap)
         }
+    }
+
+    private var subject: ReportSubject { ReportSubject(post: post) }
+
+    /// §2.15: absent when the post is unattributed — there is no node to block — and on my own.
+    private var blockRow: (label: String, run: () -> Void)? {
+        guard let username = post.authorUsername, !model.isMe(username) else { return nil }
+        return ("Block @\(username)", { model.modal = .block(username: username) })
+    }
+
+    /// The source channel, named by its title (§2.17). Reads `Unmute` once it is muted, so the row
+    /// is the same one tap back.
+    private var muteRow: (label: String, run: () -> Void)? {
+        let username = post.sourceUsername
+        let title = post.sourceTitle
+        if model.isMuted(feed: username) {
+            return ("Unmute \(title)", { model.modal = nil; model.unmute(feed: username, title: title) })
+        }
+        return ("Mute \(title)", { model.modal = nil; model.mute(feed: username, title: title) })
     }
 
     private func row(_ label: String, _ value: String, isLast: Bool = false) -> some View {

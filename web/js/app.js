@@ -21,6 +21,7 @@
 import { h, button, tabs, toast, replace } from '../vendor/house-pour.js';
 import { Td } from './td.js';
 import { Repo } from './repo.js';
+import { MODERATION_KEY, SafetyLists } from './moderation.js';
 import { Activity } from './activity.js';
 import { normaliseUsername, parsePublicPath, publicPath, setPublicOrigin, usernameKey } from './protocol.js';
 import { audioRowStats, closeViewer, currentAudio, useHost, watchMedia } from './media.js';
@@ -36,6 +37,7 @@ import * as node from './views/node.js';
 import * as channel from './views/channel.js';
 import * as graph from './views/graph.js';
 import * as you from './views/you.js';
+import * as settings from './views/settings.js';
 import * as thread from './views/thread.js';
 import { commentsPanel } from './views/comments.js';
 import { openThread } from './views/shared.js';
@@ -65,11 +67,17 @@ const NAG_DISMISSED = 'tgs.nagDismissed';
  * their presence is the reader coming back to their own app. This is read
  * before anything else at boot, because the whole point of a public page is
  * not booting TDLib to find out.
+ *
+ * The safety record is the one `tgs.` key that is NOT evidence of a session:
+ * it survives sign-out by design (PROTOCOL §7.1) and it is written on the
+ * public routes too, where a visitor can report and mute (§2.15). Counting it
+ * would boot 14 MB of wasm at somebody who only ever hid one post.
  */
 function hasLocalSession() {
   try {
     for (let i = 0; i < localStorage.length; i += 1) {
-      if (String(localStorage.key(i)).startsWith('tgs.')) return true;
+      const key = String(localStorage.key(i));
+      if (key.startsWith('tgs.') && key !== MODERATION_KEY) return true;
     }
   } catch {
     return false;
@@ -120,6 +128,12 @@ class App {
     this.source = null;
     /** The dismissible nag docked in the floating-bar slot on a public page. */
     this.nag = null;
+    /**
+     * PRODUCT §2.15–§2.18 — the reader's block, mute and hidden lists. Built
+     * before anything else that renders, because both shells filter through it
+     * and the public one has no repo to hang it off.
+     */
+    this.safety = new SafetyLists({ onChange: () => this.onSafetyChange() });
     /** Every in-flight operation lives here; the pill derives from it (PRODUCT §2.10). */
     this.activity = new Activity({ onChange: () => this.paintStatus() });
     this.td.activity = this.activity;
@@ -142,6 +156,18 @@ class App {
       if (tone === 'bad') this.lastError = { text: message, at: Date.now() };
       return toast(message, tone, opts);
     };
+  }
+
+  /**
+   * §2.18 — the filter is applied at render, so a change to the lists is a
+   * repaint and nothing more: the memoised comment index is dropped and the
+   * current screen is drawn again. Blocking from a post sheet empties the feed
+   * behind it with no toggle anywhere and no reload.
+   */
+  onSafetyChange() {
+    this.repo?.notify('safety');
+    this.feedDirty = true;
+    this.render();
   }
 
   // ── status pill ──────────────────────────────────────────────────────────
@@ -534,7 +560,7 @@ class App {
       setLead(false);
     } else {
       // pushed screens keep the floating tab bar; Setup does not (PRODUCT §1)
-      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread' || route.name === 'person';
+      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread' || route.name === 'person' || route.name === 'settings';
       setTabs(pushed, this.lastMain.replace('#/', ''));
       setLead(true);
     }
@@ -552,6 +578,9 @@ class App {
         break;
       case 'you':
         el = you.render(this);
+        break;
+      case 'settings':
+        el = settings.render(this);
         break;
       case 'setup':
         el = setup.render(this, { manage: route.params.manage === '1' });
@@ -594,7 +623,7 @@ class App {
     try {
       await this.repo.signOut();
     } finally {
-      localStorage.clear();
+      clearExceptSafety();
       // TDLib closes after logOut; a fresh page gets a fresh client
       location.hash = '';
       location.reload();
@@ -658,7 +687,7 @@ class App {
     // session signs in first; this remembers where they were going, and the
     // sign-in screen names it.
     this.pendingDest = pub;
-    this.repo = new Repo(this.td, this.config);
+    this.repo = new Repo(this.td, this.config, this.safety);
     // a memory-pressure flush revokes every decoded picture the app is
     // holding; this is what paints them back afterwards (js/media.js)
     watchMedia(this);
@@ -666,7 +695,13 @@ class App {
     this.td.on('auth', (state) => {
       const t = state?.['@type'];
       if (t === 'authorizationStateReady') this.nodeLookupDone = false;
-      if (t === 'authorizationStateClosed' && !this.fatal) localStorage.clear();
+      if (t === 'authorizationStateClosed' && !this.fatal) clearExceptSafety();
+      // PROTOCOL §7.1 — the lists belong to an account, not to a device: the
+      // same account keeps them across a sign-out, and a different one on a
+      // shared device starts empty rather than inheriting someone's judgement.
+      if (t === 'authorizationStateReady') {
+        this.repo?.getMe().then((me) => this.safety.adopt(me?.id)).catch(() => null);
+      }
       this.render();
     });
     this.td.on('connection', () => this.paintStatus());
@@ -685,6 +720,21 @@ class App {
   }
 }
 
+/**
+ * PROTOCOL §7.1 — everything local goes except the safety record. A block list
+ * that evaporated on sign-out would re-expose the reader to the person they
+ * blocked the next time they signed in.
+ */
+function clearExceptSafety() {
+  try {
+    const kept = localStorage.getItem(MODERATION_KEY);
+    localStorage.clear();
+    if (kept !== null) localStorage.setItem(MODERATION_KEY, kept);
+  } catch (e) {
+    console.warn('[app] clear', e.message);
+  }
+}
+
 const app = new App();
 // js/media.js sits UNDER the views in the import graph (they render media; it
 // does not render them), so the two things its dock and its carousel need from
@@ -698,6 +748,8 @@ window.__tgsocial = {
   app,
   td: app.td,
   get repo() { return app.repo; },
+  /** PRODUCT §2.15–§2.18's lists (test/flows.mjs asserts against them). */
+  get safety() { return app.safety; },
   /** The public reader (PUBLIC.md), or null when this tab is the signed-in app. */
   get source() { return app.source; },
   currentAudio,

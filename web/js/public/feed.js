@@ -21,8 +21,10 @@ export class PublicFeedSession extends FeedSession {
    * card header reads person-first with the channel underneath. On `/f/<channel>`
    * there is none and the card falls back to the channel itself.
    */
-  constructor(source, usernames, { attribution = null } = {}) {
-    super(null, usernames);
+  constructor(source, usernames, { attribution = null, safety = null } = {}) {
+    // `applyMute` stays false: mute is about the main feed (PRODUCT §2.17), and
+    // a public page is somebody's channel or somebody's card, never that.
+    super(null, usernames, { safety });
     this.source = source;
     this.attribution = attribution;
   }

@@ -686,6 +686,56 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   overflow-wrap: anywhere;
 }
 
+/* ── safety: report, block, mute, contact (PRODUCT §2.15–§2.21) ──────────── */
+
+/* §2.15's reason rows. Single-select, and the picked one is marked with a gold
+   check rather than a radio the kit does not have — the row itself is the
+   button, so the selection reaches the keyboard and the screen reader without
+   a second control to style. It is a .list-item, so it is already past 40pt at
+   the default scale, and the markup's .hit-min overlay holds that at any
+   other one (COMPONENTS rule 6). */
+.reason-row {
+  width: 100%;
+  appearance: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  background: none;
+  font: var(--type-body);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.reason-row:hover .reason-label { color: var(--accent); }
+.reason-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--motion-color) ease; }
+.reason-row[aria-checked="true"] .reason-check { opacity: 1; }
+
+/* §2.19's address row: a link drawn as a list row, with the 40pt target. */
+.contact-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--hp-space-touch-min);
+  color: var(--ink);
+  text-decoration: none;
+}
+.contact-row:hover { color: var(--accent); }
+
+/* §2.17 — the Muted pill sits after the feed's title, not after its handle. */
+.row-name .pill { margin-left: var(--hp-space-tabs-gap); vertical-align: middle; }
+/* §2.20's hidden rows say `Spam · reported 2026-09-04` in prose, not in mono:
+   the key above it is the mono line. */
+.hidden-row .row-sub { font-family: inherit; font-size: var(--hp-type-small-size); }
+
+/* §2.16's blocked profile, and §2.19's contact block above the version line.
+   The commitment line is faint under the muted address, so it wins over the
+   .small it also carries. */
+.blocked-head .mono { margin-bottom: var(--hp-space-tabs-pad); }
+.you-foot { padding-top: var(--hp-space-card-pad); text-align: center; }
+.you-foot p { margin: 0 0 var(--hp-space-tabs-pad); }
+.you-foot p.faint { color: var(--faint); }
+.you-foot .footer-meta { padding-top: var(--hp-space-row-gap); }
+.signin-contact { margin-top: var(--hp-space-row-pad); margin-bottom: 0; }
+
 /* ── prose page (privacy) ────────────────────────────────────────────────── */
 
 .prose h2 { margin-top: var(--hp-space-card-pad); }

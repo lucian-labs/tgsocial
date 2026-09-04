@@ -40,6 +40,13 @@ sealed class HPFieldKind {
     data object Secure : HPFieldKind()
     data object Url : HPFieldKind()
     data object Username : HPFieldKind()
+
+    /**
+     * A username typed back verbatim (PRODUCT §2.21): mono face, no autocorrect, no
+     * autocapitalisation. Autocorrect on a confirmation field is a keyboard arguing with the one
+     * string the field exists to match.
+     */
+    data object Mono : HPFieldKind()
     data class Multiline(val rows: Int) : HPFieldKind()
 }
 
@@ -74,13 +81,14 @@ fun HPTextField(
         label = "fieldRing",
     )
     val shape = RoundedCornerShape(HPTokens.Radius.input)
-    val textStyle = HPTokens.Type.input.toTextStyle(HPTokens.Colors.ink)
+    val faceStyle = if (kind == HPFieldKind.Mono) HPTokens.Type.mono else HPTokens.Type.input
+    val textStyle = faceStyle.toTextStyle(HPTokens.Colors.ink)
     val keyboard = when (kind) {
         HPFieldKind.Phone -> KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = imeAction)
         HPFieldKind.Number -> KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = imeAction)
         HPFieldKind.Secure -> KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = imeAction)
         HPFieldKind.Url -> KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = imeAction, capitalization = KeyboardCapitalization.None)
-        HPFieldKind.Username -> KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = imeAction, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
+        HPFieldKind.Username, HPFieldKind.Mono -> KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = imeAction, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
         is HPFieldKind.Multiline -> KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Default, capitalization = KeyboardCapitalization.Sentences)
         HPFieldKind.Text -> KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = imeAction, capitalization = KeyboardCapitalization.Sentences)
     }
@@ -120,7 +128,7 @@ fun HPTextField(
             decorationBox = { inner ->
                 Box {
                     if (value.isEmpty() && placeholder != null) {
-                        HPText(placeholder, HPTokens.Type.input, HPTokens.Colors.faint, maxLines = 1)
+                        HPText(placeholder, faceStyle, HPTokens.Colors.faint, maxLines = 1)
                     }
                     inner()
                 }

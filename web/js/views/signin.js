@@ -6,6 +6,7 @@
  */
 import { h, button, field, replace } from '../../vendor/house-pour.js';
 import { authErrorCopy } from '../td.js';
+import { contactMailLink } from './safety.js';
 
 export function render(app) {
   const root = h('div.signin');
@@ -18,7 +19,9 @@ export function render(app) {
       ? `Sign in to see @${dest.username}.`
       : 'Sign in with the Telegram account you already have. Nothing is stored anywhere but Telegram and this device.'),
   );
-  root.append(h('div.card', intro, stage));
+  // §2.19 — the one screen a signed-out reader sees, so it carries the address.
+  // It sits outside `stage`, which every auth step replaces.
+  root.append(h('div.card', intro, stage, h('p.muted.small.signin-contact', contactMailLink())));
 
   let shown = null;
   const show = (key, make) => {

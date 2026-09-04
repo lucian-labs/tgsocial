@@ -1,7 +1,8 @@
-/* PRODUCT §2.8 You — profile summary, feeds, compose, listing, sign out. */
-import { h, button, pill, field, modal, confirm, toggle, sectionMark } from '../../vendor/house-pour.js';
+/* PRODUCT §2.8 You — profile summary, feeds, compose, listing, Settings. */
+import { h, button, pill, field, modal, toggle, sectionMark } from '../../vendor/house-pour.js';
 import { APP_VERSION, APP_BUILD } from '../td.js';
 import { avatarFor, feedRow, emptyCard } from './shared.js';
+import { contactMailLink } from './safety.js';
 import { userMessage } from '../repo.js';
 import { openCompose } from './compose.js';
 
@@ -11,7 +12,7 @@ export function render(app) {
   if (!node) {
     if (app.repo.newerNode) root.append(emptyCard('Newer card. Update the app.', `@${app.repo.newerNode.username} is your node, but its card is a newer version than this app reads.`));
     else root.append(emptyCard('No node yet.', 'Your node is a public channel that holds your feeds and who you follow.', { label: 'Make Your Node', onClick: () => app.navigate('#/setup') }));
-    root.append(signOutButton(app));
+    root.append(settingsButton(app));
     root.append(footer(app));
     return root;
   }
@@ -74,25 +75,32 @@ export function render(app) {
 
   const viewAs = button('View as others see it', { style: 'ghost', onClick: () => app.navigate(`#/node/${node.username}`) });
 
-  root.append(head, feedsMark, feeds, compose, sectionMark('Listing'), listing, viewAs, signOutButton(app), footer(app));
+  root.append(head, feedsMark, feeds, compose, sectionMark('Listing'), listing, viewAs, settingsButton(app), footer(app));
   return root;
 }
 
-function signOutButton(app) {
-  return button('Sign Out', {
-    style: 'danger',
-    onClick: async () => {
-      const ok = await confirm({ title: 'Sign out of tgsocial?', body: 'Your node stays on Telegram.', okLabel: 'Sign Out', okStyle: 'danger' });
-      if (!ok) return;
-      await app.signOut();
-    },
-  });
+/**
+ * §2.8 — Sign Out moved to Settings (§2.20) so Delete My Node could sit
+ * directly below it, and so the two destructive actions live together instead
+ * of one of them being a mis-tap away from `View as others see it`.
+ */
+function settingsButton(app) {
+  return button('Settings', { style: 'ghost', onClick: () => app.navigate('#/settings') });
 }
 
+/**
+ * §2.19 — the address is reachable from the screen a reader is already on, and
+ * the line under it says what a serverless client can actually promise: a
+ * person reads it. The version line keeps the last word.
+ */
 function footer(app) {
   const node = app.repo.myNode ? ` · node @${app.repo.myNode.username}` : '';
   const td = app.td.tdlibVersion ? `TDLib ${app.td.tdlibVersion}` : 'TDLib';
-  return h('div.footer-meta', `tgsocial ${APP_VERSION} (${APP_BUILD}) · ${td}${node}`);
+  return h('div.you-foot',
+    h('p.muted.small', 'Questions or reports: ', contactMailLink()),
+    h('p.small.faint', 'Reports are read by a person within 24 hours.'),
+    h('div.footer-meta', `tgsocial ${APP_VERSION} (${APP_BUILD}) · ${td}${node}`),
+  );
 }
 
 function editCard(app) {

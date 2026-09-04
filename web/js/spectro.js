@@ -184,13 +184,23 @@ export const ENVELOPE_RATE = 3000;
  * on the engines that happen to decode at 3 kHz. Headless Chrome is one of
  * them, which is why no test saw it.
  *
- * 9.6 M samples is 38 MB of transient float, gated to two at a time by
- * `DECODE_SLOTS` — the same order as the spectrum path's 19 MB — and it buys
- * 1200 s at 8 kHz and 3200 s at 3 kHz. The band is therefore non-empty on every
- * engine, which is what §2.11.1 asks for ("a 12-minute set gets a silhouette
- * rather than a hairline") and what iOS gets for free by decoding at 1 kHz.
+ * It is DERIVED, not chosen: exactly what the band's own ceiling costs at the
+ * band's own rate. A round number here is a second, silent ceiling — 9.6 M was
+ * one, and it stopped the silhouette at 3200 s on the engines the band was
+ * sized for, so §2.11.1's "past a second, much higher ceiling (an hour)" ended
+ * at 53 minutes on web and at the full hour on iOS, for no reason a reader of
+ * either file could find. `ENVELOPE_CAP_S` is now the only ceiling on this
+ * band, which is what iOS has always had (`SpectrogramSpec.envelopeRate` is
+ * 1 kHz, so its hour costs 3.6 M against a 4.8 M cap).
+ *
+ * The price is 10.8 M samples, 43 MB of transient float gated to two at a time
+ * by `DECODE_SLOTS` — the same order as the 38 MB it replaces and as the
+ * spectrum path's 19 MB. An engine that will not decode below 8 kHz still gets
+ * a shorter band (1350 s), because that is a real platform floor and not a
+ * number we chose; what it no longer does is shorten the band for engines that
+ * CAN reach 3 kHz.
  */
-export const ENVELOPE_MAX_SAMPLES = 9600000;
+export const ENVELOPE_MAX_SAMPLES = ENVELOPE_CAP_S * ENVELOPE_RATE;
 
 // ── normalisation ──────────────────────────────────────────────────────────
 

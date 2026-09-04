@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.housepour.HPButton
@@ -23,18 +24,22 @@ import ca.lucianlabs.housepour.HPCard
 import ca.lucianlabs.housepour.HPColumn
 import ca.lucianlabs.housepour.HPFieldKind
 import ca.lucianlabs.housepour.HPH1
+import ca.lucianlabs.housepour.HPHitTarget
 import ca.lucianlabs.housepour.HPMono
 import ca.lucianlabs.housepour.HPMuted
 import ca.lucianlabs.housepour.HPTextField
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.housepour.HPWordmark
+import ca.lucianlabs.tgsocial.protocol.ReportEmail
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.AuthStep
+import ca.lucianlabs.tgsocial.ui.components.openMail
 
 /** PRODUCT §2.1 — shown whenever TDLib is not authorizationStateReady. */
 @Composable
 fun SignInScreen(vm: AppViewModel) {
     val auth by vm.auth.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var phone by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
@@ -89,6 +94,11 @@ fun SignInScreen(vm: AppViewModel) {
                     }
                     AuthStep.READY -> Unit
                 }
+            }
+            // PRODUCT §2.19 — the published address is reachable without signing in; this is the only screen
+            // a signed-out reader sees, so it is the only place it can be.
+            HPHitTarget({ openMail(context, ReportEmail.ADDRESS) }, contentDescription = "Write to ${ReportEmail.ADDRESS}") {
+                HPMuted(ReportEmail.ADDRESS, maxLines = 1)
             }
         }
     }

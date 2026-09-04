@@ -31,7 +31,9 @@ struct RootView: View {
             }
         }
         .animation(HPMotion.toast, value: model.viewer != nil)
-        .hpModal(isPresented: Binding(get: { model.modal != nil }, set: { if !$0 { model.modal = nil } })) {
+        // The scrim's dismissal goes through the model so a run that must not be interrupted can
+        // refuse it (PRODUCT §2.21: the delete modal is not dismissible while it runs).
+        .hpModal(isPresented: Binding(get: { model.modal != nil }, set: { if !$0 { model.dismissModal() } })) {
             switch model.modal {
             case .compose(let feed): ComposeModal(preselected: feed)
             case .editCard: EditCardModal()
@@ -40,6 +42,10 @@ struct RootView: View {
             case .comment(let targeting): CommentComposerModal(targeting: targeting)
             case .deleteComment(let comment): DeleteCommentModal(comment: comment)
             case .postSheet(let post): PostSheetModal(post: post)
+            case .commentSheet(let comment): CommentSheetModal(comment: comment)
+            case .report(let subject): ReportModal(subject: subject)
+            case .block(let username): BlockModal(username: username)
+            case .deleteNode: DeleteNodeModal()
             case nil: EmptyView()
             }
         }
@@ -68,6 +74,7 @@ struct RootView: View {
                             case .profile(let username): NodeProfileScreen(username: username)
                             case .feedChannel(let username): FeedChannelScreen(username: username)
                             case .manageFeeds: ManageFeedsScreen()
+                            case .settings: SettingsScreen()
                             case .thread(let post): ThreadScreen(post: post)
                             #if targetEnvironment(macCatalyst)
                             case .connectorSources: ConnectorSourcesScreen()

@@ -21,7 +21,9 @@ import ca.lucianlabs.tgsocial.ui.components.PostCard
 
 /** PRODUCT §2.3 — the main feed. Strictly chronological (PROTOCOL §4.8). */
 fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
-    if (feed.ready && feed.posts.isEmpty() && !feed.loading) {
+    // PRODUCT §2.18 — `chaining` is a page the filter took whole with more still to fetch (FeedUi). That is
+    // not an empty feed and must not be dressed as one: the next page is on its way in.
+    if (feed.ready && feed.posts.isEmpty() && !feed.loading && !feed.chaining) {
         item(key = "feed-empty") {
             Box(Modifier.columnItem()) {
                 if (me == null) {
@@ -61,7 +63,7 @@ fun LazyListScope.FeedItems(vm: AppViewModel, feed: FeedUi, me: NodeSnapshot?) {
     item(key = "feed-footer") {
         Box(Modifier.columnItem()) {
             when {
-                feed.loading || !feed.ready -> FooterNote("Loading…")
+                feed.loading || !feed.ready || feed.chaining -> FooterNote("Loading…")
                 feed.exhausted && feed.posts.isNotEmpty() -> FooterNote("That's everything.")
             }
         }

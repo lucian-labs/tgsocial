@@ -171,9 +171,11 @@ struct CommentRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onSelect?() }
+        // §2.12: long-press opens the comment sheet — the same modal as a post's, with the
+        // comment's own rows and the §2.15 SAFETY block. Delete lives in there now.
         .onLongPressGesture {
-            guard comment.isMine, !comment.isPending else { return }
-            model.modal = .deleteComment(comment)
+            guard !comment.isPending else { return }
+            model.modal = .commentSheet(comment)
         }
         .animation(HPMotion.color, value: isSelected)
         .accessibilityAction(named: isSelected ? "Clear reply target" : "Reply to \(comment.ownerTitle)") {

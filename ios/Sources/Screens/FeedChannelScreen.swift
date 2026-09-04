@@ -34,6 +34,10 @@ struct FeedChannelScreen: View {
                             HPMenu(items: [
                                 HPMenuItem("Open in Telegram") { model.open(DeepLink.chat(username: feed.username)) },
                                 HPMenuItem("Copy Link") { model.copyLink(PublicLink.feed(username: feed.username)) },
+                                // §2.17: one tap, no confirm — it is one tap to undo in the same place.
+                                model.isMuted(feed: feed.username)
+                                    ? HPMenuItem("Unmute Feed") { model.unmute(feed: feed.username, title: feed.title) }
+                                    : HPMenuItem("Mute Feed") { model.mute(feed: feed.username, title: feed.title) },
                             ])
                         }
                     }
@@ -42,17 +46,20 @@ struct FeedChannelScreen: View {
                     if !feed.description.isEmpty { HPMuted(feed.description).padding(.top, HPTokens.Space.rowGap) }
                 }
                 .padding(.bottom, HPTokens.Space.cardGap)
+                // §2.18: blocked and reported posts drop out here too. Mute does not apply — a muted
+                // feed stays complete on its own screen (§2.17).
+                let visible = model.visible(posts: posts)
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(posts) { post in
+                    ForEach(visible) { post in
                         PostCard(post: post) { _ in }
                             .onAppear {
-                                if let i = posts.firstIndex(where: { $0.id == post.id }), i >= posts.count - FeedScreen.prefetchDistance {
+                                if let i = visible.firstIndex(where: { $0.id == post.id }), i >= visible.count - FeedScreen.prefetchDistance {
                                     Task { await load(reset: false) }
                                 }
                             }
                     }
                     if exhausted {
-                        FeedFooter(text: posts.isEmpty ? "No posts yet." : "That's everything.")
+                        FeedFooter(text: visible.isEmpty ? "No posts yet." : "That's everything.")
                     } else {
                         FeedFooter(text: "Loading\u{2026}").onAppear { Task { await load(reset: false) } }
                     }

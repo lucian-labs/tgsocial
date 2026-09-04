@@ -43,8 +43,10 @@ import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.protocol.ReplyTarget
+import ca.lucianlabs.tgsocial.protocol.ReportSubject
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Availability
+import ca.lucianlabs.tgsocial.ui.Sheet
 import ca.lucianlabs.tgsocial.ui.components.openLink
 
 /**
@@ -107,8 +109,9 @@ fun ColumnScope.SignOutSheet(vm: AppViewModel) {
     )
 }
 
+/** A label/value row: the Status sheet's rows, and the post and comment sheets' (§2.3, §2.12). */
 @Composable
-private fun StatusRow(label: String, value: String, isLast: Boolean = false) {
+internal fun StatusRow(label: String, value: String, isLast: Boolean = false) {
     HPListItem(isLast = isLast) {
         HPBody(label, maxLines = 1)
         Spacer(Modifier.weight(1f))
@@ -128,7 +131,8 @@ fun ColumnScope.StatusSheet(vm: AppViewModel) {
     val phone by vm.phone.collectAsStateWithLifecycle()
     val me by vm.me.collectAsStateWithLifecycle()
     val node by vm.myNode.collectAsStateWithLifecycle()
-    val feed by vm.feed.collectAsStateWithLifecycle()
+    // The filtered feed, so `N posts` is the number on screen rather than the number fetched (PRODUCT §2.18).
+    val feed by vm.visibleFeed.collectAsStateWithLifecycle()
     // Relative times (`card 2 min ago`) re-derive while the sheet is open.
     var tick by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(10_000); tick++ } }
@@ -166,6 +170,7 @@ fun ColumnScope.StatusSheet(vm: AppViewModel) {
 @Composable
 fun ColumnScope.PostSheet(vm: AppViewModel, post: Post) {
     val context = LocalContext.current
+    val safety by vm.safety.collectAsStateWithLifecycle()
     HPSectionMark("Post")
     Spacer(Modifier.height(HPTokens.Space.rowGap))
     StatusRow("Posted", Format.exact(post.date.toLong()))
@@ -173,7 +178,28 @@ fun ColumnScope.PostSheet(vm: AppViewModel, post: Post) {
     StatusRow("Feed", "${post.sourceTitle} · @${post.sourceUsername}", isLast = true)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPButton("Open in Telegram", { openLink(context, DeepLink.post(post.sourceUsername, post.messageId)) }, style = HPButtonStyle.NEUTRAL)
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    // PRODUCT §2.15 — the SAFETY block. Report always; Block only where §2.3 attributed the post to a node,
+    // and never against yourself; Mute names the source channel and toggles like the §2.6 kebab does.
+    HPSectionMark("Safety")
     Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPButton("Report Post", { vm.openReport(ReportSubject.forPost(post)) }, style = HPButtonStyle.DANGER, size = HPButtonSize.SMALL)
+    post.nodeUsername?.takeIf { !vm.isMe(it) }?.let { node ->
+        Spacer(Modifier.height(HPTokens.Space.rowGap))
+        HPButton("Block @$node", { vm.openSheet(Sheet.Block(node)) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL)
+    }
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    val muted = safety.isMuted(post.sourceUsername)
+    HPButton(
+        label = if (muted) "Unmute ${post.sourceTitle}" else "Mute ${post.sourceTitle}",
+        onClick = {
+            vm.closeSheet()
+            if (muted) vm.unmuteFeed(post.sourceUsername, post.sourceTitle) else vm.muteFeed(post.sourceUsername, post.sourceTitle)
+        },
+        style = HPButtonStyle.GHOST,
+        size = HPButtonSize.SMALL,
+    )
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPButton("Close", vm::closeSheet, style = HPButtonStyle.GHOST)
 }
 

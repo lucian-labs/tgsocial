@@ -85,6 +85,9 @@
       type: { '@type': 'chatTypeSupergroup', supergroup_id: sg, is_channel: true },
       title,
       photo: photo ? { small: { id: 7000 + sg, remote: { unique_id: `p${sg}` }, local: { is_downloading_completed: false } } } : null,
+      // PROTOCOL §4.11 — only a channel's creator may delete it for everyone,
+      // and PRODUCT §2.21 draws a different modal when this is false
+      can_be_deleted_for_all_users: creator,
     };
     supergroups[sg] = {
       '@type': 'supergroup',
@@ -425,9 +428,16 @@
           if (q.username === 'tgs_toomany') throw err(400, 'Too many public channels.');
           supergroups[q.supergroup_id].usernames = { editable_username: q.username, active_usernames: [q.username] };
           return ok;
-        case 'deleteChat':
+        case 'deleteChat': {
+          // deleting a channel releases its username (PROTOCOL §4.11), so the
+          // name stops resolving here the way it stops resolving on Telegram
+          const sg = chats[q.chat_id]?.type?.supergroup_id;
+          if (sg && supergroups[sg]) supergroups[sg].usernames = null;
           delete chats[q.chat_id];
+          delete pinned[q.chat_id];
+          delete history[q.chat_id];
           return ok;
+        }
         case 'sendMessage': {
           const tmpId = nextMsgId + 1;
           const realId = nextMsgId;

@@ -167,7 +167,9 @@ private fun CommentRow(vm: AppViewModel, post: Post, comment: Comment, depth: In
                 indication = null,
                 onClickLabel = if (selected) "Reply to the post instead" else "Reply to ${comment.authorName}",
                 onClick = { vm.toggleReplyTarget(comment) },
-                onLongClick = { if (comment.own && !comment.pending) vm.openSheet(Sheet.DeleteComment(comment)) },
+                // PRODUCT §2.12 / §2.15 — long-press opens the comment sheet, which carries Delete on your own
+                // comment and Report / Block on anyone else's. A comment still in flight has no link to report.
+                onLongClick = { if (!comment.pending) vm.openSheet(Sheet.CommentSheet(comment)) },
             )
             .padding(vertical = HPTokens.Space.rowGap)
             .semantics { contentDescription = "Comment by ${comment.authorName}" },

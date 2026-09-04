@@ -1,4 +1,6 @@
-// Screens — You (PRODUCT.md §2.8): my node, my feeds, compose, listing, view as others, sign out.
+// Screens — You (PRODUCT.md §2.8): my node, my feeds, compose, listing, view as others, Settings.
+// Sign Out moved to Settings (§2.20) so the two destructive actions live together; this screen
+// pushes Settings and carries the contact lines (§2.19) above the version line.
 
 import SwiftUI
 
@@ -13,7 +15,7 @@ struct YouScreen: View {
                 header(node)
                 HPCard { HPMuted(AppModel.newerCardText) }
                 HPButton("View as others see it", style: .ghost) { model.path.append(.profile(username: node.username)) }
-                HPButton("Sign Out", style: .danger) { model.modal = .signOut }
+                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
                     .padding(.top, HPTokens.Space.rowGap)
             } else if let node = model.myNode {
                 header(node)
@@ -56,23 +58,35 @@ struct YouScreen: View {
                     }
                 }
                 HPButton("View as others see it", style: .ghost) { model.path.append(.profile(username: node.username)) }
-                HPButton("Sign Out", style: .danger) { model.modal = .signOut }
+                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
                     .padding(.top, HPTokens.Space.rowGap)
             } else {
                 // No node: the §2.3 empty state, linking to Setup (PRODUCT §2.2).
                 EmptyCard("Nothing here yet.", message: "Follow a node and their feeds show up here, newest first.",
                           action: ("Set Up", { model.openSetup() }))
-                HPButton("Sign Out", style: .danger) { model.modal = .signOut }
+                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
             }
-            HPMonoSmall(footer, color: HPTokens.Colors.faint)
-                .padding(.top, HPTokens.Space.cardPad)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
+            // §2.19: the address is reachable from inside the app, and the commitment under it
+            // says what a client with no server can actually do about a report.
+            VStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
+                Button { model.contactByMail() } label: {
+                    HPMuted("Questions or reports: \(Moderation.contactAddress)")
+                        .frame(minHeight: HPTokens.Space.touchMin)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Write to \(Moderation.contactAddress)")
+                HPSmall("Reports are read by a person within 24 hours.", color: HPTokens.Colors.faint)
+                HPMonoSmall(footer, color: HPTokens.Colors.faint)
+            }
+            .padding(.top, HPTokens.Space.cardPad)
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
         }
     }
 
     private var footer: String {
-        var parts = ["tgsocial \(model.appVersion) (\(model.buildNumber))"]
+        var parts = [model.versionLine]
         if !model.tdlibVersion.isEmpty { parts.append("TDLib \(model.tdlibVersion)") }
         if let n = model.myNode { parts.append("node @\(n.username)") }
         return parts.joined(separator: " \u{00B7} ")

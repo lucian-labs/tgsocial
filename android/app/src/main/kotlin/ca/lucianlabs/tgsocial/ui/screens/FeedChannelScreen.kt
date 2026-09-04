@@ -75,6 +75,11 @@ fun LazyListScope.FeedChannelItems(vm: AppViewModel, c: ChannelUi) {
                                     menuOpen = false
                                     copyToClipboard(context, PublicLink.feed(src.username, publicOrigin))
                                     vm.toast.show("Link copied.", HPToastTone.GOOD)
+                                })
+                                // PRODUCT §2.17 — no confirm: it is one tap to undo, right here.
+                                HPMenuItem(if (c.muted) "Unmute Feed" else "Mute Feed", {
+                                    menuOpen = false
+                                    if (c.muted) vm.unmuteFeed(src.username, src.title) else vm.muteFeed(src.username, src.title)
                                 }, isLast = true)
                             }
                         }

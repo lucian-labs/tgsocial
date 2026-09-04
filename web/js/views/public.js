@@ -24,6 +24,7 @@ import { channelLink, publicFeedUrl, publicNodeUrl, publicPersonUrl, usernameKey
 import { avatarFor, postCard, emptyCard, notFoundCard, feedRow, nodeRow, openExternal } from './shared.js';
 import { releaseMedia } from '../media.js';
 import { PublicFeedSession } from '../public/feed.js';
+import { blockedProfile, contactMailLink } from './safety.js';
 import { FOUND, UNLISTED, isUnlisted, resolveChannel, resolveNode, resolvePerson } from '../public/resolve.js';
 
 const PAGE = 20;
@@ -154,6 +155,17 @@ export function renderPerson(app, { username }) {
     if (!alive()) return;
     if (res.kind === UNLISTED) return replace(root, unlistedCard(res.node));
     if (res.kind !== FOUND) return replace(root, notFoundCard(username));
+    // §2.16 names "a public URL (§2.13)" as one of the three deliberate ways to
+    // reach a blocked node, and this is the screen it means: the filter would
+    // otherwise drop every attributed post and leave a head over an empty
+    // list, which is the "reads as a broken app" the exception was written to
+    // prevent. It also puts `Unblock` in front of a visitor who has no
+    // Settings to undo it in — /u/ carries `Block @node`, so it owes the undo.
+    //
+    // The check is on the RESOLVED node, not the handle in the URL: /u/ may
+    // arrive on a feed (PUBLIC §4), and a feed is not the thing that gets
+    // blocked (§2.3 attributes posts to the node).
+    if (app.safety.isBlocked(res.node)) return replace(root, blockedProfile(app, res.node));
 
     const { node, card, page } = res;
     const name = card.name || page.channel.title || `@${node}`;
@@ -181,6 +193,7 @@ export function renderPerson(app, { username }) {
     // the person (PRODUCT §2.3: the person leads, the channel follows)
     const session = new PublicFeedSession(app.source, card.feeds, {
       attribution: { username: node, name, photo },
+      safety: app.safety,
     });
     root.append(postList(app, session, { alive, empty: emptyCard('Nothing here yet.', 'No posts in these feeds yet.') }));
   });
@@ -205,7 +218,7 @@ export function renderChannel(app, { username }) {
       verified: res.verified,
       copyUrl: publicFeedUrl(info.username),
     }));
-    const session = new PublicFeedSession(app.source, [info.username]);
+    const session = new PublicFeedSession(app.source, [info.username], { safety: app.safety });
     root.append(postList(app, session, { alive, empty: emptyCard('Nothing here yet.', 'This channel has no posts.') }));
   });
 }
@@ -214,6 +227,11 @@ export function renderChannel(app, { username }) {
 
 export function renderNode(app, { username }) {
   return screen(app, async (root, alive) => {
+    // §2.16, same exception as the signed-in profile (js/views/node.js) and as
+    // /u/ above. Here the route's own handle is the node, so this answers
+    // before the preview is fetched — their page is not read and their photo
+    // is not loaded, which is the point of the card that stands in for it.
+    if (app.safety.isBlocked(username)) return replace(root, blockedProfile(app, username));
     const res = await resolveNode(app.source, username);
     if (!alive()) return;
     if (res.kind === UNLISTED) return replace(root, unlistedCard(res.node));
@@ -297,8 +315,18 @@ async function lookups(items, fn, limit = 3) {
   await Promise.all(workers);
 }
 
+/**
+ * PRODUCT §2.19 — the address, in the footer of every public page. A visitor
+ * has no Settings and no You screen, so this is the only place a public page
+ * can put the one human it can point at.
+ */
+function contactFooter() {
+  return h('div.you-foot', h('p.muted.small', 'Questions or reports: ', contactMailLink()));
+}
+
 export function render(app, route) {
-  if (route.name === 'person') return renderPerson(app, route);
-  if (route.name === 'node') return renderNode(app, route);
-  return renderChannel(app, route);
+  const body = route.name === 'person' ? renderPerson(app, route)
+    : route.name === 'node' ? renderNode(app, route)
+      : renderChannel(app, route);
+  return h('div', body, contactFooter());
 }

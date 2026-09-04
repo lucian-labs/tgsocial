@@ -6,6 +6,7 @@ import { h, button, pill, avatar, sectionMark, modal } from '../../vendor/house-
 import { entityRuns, formatTime, formatExactTime, compactCount, serverMessageId } from '../protocol.js';
 import { userMessage } from '../repo.js';
 import { mediaBlocks, bindPicture } from '../media.js';
+import { postSubject, safetyBlock } from './safety.js';
 
 export function openExternal(url) {
   window.open(url, '_blank', 'noopener');
@@ -120,7 +121,11 @@ async function sharePost(app, post) {
   }
 }
 
-/** PRODUCT §2.3 — the post sheet: Posted / Views / Feed rows, Open in Telegram, Close. */
+/**
+ * PRODUCT §2.3 — the post sheet: Posted / Views / Feed rows, the §2.15 SAFETY
+ * block, Open in Telegram, Close. The safety rows sit above the two neutral
+ * actions so the destructive ones are not what a thumb lands on first.
+ */
 export function openPostSheet(app, post) {
   const row = (label, value) => h('div.list-item.sheet-row', h('span.sheet-label', label), h('span.sheet-value', value));
   let m = null;
@@ -133,6 +138,7 @@ export function openPostSheet(app, post) {
       row('Views', compactCount(post.views)),
       row('Feed', `${post.title || `@${post.username}`} · @${post.username}`),
     ),
+    ...safetyBlock(app, postSubject(post), { close: () => m.close() }),
     open,
     close,
   ], { label: 'Post' });
@@ -156,7 +162,11 @@ const SHEET_SUPPRESS = 'button, a, input, textarea, .media, .post-media, .player
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP_PX = 10;
 
-function attachPostSheet(app, el, post) {
+export function attachSheet(el, openSheet) {
+  // Comment rows nest (§2.12), so the press must resolve to ONE sheet: the
+  // innermost element carrying this gesture wins, exactly as its click does.
+  el.dataset.sheet = '';
+  const mine = (e) => e.target.closest('[data-sheet]') === el;
   let timer = null;
   let fired = false;
   let startX = 0;
@@ -169,14 +179,14 @@ function attachPostSheet(app, el, post) {
     // reset on every press: a release outside the card (e.g. over the sheet)
     // never fires the card's click, so the flag must not linger
     fired = false;
-    if (e.button !== 0 || e.target.closest(SHEET_SUPPRESS)) return;
+    if (e.button !== 0 || e.target.closest(SHEET_SUPPRESS) || !mine(e)) return;
     cancel();
     startX = e.clientX;
     startY = e.clientY;
     timer = setTimeout(() => {
       timer = null;
       fired = true;
-      openPostSheet(app, post);
+      openSheet();
     }, LONG_PRESS_MS);
   });
   el.addEventListener('pointermove', (e) => {
@@ -193,10 +203,10 @@ function attachPostSheet(app, el, post) {
     e.stopPropagation();
   }, true);
   el.addEventListener('contextmenu', (e) => {
-    if (e.target.closest(SHEET_SUPPRESS)) return;
+    if (e.target.closest(SHEET_SUPPRESS) || !mine(e)) return;
     e.preventDefault();
     cancel();
-    openPostSheet(app, post);
+    openSheet();
   });
 }
 
@@ -305,7 +315,7 @@ export function postCard(app, post, { thread = true } = {}) {
 
   const card = h('article.card.post', { 'aria-label': `Post by ${name}` }, parts);
   // long-press / right-click → the post sheet (§2.3)
-  attachPostSheet(app, card, post);
+  attachSheet(card, () => openPostSheet(app, post));
   return card;
 }
 
@@ -375,12 +385,24 @@ export function followButton(app, username, { size = 'sm' } = {}) {
   return btn;
 }
 
-/** COMPONENTS FeedRow: title, @username, optional Verified pill, chevron. */
+/**
+ * COMPONENTS FeedRow: title, @username, optional Verified pill, chevron.
+ *
+ * A muted feed keeps its row and gains a faint `Muted` pill after the title
+ * (PRODUCT §2.17): mute takes a channel out of the merged feed and changes
+ * nothing else, so hiding the row would overstate it.
+ */
 export function feedRow(app, { title, username, verified = false, onClick }) {
   const sub = h('div.row-sub', `@${username}`);
   if (verified) sub.append(pill('Verified', 'gold'));
+  const name = h('div.row-name', title || `@${username}`);
+  if (app.safety?.isMutedFeed(username)) {
+    const muted = pill('Muted');
+    muted.classList.add('faint');
+    name.append(muted);
+  }
   const row = h('div.list-item.feed-row', { role: 'link', tabindex: 0, 'aria-label': `Open ${title || username}` },
-    h('div.row-main', h('div.row-text', h('div.row-name', title || `@${username}`), sub)),
+    h('div.row-main', h('div.row-text', name, sub)),
     h('div.row-trail', h('span.chevron', { 'aria-hidden': 'true' }, '›')),
   );
   const go = onClick || (() => app.openChannel(username));

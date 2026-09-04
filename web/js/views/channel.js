@@ -8,6 +8,7 @@
 import { h, kebabMenu, pill, replace } from '../../vendor/house-pour.js';
 import { hasBacklink, publicFeedUrl, channelLink } from '../protocol.js';
 import { avatarFor, postCard, emptyCard, notFoundCard, openExternal } from './shared.js';
+import { toggleMute } from './safety.js';
 import { releaseMedia } from '../media.js';
 
 const PAGE = 20;
@@ -44,7 +45,7 @@ export function render(app, { username }) {
     replace(head,
       h('div.head-actions',
         verified ? pill('Verified', 'gold') : null,
-        channelMenu(app, info.username)),
+        channelMenu(app, info)),
       avatarFor(app, info.title, info.photo, 'profile'),
       h('h2', info.title),
       h('span.mono', `@${info.username}`),
@@ -91,7 +92,7 @@ export function render(app, { username }) {
  * when it does not — which is the default, since a clone of this repo is not
  * a web host until somebody makes it one.
  */
-function channelMenu(app, username) {
+function channelMenu(app, { username, title }) {
   return kebabMenu([
     { label: 'Open in Telegram', onSelect: () => openExternal(channelLink(username)) },
     {
@@ -104,6 +105,13 @@ function channelMenu(app, username) {
           app.toast("Couldn't copy the link.", 'bad');
         }
       },
+    },
+    // §2.17 — the label reads the state, because the undo is the same tap in
+    // the same place. This screen itself never changes: a muted feed stays
+    // complete here, it just leaves the merged feed.
+    {
+      label: app.safety.isMutedFeed(username) ? 'Unmute Feed' : 'Mute Feed',
+      onSelect: () => toggleMute(app, { username, title }),
     },
   ], { label: `More for @${username}` });
 }

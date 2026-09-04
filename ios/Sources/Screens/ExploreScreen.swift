@@ -12,13 +12,16 @@ struct ExploreScreen: View {
         Screen(refresh: { await model.refreshDiscovery(force: true) }) {
             HPTextField(nil, text: $query, placeholder: "Find a node", kind: .text) { submit() }
 
+            // §2.18: a blocked node is not in Explore's rows.
+            let nearby = model.visibleNearby
+            let directory = model.visibleDirectory
             HPSectionMark("Nearby")
-            if model.nearby.isEmpty {
+            if nearby.isEmpty {
                 HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "Follow someone and their people appear here.") }
             } else {
                 HPListCard {
-                    ForEach(Array(model.nearby.enumerated()), id: \.element.id) { i, entry in
-                        NodeRow(node: entry.node, followedBy: entry.followedByCount, isLast: i == model.nearby.count - 1) {
+                    ForEach(Array(nearby.enumerated()), id: \.element.id) { i, entry in
+                        NodeRow(node: entry.node, followedBy: entry.followedByCount, isLast: i == nearby.count - 1) {
                             model.path.append(.profile(username: entry.node.username))
                         }
                     }
@@ -26,12 +29,12 @@ struct ExploreScreen: View {
             }
 
             HPSectionMark("Directory")
-            if model.directory.isEmpty {
+            if directory.isEmpty {
                 HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "No nodes found. Be the first: make yours public.") }
             } else {
                 HPListCard {
-                    ForEach(Array(model.directory.enumerated()), id: \.element.id) { i, entry in
-                        NodeRow(node: entry.node, isLast: i == model.directory.count - 1) {
+                    ForEach(Array(directory.enumerated()), id: \.element.id) { i, entry in
+                        NodeRow(node: entry.node, isLast: i == directory.count - 1) {
                             model.path.append(.profile(username: entry.node.username))
                         }
                     }

@@ -83,6 +83,10 @@ button reads `Sign In`. A ghost button `Use another number` goes back.
 Step 3 (2FA) shows `PASSWORD` + secure input, hint text from TDLib's
 `passwordHint` in muted if present, button `Unlock`.
 
+Every step's footer carries one muted line, `elijah@lucianlabs.ca` (§2.19) —
+this is the only screen a signed-out reader sees, and the address has to be
+reachable from it.
+
 Errors (toast, `.bad`): `That code didn't match.` · `That password didn't
 match.` · `Telegram didn't accept that number.` · `Too many tries. Wait a
 moment.` (FLOOD_WAIT — show the seconds if TDLib gives them). Other TDLib
@@ -234,11 +238,19 @@ Posted        2026-08-23 14:02               (list rows; values mono)
 Views         1.2k
 Feed          WaveLoop devlog · @waveloop_devlog
 ( Open in Telegram )                         (btn neutral)
+
+SAFETY                                       (section mark)
+( Report Post )                              (btn danger sm)
+( Block @tgs_ana )                           (btn ghost sm)
+( Mute WaveLoop devlog )                     (btn ghost sm)
+
 ( Close )                                    (btn ghost)
 ```
 
   `Open in Telegram` lives here now — nowhere else on the card. Views moved
-  here from the footer.
+  here from the footer. The `SAFETY` block is §2.15–§2.17; `Block` names the
+  attributed node and is absent when the post has none, `Mute` names the
+  source channel.
 - Footer counts: `N reactions · N comments` (reactions render as the
   reaction emoji + count when few, summed count otherwise; comments count
   per §2.12, tappable). Views are not in the footer.
@@ -285,6 +297,10 @@ anailiovic.com                               (link)
 
 ( Follow )                                   (btn primary when not following; `Unfollow` btn ghost when following)
 
+The top-right corner carries the same kebab menu as the feed channel header
+(§2.6): `Open in Telegram`, `Copy Link`, `Block @tgs_ana` (§2.16). A blocked
+node's profile is the blocked card in §2.16 instead of all of this.
+
 FEEDS
 ┌ card ─────────────────────────────────┐
 │ Ana's notes          @ana_notes   Verified │  → feed screen
@@ -327,6 +343,7 @@ one `HPListItem` per action, body text, ink, 40pt rows:
 - `Copy Link` (public routes and signed-in alike — copies the channel's share
   URL: `t.me/<channel>` unless the build has a public origin configured
   (§2.13), toast `Link copied.`)
+- `Mute Feed` — reads `Unmute Feed` when the feed is already muted (§2.17)
 
 `Open in Telegram` appears nowhere else in this header. Dismiss by tapping
 outside or pressing Escape (web) / swiping down (native sheet).
@@ -370,10 +387,17 @@ Public listing          [ pill: Listed / Unlisted ]  (toggle writes `public:`)
 ( Announce in Directory )  btn sm — posts to @tgsocial_index; disabled when unlisted
 
 ( View as others see it )   ghost
-( Sign Out )                danger
+( Settings )                ghost — pushes §2.20, which now holds Sign Out
 
+Questions or reports: elijah@lucianlabs.ca           muted, → mail composer
+Reports are read by a person within 24 hours.        faint
 tgsocial 1.0 (12) · TDLib 1.8.x · node @tgs_elijah   mono faint
 ```
+
+`Sign Out` is no longer on this screen: it lives in Settings with
+`Delete My Node` (§2.20, §2.21), so the two destructive actions sit together
+and neither is a mis-tap away from `View as others see it`. The contact line
+is §2.19 and is present whether or not a node exists.
 
 **Edit Card** modal: `NAME` input, `BIO` input, `LINK` input, `( Save )`.
 **Manage feeds**: the Setup feeds card.
@@ -502,9 +526,15 @@ circular player and gets the strip as the transport underneath it. Video
 scrubber only.
 
 *Port state:* all three builds clamp the axis to the analysis Nyquist as
-above. iOS and web give a video note the strip as its transport; **Android
-still draws the circle with no transport at all** and is the one build that
-does not yet meet the sentence above.
+above, all three give a video note the strip as its transport, and all three
+**cover** the clip rather than sampling it — every sample of the file is
+inside at least one window. They reach that from opposite ends, because their
+STFTs are laid out differently: web lays frames over the whole clip and grows
+the window when its frame budget runs out (`framePlan`), iOS lays them per
+column and takes more than one window in a column wider than a window
+(`SpectrogramBuilder.frames`). The silhouette band runs to the hour above on
+every build; on web an engine that refuses to decode below 8 kHz shortens it,
+which is a platform floor rather than a product decision.
 
 #### 2.11.2 The mini waveform
 
@@ -628,6 +658,13 @@ Behaviour:
   modal `Delete this comment?`) — deletes the message in your channel.
 - A commenter row's avatar/name opens their node profile. Comments from
   nodes you don't follow (found via +1) show a small `+1` neutral pill.
+- **Long-press a comment** (web: long-press or right-click) opens the
+  **comment sheet** — the post sheet's twin (§2.3), with `Posted`, the
+  comments channel in `Feed`, `Open in Telegram`, and the same `SAFETY` block
+  reading `Report Comment` and `Block @tgs_ana` (§2.15, §2.16). No `Mute`:
+  mute is about a feed's posts, and a comment is not one. On your own comment
+  the sheet carries `Delete` instead of `Report Comment` — you do not report
+  yourself.
 
 ### 2.13 Public pages — a URL for every feed and every person
 
@@ -669,7 +706,10 @@ owner made it public on Telegram.
 **What renders.** The post card of §2.3 with media playable inline and the
 full-screen viewer, relative times, and the long-press sheet — minus the
 things that need an identity: no Comment button, no comment counts, no
-Follow. The floating tab bar is hidden; the topbar carries the wordmark and a
+Follow. The sheet keeps its `SAFETY` block: `Report Post` and `Mute` work
+signed out (§2.15, §2.17) against the same local lists, and `Block` needs an
+attributed node so it appears only on `/u/` and `/n/`, where there is one.
+The page footer carries `elijah@lucianlabs.ca` (§2.19). The floating tab bar is hidden; the topbar carries the wordmark and a
 neutral `Public` pill.
 
 **The nag.** A dismissible bar in the floating-bar slot on every public page:
@@ -782,6 +822,351 @@ Behaviour:
 On iOS and Android the Connector tab does not exist and the bridge is not
 compiled in — a phone is not a host for a local service an assistant dials.
 
+### 2.15 Report a post or a comment
+
+Anything a person can publish, a reader can report. There is no server to
+report *to*, so a report is an email the reader's own mail client sends to
+the published address (§2.19), and the reported thing is hidden on that
+device immediately — waiting on a human is not a reason to keep looking at it.
+
+**Where it lives.** On a post: the post sheet (§2.3), long-press or
+right-click. On a comment: the same gesture on the comment row in a thread or
+in the carousel's comment sheet (§2.12), which opens the **comment sheet** —
+the same modal with the comment's own rows. Both sheets carry the same
+`SAFETY` block:
+
+```
+SAFETY                                       (section mark)
+( Report Post )                              (btn danger sm)   — `Report Comment` on a comment
+( Block @tgs_ana )                           (btn ghost sm)    — the attributed node (§2.3); absent when unattributed, and when that node is your own (§2.16)
+( Mute WaveLoop devlog )                     (btn ghost sm)    — the source channel; posts only, never comments
+```
+
+Tapping `Report Post` replaces the sheet with the report confirm:
+
+```
+REPORT                                       (section mark)
+Report this post.                            (h2)     — `Report this comment.` on a comment
+This sends an email from your mail app to    (muted)
+the person who maintains tgsocial, with a
+link to it. It disappears from this device
+as soon as you send.
+
+WHY                                          (section mark)
+┌ card ─────────────────────────────────┐
+│ Spam                                   │   single-select list rows, 40pt, the
+│ Nudity or sexual content               │   picked row carries a gold check
+│ Violence or threats                    │
+│ Hate or harassment                     │
+│ Child safety                           │
+│ Illegal content                        │
+│ Something else                         │
+└───────────────────────────────────────┘
+
+( Send Report )                              (btn danger; disabled until a reason is picked)
+( Cancel )                                   (btn ghost)
+```
+
+The seven reasons are the whole list on every platform. They are the subject
+line of the email verbatim, so they do not get reworded per build.
+
+**The email.** `Send Report` opens the platform's mail composer — iOS
+`MFMailComposeViewController` when mail is configured, else `mailto:` through
+`openURL`; Android `ACTION_SENDTO` on a `mailto:` URI; web a `mailto:` link
+with percent-encoded subject and body. Prefilled:
+
+- To: `elijah@lucianlabs.ca`
+- Subject: `tgsocial report — <reason>`
+- Body:
+
+```
+Reason: <reason>
+Link: https://t.me/<channel>/<id>
+Channel: @<channel>
+Message: <id>
+Node: @<node>
+Kind: post
+App: tgsocial 1.0.0 (12) · iOS
+
+Anything you want to add:
+
+```
+
+`Kind:` is `post` or `comment`. `Node:` is the attributed node (§2.3) and
+reads `unattributed` when there is none; on a comment it is the commenter's
+node. `App:` is the same version string as the You footer (§6) plus the
+platform (`iOS`, `Android`, `Web`). The body ends on a blank line so the
+composer's cursor lands under the prompt. **The app adds nothing else** — no
+phone number, no node, no device id; the reporter's address is whatever their
+own mail client sends, and they can edit or delete every line before sending.
+
+**Hiding is immediate and unconditional.** The moment `Send Report` is
+tapped, the post or comment is written to the hidden list (`PROTOCOL §7`) and
+vanishes from every surface (§2.18). It does not matter whether the mail is
+actually sent — the app cannot know, and the reader has already said they do
+not want to see it. Undo is Settings → `HIDDEN` (§2.20).
+
+Toast on send: `Reported. It's hidden here now.`
+No mail app, or the composer refuses to open: the content is hidden anyway
+and the toast reads `No mail app. Write to elijah@lucianlabs.ca.`
+
+Reporting works signed out, on the public routes (§2.13) too; the hidden
+list is the same list.
+
+### 2.16 Block a node
+
+Blocking is the reader's own list, kept on their device. It is never written
+to the card, never sent anywhere, and the blocked person is not told — there
+is no notification to send and no server to send it from. Nobody but the
+reader can read it.
+
+**Where it lives.** The node profile (§2.5) gains a kebab menu in the
+top-right corner, same component as the feed channel's (§2.6): `Open in
+Telegram`, `Copy Link`, `Block @tgs_ana`. And the post sheet's `SAFETY`
+block (§2.15).
+
+**Never your own node.** The confirm below is written about a second party,
+and blocking yourself has none: nobody is told, nothing is published, and the
+only thing that happens is your own posts leave your own feed and your own
+`DIRECT` list. So the row is absent on your own posts, your own comments and
+your own profile — which carries `Open in Telegram` and `Copy Link` and
+nothing else.
+
+Confirm modal:
+
+```
+BLOCK                                        (section mark)
+Block @tgs_ana?                              (h2)
+Their posts and their comments disappear      (muted)
+from your feed, your threads, your graph,
+and search. They are not told. Undo it in
+Settings.
+
+( Block )                                    (btn danger)
+( Cancel )                                   (btn ghost)
+```
+
+Toast: `Blocked @tgs_ana.`
+
+**What a blocked node looks like: nothing at all.** No tombstone, no "content
+hidden" row, no count. A tombstone in a chronological merged feed still
+reports how often the blocked person posts and hands them a strip of the
+screen every time they use it, which is the thing the reader asked to stop.
+So blocking removes, everywhere: the main feed, feed channel screens, thread
+comments (and the comment counts they feed), the +1 walk and both graph
+lists, Explore rows, and search results.
+
+The **one** exception is the blocked node's own profile, reached deliberately
+— a `t.me` link, a public URL (§2.13), an exact-username search. An empty
+screen there reads as a broken app, so it says so:
+
+```
+(avatar 72pt — initial only, their photo is not loaded)
+@tgs_ana                                     (mono muted)
+You blocked this node.                       (h2)
+Nothing they post reaches you.               (muted)
+( Unblock )                                  (btn ghost)
+```
+
+`Unblock` here and in Settings is one tap, no confirm — toast
+`Unblocked @tgs_ana.` — and every surface repaints on the next render.
+
+**Blocking never edits your card.** If you follow a blocked node you go on
+following them publicly and see nothing from them here. Unfollowing is a
+separate act and a public one (`PROTOCOL §4.6`); blocking is private, and
+rewriting `follows:` to enforce it would publish exactly the fact this
+feature promises to keep. This also means a blocked node still counts in your
+`FOLLOWS` count on your own card, because that count is the card's.
+
+### 2.17 Mute a feed
+
+Softer than a block and aimed at a channel, not a person: a muted feed's
+posts leave the merged feed and nothing else changes.
+
+**Where it lives.** The feed channel kebab (§2.6) gains `Mute Feed` — reading
+`Unmute Feed` when it is already muted — and the post sheet's `SAFETY` block
+(§2.15) carries `Mute WaveLoop devlog`. No confirm: it is one tap to undo in
+the same two places.
+
+Toasts: `Muted WaveLoop devlog.` · `Unmuted WaveLoop devlog.`
+
+What mute does **not** do: the channel stays reachable and complete on its own
+screen (§2.6), it stays listed on its node's profile (§2.5) with a faint
+`Muted` pill after the title, its comments are untouched wherever they appear,
+and public pages (§2.13) are unaffected. Muting my own feed is allowed and
+means the same thing.
+
+### 2.18 The default filter
+
+**The filter is on and there is no switch.** A fresh install has empty lists,
+and blocked, muted, and reported content is hidden the moment it is on a
+list — there is no "safe mode" to enable, no preference to find, and no way
+to turn filtering off. The only reverse is per item, in Settings (§2.20).
+
+Concretely, on every screen that renders posts or comments — Feed, Feed
+channel, Thread, the carousel's comment sheet, Explore, Graph, search, and
+the public routes (§2.13) — a client drops:
+
+- every post whose attributed node (§2.3) is blocked;
+- every comment whose commenter node is blocked, including replies under it;
+- every post and comment on the hidden list from a report;
+- and, on the main feed only, every post from a muted feed.
+
+Dropped items leave no gap, no placeholder, and no residue in a count: a
+hidden comment is not in the post footer's `N comments`, and a blocked node
+is not in `DIRECT · 12` or `+1 · 84`. Pagination compensates — a page whose
+items are all filtered fetches the next one rather than rendering an empty
+list.
+
+The Connector bridge (§2.14) is not a screen, but it is the same app answering
+for the same reader, so every response it makes is filtered the same way —
+`CONNECTOR.md §3` says which route drops what.
+
+A reviewer can confirm the filter without opening Settings: block a node,
+and their posts are gone from the feed on the next render.
+
+### 2.19 Contact
+
+`elijah@lucianlabs.ca` is the published address (`docs/PRIVACY.md`), and it
+is reachable inside the app without signing in.
+
+- **You screen footer** (§2.8), above the version line:
+  `Questions or reports: elijah@lucianlabs.ca` (muted, tapping opens the mail
+  composer) then `Reports are read by a person within 24 hours.` (faint).
+- **Sign in screen** (§2.1), one muted line under the form:
+  `elijah@lucianlabs.ca` — the only screen a signed-out reader sees.
+- **Settings** (§2.20), the `CONTACT` card, with the full commitment.
+- **Public pages** (§2.13) carry the address in their footer.
+
+The commitment, verbatim, in the Settings `CONTACT` card:
+
+```
+CONTACT                                      (section mark)
+elijah@lucianlabs.ca                         (link row, 40pt → mail composer)
+Reports are read by a person within 24        (muted)
+hours. Content that breaks the rules is
+reported to Telegram, the only party that
+can remove it from the network. Your copy is
+hidden on your device the moment you report
+it, whether or not anyone else acts.
+```
+
+That last clause is the honest part: a client with no server cannot delete
+someone else's channel, and saying so is better than implying a takedown it
+cannot perform.
+
+### 2.20 Settings
+
+A pushed screen, reached from You (§2.8) by `( Settings )` (ghost). It holds
+the safety lists, the contact card, and the two destructive actions. Every
+list row is 40pt with the hit target as an overlay (`COMPONENTS.md` rule 6).
+
+```
+‹ Back                                          [Synced]
+
+SAFETY                                       (section mark)
+Blocked and reported content is hidden        (muted)
+everywhere in the app. The filter is always
+on; there is no switch. These lists live on
+this device only and nobody else can read
+them.
+
+BLOCKED · 2                                  (section mark, serif count)
+┌ card ─────────────────────────────────┐
+│ (avatar) Ana Iliovic      ( Unblock )  │  name body, @handle mono muted under it
+│          @tgs_ana                      │  row taps through to the profile
+└───────────────────────────────────────┘
+You haven't blocked anyone.                  (empty, muted)
+
+MUTED · 1
+┌ card ─────────────────────────────────┐
+│ WaveLoop devlog            ( Unmute )  │
+│ @waveloop_devlog                       │
+└───────────────────────────────────────┘
+No muted feeds.                              (empty, muted)
+
+HIDDEN · 3
+┌ card ─────────────────────────────────┐
+│ WaveLoop devlog · 144      ( Unhide )  │  title body, key mono; reason + date
+│ Spam · reported 2026-09-04             │  in muted underneath
+└───────────────────────────────────────┘
+Nothing hidden.                              (empty, muted)
+
+CONTACT                                      (§2.19)
+
+( Sign Out )                                 (btn danger)
+( Delete My Node )                           (btn danger)
+```
+
+- `Sign Out` moves here from You and keeps its confirm (§4). `Delete My Node`
+  sits below it (§2.21) — the order is deliberate: the reversible destructive
+  action comes before the irreversible one.
+- Toasts: `Unblocked @tgs_ana.` · `Unmuted WaveLoop devlog.` ·
+  `Unhidden. It's back in your feed.`
+- A hidden row names its channel and message id, never the content: showing a
+  preview of the thing someone reported would undo the report.
+- A hidden row whose channel is also blocked or muted still lists here; the
+  lists are independent and each undo only lifts its own.
+
+### 2.21 Delete my node
+
+Setup (§2.2) creates two public channels a person cannot remove from anywhere
+else in the app, so the app removes them. Last item in Settings, below
+Sign Out.
+
+```
+DELETE MY NODE                               (section mark)
+Delete my node.                              (h2)
+This deletes the channel @tgs_elijah and     (muted)
+your comments channel @tgs_elijah_r from
+Telegram. The public card other people read
+disappears, every post and comment in those
+two channels goes with it, and the names are
+released for anyone to take. This cannot be
+undone.
+
+Your feed channels are not touched.           (muted)
+
+TYPE @tgs_elijah TO CONFIRM                  (field label)
+[                            ]               (input, mono, no autocorrect)
+( Delete My Node )                           (btn danger; disabled until the input matches exactly)
+( Cancel )                                   (btn ghost)
+```
+
+The match is case-insensitive and tolerates a missing `@`. While the delete
+runs the button reads `Deleting…` and is disabled, and the modal cannot be
+dismissed.
+
+**Order, and it matters** (`PROTOCOL §4.11`): the comments channel first, the
+node channel second. Deleting the node first and then failing on the comments
+channel would leave a public channel backlinking to a node that no longer
+exists, with no way back to it in an app that is now at Setup.
+
+Outcomes:
+
+- **Both deleted.** Local state is wiped exactly as Sign Out wipes it, the
+  session stays signed in, and the app lands on Setup (§2.2) with nothing
+  filled in. Toast: `Your node is gone.`
+- **No comments channel.** Step one is skipped silently; there is nothing to
+  say about a channel that was never made.
+- **Not the owner** (`chat.canBeDeletedForAllUsers` is false on either
+  channel): nothing is deleted and the modal shows
+  `Telegram won't let you delete @tgs_elijah — only the channel's owner can.
+  Open it in Telegram to see who owns it.` with `( Open in Telegram )`
+  (btn neutral) and `( Close )` (btn ghost).
+- **Comments channel failed.** Stop before touching the node.
+  `Couldn't delete @tgs_elijah_r — Telegram said: <error>. Nothing was
+  deleted.` with `( Try Again )` (btn danger) and `( Close )` (btn ghost).
+- **Node failed after the comments channel went.** The card is rewritten to
+  drop its `replies:` line (`PROTOCOL §4.4`) so it stops pointing at a dead
+  channel, and the modal reads `Your comments channel is gone. @tgs_elijah is
+  still there — Telegram said: <error>.` with `( Try Again )` and `( Close )`.
+  The app stays in Settings, still has a node.
+- **Offline.** Nothing runs; toast `You're offline.`
+
+The safety lists (`PROTOCOL §7`) survive this, as they survive Sign Out: they
+protect the person holding the phone, not the node they just deleted.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -790,8 +1175,9 @@ states end in a full stop and offer one action at most. Numbers the user is
 meant to feel (follow counts in section marks) are serif.
 
 Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
-`reply`, `thread`, `comments channel`. Never
-"friends", "subscribe", "timeline", "algorithm".
+`reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`.
+Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
+"moderation", "community guidelines".
 
 ## 4. Behaviour rules
 
@@ -804,9 +1190,14 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
   `You're offline.`
 - Rate limits (`FLOOD_WAIT_n`): toast `Telegram asked us to wait n s.` and
   back off that long before retrying automatically.
-- Sign out asks once (modal: `Sign out of tgsocial? Your node stays on
-  Telegram.` `( Sign Out )` danger, `( Cancel )` ghost) then `logOut` and
-  wipes local state.
+- Sign out (Settings, §2.20) asks once (modal: `Sign out of tgsocial? Your
+  node stays on Telegram.` `( Sign Out )` danger, `( Cancel )` ghost) then
+  `logOut` and wipes local state — except the safety lists, which survive by
+  design (`PROTOCOL §7`).
+- The safety filter (§2.18) is applied at render on every surface, always,
+  with no preference behind it. Blocked, muted and reported content never
+  paints, and nothing about those lists is written to the card or leaves the
+  device.
 - Links open in the system browser (web: new tab). Telegram links
   (`t.me`, `tg://`) open the Telegram app when installed.
 - Accessibility: 40pt minimum targets, labels on icon-only controls,

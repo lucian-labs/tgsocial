@@ -5,6 +5,10 @@ import SwiftUI
 
 public enum HPFieldKind: Equatable {
     case text, phone, number, secure, url
+    /// A username typed back verbatim (PRODUCT §2.21): mono face, no autocorrect, no
+    /// autocapitalisation. Autocorrect on a confirmation field is a keyboard arguing with the one
+    /// string the field exists to match.
+    case mono
     case multiline(rows: Int)
 }
 
@@ -45,7 +49,7 @@ public struct HPTextField: View {
     }
 
     @ViewBuilder private var field: some View {
-        let style = HPType.input
+        let style = kind == .mono ? HPType.mono : HPType.input
         let font = HPFont.font(style, scale: scale)
         let prompt = Text(placeholder).foregroundColor(HPTokens.Colors.faint).font(font)
         switch kind {

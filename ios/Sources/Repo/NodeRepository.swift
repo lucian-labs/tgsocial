@@ -178,6 +178,20 @@ final class NodeRepository {
         return nil
     }
 
+    // MARK: §4.11 Delete my node
+
+    /// Looks a public channel up by username for the teardown (PROTOCOL §4.11). Nil when Telegram
+    /// says there is no such channel: a card pointing at a channel that is already gone has nothing
+    /// to delete, which is not the same as a delete that failed.
+    func publicChat(username: String) async throws -> Chat? {
+        do { return try await api.searchPublicChat(username: username) }
+        catch {
+            let f = TDFailure(error)
+            if f.isNotFound || f.message.uppercased().contains("USERNAME_NOT_OCCUPIED") { return nil }
+            throw f
+        }
+    }
+
     // MARK: §4.3 Create my node
 
     enum UsernameCheck: Equatable { case available, taken, invalid, tooMany, unavailable }

@@ -176,3 +176,40 @@ their channel, so both of those are ordinary use, not a hostile card.
   unaffected — it uses TDLib.
 - **Not a mirror.** No archive, no index, no reposting. If a channel goes
   private or a post is deleted, the page follows within the cache window.
+
+## 6. Blocked, muted and reported content
+
+**A public page does nothing about a blocked node, and that is the design
+rather than a gap in it.**
+
+The reader's block, mute and hidden lists (`PRODUCT §2.15`–`§2.18`,
+`PROTOCOL §7.1`) live in one record on one device, are keyed to one Telegram
+account, and are never written to a card, never sent to Telegram and never
+sent anywhere else. A visitor opening `/u/<name>` arrives with no account, and
+almost always with no record at all — so there is nothing to filter with, and
+a node somebody else blocked renders for them in full.
+
+That follows from the same fact that makes blocking safe to offer at all. A
+tgsocial block is one reader's private judgement about what reaches *them*; it
+is not a sanction on the person, and there is no server it could be reported
+to. Applying it to other people's page loads would mean publishing the list —
+to every visitor, on every request — which is precisely what `§2.16` promises
+never to do. A blocked node is not silenced here; they are unread, by one
+reader, on one device.
+
+What the public routes *do* honour is the lists of the device actually asking:
+
+- The filter is the same code as the app's, so a browser that has blocked,
+  muted or reported something sees it filtered on these routes too — that is
+  the reader who signed in here and then opened one of their own links.
+- `Report` and `Mute` are on the public post sheet and write the same record,
+  because a reader who wants to stop seeing something should not have to sign
+  in first (`PRODUCT §2.15`). `Block` needs an attributed node (`§2.3`), so it
+  appears on `/u/` and `/n/` and not on a bare channel.
+- The record is the one `tgs.` key that does not count as "this browser has a
+  session": hiding one post must not turn the next public link into a 14 MB
+  TDLib boot.
+
+And the plain consequence, which is worth stating because it is a privacy
+property and not an oversight: **a public page can never reveal who anyone
+blocked**, because it does not know and has no way to ask.

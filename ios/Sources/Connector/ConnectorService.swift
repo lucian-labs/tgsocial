@@ -237,6 +237,11 @@ final class ConnectorService: ConnectorReader {
     var appLabel: String { "\(model.appVersion) (\(model.buildNumber))" }
     var maxMediaBytes: Int64 { Self.maxMediaBytes }
 
+    /// The lists as the app holds them (PROTOCOL §7.1), read live: the store is observable and the
+    /// screens render through the same value, so the bridge and the screens can never disagree
+    /// about what is blocked, muted or hidden.
+    var safety: SafetyLists { model.moderation.lists }
+
     func scopeInputs() -> ScopeInputs {
         var inputs = ScopeInputs()
         inputs.myNode = model.myNode?.username
@@ -249,6 +254,8 @@ final class ConnectorService: ConnectorReader {
         return inputs
     }
 
+    /// The window the app holds, unfiltered on both counts: the router applies the scope and the
+    /// safety lists (`ConnectorRouter`, step 4 and 4b), and it is the only place that does.
     func mergedPosts() async throws -> [Post] {
         // A cold app has nothing to serve yet; one refresh through the app's own path fills it.
         if model.feed.posts.isEmpty, !model.feedReady { await model.refreshFeed() }

@@ -24,12 +24,37 @@
  * that path is deciding WHICH link.
  */
 import { h, button, field, modal, confirm, pill, replace, sectionMark } from '../../vendor/house-pour.js';
-import { normaliseUsername, isFollowing, formatTime } from '../protocol.js';
+import { normaliseUsername, isFollowing, formatExactTime, formatTime } from '../protocol.js';
 import { userMessage } from '../repo.js';
-import { avatarFor, renderEntities, openExternal } from './shared.js';
+import { attachSheet, avatarFor, renderEntities, openExternal } from './shared.js';
+import { commentSubject, safetyBlock } from './safety.js';
 import { mediaBlocks, releaseMedia } from '../media.js';
 
 const MAX_DEPTH = 5;
+
+/**
+ * PRODUCT §2.12 — long-press or right-click a comment row and the same modal
+ * the post sheet is opens with the comment's own rows, carrying §2.15's SAFETY
+ * block. `Delete` stands in for `Report Comment` on your own comment, and no
+ * comment ever gets `Mute Feed`: mute is about a channel's posts, and a
+ * comment is not one (§2.17).
+ */
+export function openCommentSheet(app, comment, { onDelete = null } = {}) {
+  const row = (label, value) => h('div.list-item.sheet-row', h('span.sheet-label', label), h('span.sheet-value', value));
+  let m = null;
+  m = modal([
+    sectionMark('Comment'),
+    h('div.sheet-rows',
+      row('Posted', formatExactTime(new Date(comment.date * 1000))),
+      row('Node', `${comment.name} · @${comment.node}`),
+      row('Channel', `@${comment.channel}`),
+    ),
+    ...safetyBlock(app, commentSubject(comment), { close: () => m.close(), onDelete }),
+    button('Open in Telegram', { onClick: () => openExternal(comment.link) }),
+    button('Close', { style: 'ghost', onClick: () => m.close() }),
+  ], { label: 'Comment' });
+  return m;
+}
 
 function snippet(text, max = 64) {
   const t = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -156,6 +181,20 @@ export function commentsPanel(app, post) {
     return commentBody(comment, depth, children);
   }
 
+  /**
+   * Deleting my own comment: one path, so the row's `Delete` and the comment
+   * sheet's (§2.12, where it stands in for `Report Comment`) cannot drift.
+   */
+  async function removeComment(comment) {
+    const ok = await confirm({ title: 'Delete this comment?', okLabel: 'Delete', okStyle: 'danger' });
+    if (!ok) return;
+    try {
+      await app.repo.deleteComment(comment);
+    } catch (err) {
+      app.toast(userMessage(err, "Couldn't delete this comment."), 'bad');
+    }
+  }
+
   function commentBody(comment, depth, children) {
     const header = h('div.post-head',
       avatarFor(app, comment.name, comment.avatar, 'row'),
@@ -205,15 +244,9 @@ export function commentsPanel(app, post) {
           style: 'ghost',
           size: 'sm',
           ariaLabel: 'Delete this comment',
-          onClick: async (e) => {
+          onClick: (e) => {
             e?.stopPropagation?.();
-            const ok = await confirm({ title: 'Delete this comment?', okLabel: 'Delete', okStyle: 'danger' });
-            if (!ok) return;
-            try {
-              await app.repo.deleteComment(comment);
-            } catch (err) {
-              app.toast(userMessage(err, "Couldn't delete this comment."), 'bad');
-            }
+            removeComment(comment);
           },
         }));
       }
@@ -242,6 +275,8 @@ export function commentsPanel(app, post) {
         e.stopPropagation();
         select(comment);
       });
+      // §2.12: the same gesture as a post card, on the comment row
+      attachSheet(el, () => openCommentSheet(app, comment, { onDelete: () => removeComment(comment) }));
     }
     if (children.length) {
       // replies indent one level; depth caps at 5, deeper shows flat (§2.12)

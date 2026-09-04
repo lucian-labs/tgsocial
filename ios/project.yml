@@ -79,7 +79,15 @@ targets:
         # scheme and host or nothing, which is what catches the `https:` an unescaped `//`
         # leaves behind. See PublicLink in Sources/Protocol/Links.swift.
         TGSPublicOrigin: $(TGS_PUBLIC_ORIGIN)
-        ITSAppUsesNonExemptEncryption: false
+        # `false` claims the only cryptography in the binary is the OS's own —
+        # HTTPS through URLSession, the keychain. TDLib is not that: it compiles
+        # MTProto, Telegram's own transport cryptography, into this binary, so
+        # the honest answer is `true`. MTProto carries the declaration on its
+        # own — TDLib's local database is unencrypted here, since we pass an
+        # empty key (TDClient.swift). Reasoning and what it commits us to are in
+        # docs/EXPORT.md; an ERN/CCATS code, if we ever hold one, goes in
+        # ITSEncryptionExportComplianceCode beside this.
+        ITSAppUsesNonExemptEncryption: true
         LSApplicationCategoryType: public.app-category.social-networking
         LSRequiresIPhoneOS: true
         UILaunchScreen:

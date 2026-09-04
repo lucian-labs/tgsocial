@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
@@ -71,6 +73,7 @@ import ca.lucianlabs.housepour.HPPillTone
 import ca.lucianlabs.housepour.HPPlayCircle
 import ca.lucianlabs.housepour.HPPlayerRow
 import ca.lucianlabs.housepour.HPScrubber
+import ca.lucianlabs.housepour.HPSpectrogramStrip
 import ca.lucianlabs.housepour.HPStrip
 import ca.lucianlabs.housepour.HPSmall
 import ca.lucianlabs.housepour.HPText
@@ -385,6 +388,97 @@ private fun InlineVideo(key: String, media: PostMedia.Video, onOpenFull: () -> U
 }
 
 /**
+ * One playing surface's transport state, hoisted out of the surface that produces it.
+ *
+ * A video MESSAGE draws its transport over the picture, so the state could live inside the surface. A video
+ * NOTE cannot: PRODUCT §2.11.1 puts the strip "underneath" a circular player, and the circle is clipped to a
+ * `CircleShape` — anything drawn inside it is a chord of the circle, not a row under it. So the state comes
+ * out here and both placements read the same numbers.
+ */
+@Stable
+internal class InlinePlayback(val player: ExoPlayer, durationSeconds: Int) {
+    var playing by mutableStateOf(true)
+        internal set
+    var positionMs by mutableLongStateOf(0L)
+        internal set
+    var durationMs by mutableLongStateOf(durationSeconds * 1000L)
+        internal set
+
+    val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+}
+
+/** The TDLib-streamed player behind an inline surface, plus the 250 ms tick every transport reads. */
+@OptIn(UnstableApi::class)
+@Composable
+private fun rememberInlinePlayback(
+    key: String,
+    file: FileRef,
+    mimeType: String,
+    durationSeconds: Int,
+    loop: Boolean,
+    muted: Boolean,
+    onEnded: (() -> Unit)?,
+): InlinePlayback {
+    val app = rememberTgApp()
+    val player = rememberOwnedPlayer(key) {
+        // Starting unmuted playback claims the video slot before the active-check composes, so a viewer
+        // page pauses the inline player underneath instead of pausing itself (PRODUCT §2.11).
+        if (!muted) app.playback.claimVideo(key)
+        app.playback.newPlayer(MediaRepo.PRIORITY_TAPPED).apply {
+            setMediaItem(app.playback.mediaItem(file, mimeType))
+            repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+            volume = if (muted) 0f else 1f
+            prepare()
+            playWhenReady = true
+        }
+    }
+    val playback = remember(key) { InlinePlayback(player, durationSeconds) }
+    DisposableEffect(key) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playingNow: Boolean) {
+                playback.playing = playingNow
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED && !loop) onEnded?.invoke()
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(key) {
+        while (true) {
+            playback.positionMs = player.currentPosition.coerceAtLeast(0)
+            if (player.duration > 0) playback.durationMs = player.duration
+            kotlinx.coroutines.delay(250)
+        }
+    }
+    val active by app.playback.activeVideo.collectAsStateWithLifecycle()
+    LaunchedEffect(active) {
+        if (active != key && !muted) player.pause()
+    }
+    return playback
+}
+
+/** The picture alone: the video output and its tap. The transport is placed by whoever owns the layout. */
+@OptIn(UnstableApi::class)
+@Composable
+private fun InlinePlayerPicture(playback: InlinePlayback, key: String, onSurfaceTap: (() -> Unit)?) {
+    val app = rememberTgApp()
+    PlayerVideoSurface(
+        playback.player,
+        Modifier
+            .fillMaxSize()
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                if (onSurfaceTap != null) onSurfaceTap() else if (playback.player.isPlaying) playback.player.pause() else {
+                    app.playback.claimVideo(key)
+                    playback.player.play()
+                }
+            },
+    )
+}
+
+/**
  * The playing inline video: TDLib-streamed ExoPlayer under a House Pour transport (serif times + hairline
  * scrubber on the translucent topbar fill). The system transport never appears.
  */
@@ -402,57 +496,9 @@ fun InlinePlayerSurface(
     showTransport: Boolean = true,
 ) {
     val app = rememberTgApp()
-    val player = rememberOwnedPlayer(key) {
-        // Starting unmuted playback claims the video slot before the active-check composes, so a viewer
-        // page pauses the inline player underneath instead of pausing itself (PRODUCT §2.11).
-        if (!muted) app.playback.claimVideo(key)
-        app.playback.newPlayer(MediaRepo.PRIORITY_TAPPED).apply {
-            setMediaItem(app.playback.mediaItem(file, mimeType))
-            repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
-            volume = if (muted) 0f else 1f
-            prepare()
-            playWhenReady = true
-        }
-    }
-    var isPlaying by remember(key) { mutableStateOf(true) }
-    var positionMs by remember(key) { mutableLongStateOf(0L) }
-    var durationMs by remember(key) { mutableLongStateOf(durationSeconds * 1000L) }
-    DisposableEffect(key) {
-        val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(playingNow: Boolean) {
-                isPlaying = playingNow
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && !loop) onEnded?.invoke()
-            }
-        }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
-    LaunchedEffect(key) {
-        while (true) {
-            positionMs = player.currentPosition.coerceAtLeast(0)
-            if (player.duration > 0) durationMs = player.duration
-            kotlinx.coroutines.delay(250)
-        }
-    }
-    val active by app.playback.activeVideo.collectAsStateWithLifecycle()
-    LaunchedEffect(active) {
-        if (active != key && !muted) player.pause()
-    }
+    val playback = rememberInlinePlayback(key, file, mimeType, durationSeconds, loop, muted, onEnded)
     Box(Modifier.fillMaxSize()) {
-        PlayerVideoSurface(
-            player,
-            Modifier
-                .fillMaxSize()
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    if (onSurfaceTap != null) onSurfaceTap() else if (player.isPlaying) player.pause() else {
-                        app.playback.claimVideo(key)
-                        player.play()
-                    }
-                },
-        )
+        InlinePlayerPicture(playback, key, onSurfaceTap)
         if (showTransport) {
             Row(
                 modifier = Modifier
@@ -464,21 +510,66 @@ fun InlinePlayerSurface(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap),
             ) {
-                HPPlayGlyphButton(isPlaying) {
-                    if (player.isPlaying) player.pause() else {
+                HPPlayGlyphButton(playback.playing) {
+                    if (playback.player.isPlaying) playback.player.pause() else {
                         app.playback.claimVideo(key)
-                        player.play()
+                        playback.player.play()
                     }
                 }
-                HPTime(Format.duration((positionMs / 1000).toInt()))
+                HPTime(Format.duration((playback.positionMs / 1000).toInt()))
                 HPScrubber(
-                    progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
-                    onSeek = { player.seekTo((it * durationMs).toLong()) },
+                    progress = playback.progress,
+                    onSeek = { playback.player.seekTo((it * playback.durationMs).toLong()) },
                     modifier = Modifier.weight(1f),
                 )
-                HPTime(Format.duration((durationMs / 1000).toInt()), color = HPTokens.Colors.muted)
+                HPTime(Format.duration((playback.durationMs / 1000).toInt()), color = HPTokens.Colors.muted)
             }
         }
+    }
+}
+
+/**
+ * PRODUCT §2.11.1, last paragraph — a video note's transport: "a video note keeps its circular player and
+ * gets the strip as the transport underneath it." Same components and same order as the video message's
+ * transport above (glyph, elapsed, scrubber, total) with the strip in the scrubber's place, which is the
+ * one difference §2.11.1 draws between the two: a video MESSAGE keeps the hairline, a video NOTE takes the
+ * strip, because "this replaces the audio scrubber only".
+ *
+ * It sits in the card's flow rather than over the picture — the circle is clipped, and a control drawn
+ * inside it would be a chord rather than a row. iOS stacks it the same way (`InlineVideoView.body`:
+ * `if mode.hasTransport, started`), and web appends the strip after the circle's box (js/media.js
+ * `videoNoteBlock`).
+ *
+ * Values in, callbacks out: no player, no repo and no `TgApp`, so what this draws is what the caller
+ * measured, and a test can drive it without an ExoPlayer.
+ */
+@Composable
+internal fun VideoNoteTransport(
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    strip: HPStrip?,
+    onToggle: () -> Unit,
+    onSeek: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    onStripVisible: (widthPx: Int, heightPx: Int) -> Unit = { _, _ -> },
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(top = HPTokens.Space.rowGap),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap),
+    ) {
+        HPPlayGlyphButton(playing, onToggle)
+        HPTime(Format.duration((positionMs / 1000).toInt()))
+        HPSpectrogramStrip(
+            strip,
+            progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+            onSeek = onSeek,
+            modifier = Modifier.weight(1f),
+            label = "Seek video note",
+            onVisible = onStripVisible,
+        )
+        HPTime(Format.duration((durationMs / 1000).toInt()), color = HPTokens.Colors.muted)
     }
 }
 
@@ -584,11 +675,13 @@ fun AnimatedGif(path: String, thumb: FileRef?) {
     }
 }
 
-@OptIn(UnstableApi::class)
+/**
+ * The round frame a video note lives in (PRODUCT §2.11 "circular inline player"): `bg2`, a hairline border,
+ * 62% of the column. [onPlay] non-null is the poster state, where the whole circle is the play target;
+ * null is the playing state, where the surface inside owns the tap.
+ */
 @Composable
-private fun InlineVideoNote(key: String, media: PostMedia.VideoNote, onTap: () -> Unit) {
-    val app = rememberTgApp()
-    var playing by remember(key) { mutableStateOf(false) }
+private fun VideoNoteCircle(onPlay: (() -> Unit)?, content: @Composable BoxScope.() -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
@@ -598,49 +691,115 @@ private fun InlineVideoNote(key: String, media: PostMedia.VideoNote, onTap: () -
                 .background(HPTokens.Colors.bg2, CircleShape)
                 .border(HPTokens.BORDER_WIDTH.dp, HPTokens.Colors.line, CircleShape)
                 .then(
-                    // Tap the circle to play inline (PRODUCT §2.11 "circular inline player").
-                    if (!playing) Modifier
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
-                            app.playback.claimVideo(key)
-                            playing = true
-                        }
+                    if (onPlay != null) Modifier
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onPlay)
                         .semantics { contentDescription = "Play video note" }
                     else Modifier,
                 ),
             contentAlignment = Alignment.Center,
-        ) {
-            if (!playing) {
-                MediaGround(rememberMini(media.mini), rememberTdImage(media.thumb, mediaWidth()))
-                HPPill(
-                    Format.duration(media.durationSeconds),
-                    HPPillTone.NEUTRAL,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(HPTokens.Space.rowGap),
-                )
-                HPPlayCircle(
-                    playing = false,
-                    raised = true,
-                    onToggle = {
-                        app.playback.claimVideo(key)
-                        playing = true
-                    },
-                    label = "Play video note",
-                )
-            } else {
-                InlinePlayerSurface(
-                    key = key,
-                    file = media.file,
-                    mimeType = "video/mp4",
-                    durationSeconds = media.durationSeconds,
-                    loop = false,
-                    muted = false,
-                    // Tapping the playing note opens the full-screen viewer, like the video surface.
-                    onSurfaceTap = onTap,
-                    onEnded = { playing = false },
-                    showTransport = false,
-                )
-            }
-        }
+            content = content,
+        )
     }
+}
+
+/**
+ * PRODUCT §2.11.1, last paragraph — the video note ONCE IT IS PLAYING: "a video note keeps its circular
+ * player and gets the strip as the transport underneath it." Both halves of that sentence are assembled
+ * here rather than inside [InlineVideoNote], with the picture as a slot: the real note passes the ExoPlayer
+ * surface and `VideoNoteTransportTest` passes a stand-in, so the arrangement the sentence describes is
+ * something a test can render and touch without a player.
+ *
+ * A Column, not a Box: the circle is a clipped shape, so the transport is a sibling under it rather than an
+ * overlay inside it. And ONE child rather than two — [MediaItems] spaces its children by `rowGap`, so a bare
+ * pair here would open a second gap between a note and its own transport, on top of the one the transport
+ * already pads with.
+ */
+@Composable
+internal fun PlayingVideoNote(
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    strip: HPStrip?,
+    onToggle: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onStripVisible: (widthPx: Int, heightPx: Int) -> Unit = { _, _ -> },
+    picture: @Composable BoxScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        VideoNoteCircle(onPlay = null, content = picture)
+        VideoNoteTransport(
+            playing = playing,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            strip = strip,
+            onToggle = onToggle,
+            onSeek = onSeek,
+            onStripVisible = onStripVisible,
+        )
+    }
+}
+
+/**
+ * PRODUCT §2.11 — the video note's circular inline player, and the gate on [PlayingVideoNote] under it.
+ *
+ * Until the circle is tapped there is no player for a transport to drive — the same gate iOS runs
+ * (`InlineVideoView.body`: `if mode.hasTransport, started`) — which is also what keeps §2.11.1's "analysis
+ * never runs for a row that has not been played" honest here: the strip is what reports its geometry, so a
+ * scrolled feed of round videos analyses nothing until one is played.
+ */
+@OptIn(UnstableApi::class)
+@Composable
+private fun InlineVideoNote(key: String, media: PostMedia.VideoNote, onTap: () -> Unit) {
+    val app = rememberTgApp()
+    var playing by remember(key) { mutableStateOf(false) }
+    // The analyser reads the note's own mp4 — MediaExtractor selects its audio track (PcmDecoder), so the
+    // file the player is already streaming is the file the strip is drawn from, and there is one download.
+    val (strip, onStripVisible) = rememberStrip(media.file, media.durationSeconds)
+    if (!playing) {
+        VideoNoteCircle(onPlay = { app.playback.claimVideo(key); playing = true }) {
+            MediaGround(rememberMini(media.mini), rememberTdImage(media.thumb, mediaWidth()))
+            HPPill(
+                Format.duration(media.durationSeconds),
+                HPPillTone.NEUTRAL,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(HPTokens.Space.rowGap),
+            )
+            HPPlayCircle(
+                playing = false,
+                raised = true,
+                onToggle = {
+                    app.playback.claimVideo(key)
+                    playing = true
+                },
+                label = "Play video note",
+            )
+        }
+        return
+    }
+    val playback = rememberInlinePlayback(
+        key = key,
+        file = media.file,
+        mimeType = "video/mp4",
+        durationSeconds = media.durationSeconds,
+        loop = false,
+        muted = false,
+        onEnded = { playing = false },
+    )
+    PlayingVideoNote(
+        playing = playback.playing,
+        positionMs = playback.positionMs,
+        durationMs = playback.durationMs,
+        strip = strip,
+        onToggle = {
+            if (playback.player.isPlaying) playback.player.pause() else {
+                app.playback.claimVideo(key)
+                playback.player.play()
+            }
+        },
+        onSeek = { playback.player.seekTo((it * playback.durationMs).toLong()) },
+        onStripVisible = onStripVisible,
+        // Tapping the playing note opens the full-screen viewer, like the video surface.
+        picture = { InlinePlayerPicture(playback, key, onTap) },
+    )
 }
 
 /**

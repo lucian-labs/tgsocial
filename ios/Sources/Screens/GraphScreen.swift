@@ -11,6 +11,9 @@ struct GraphScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshDiscovery(force: true) }) {
+            // §2.18: a blocked node is in neither graph list, neither count, and not on the canvas.
+            let direct = model.visibleDirect
+            let nearby = model.visibleNearby
             HPSectionMark("Your network")
             HPCard(padded: false) {
                 GraphCanvas(layout: layout, pan: pan)
@@ -34,27 +37,27 @@ struct GraphScreen: View {
                     )
                     .clipShape(RoundedRectangle(cornerRadius: HPTokens.Radius.card, style: .continuous))
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Network graph: you, \(model.direct.count) direct, \(model.nearby.count) at distance two")
+                    .accessibilityLabel("Network graph: you, \(direct.count) direct, \(nearby.count) at distance two")
             }
 
-            HPSectionMark("Direct", count: model.direct.count)
-            if model.direct.isEmpty {
+            HPSectionMark("Direct", count: direct.count)
+            if direct.isEmpty {
                 HPCard { HPMuted("Follow someone and they appear here.") }
             } else {
                 HPListCard {
-                    ForEach(Array(model.direct.enumerated()), id: \.element.id) { i, n in
-                        NodeRow(node: n, isLast: i == model.direct.count - 1) { model.path.append(.profile(username: n.username)) }
+                    ForEach(Array(direct.enumerated()), id: \.element.id) { i, n in
+                        NodeRow(node: n, isLast: i == direct.count - 1) { model.path.append(.profile(username: n.username)) }
                     }
                 }
             }
 
-            HPSectionMark("+1", count: model.nearby.count)
-            if model.nearby.isEmpty {
+            HPSectionMark("+1", count: nearby.count)
+            if nearby.isEmpty {
                 HPCard { HPMuted("Follow someone and their people appear here.") }
             } else {
                 HPListCard {
-                    ForEach(Array(model.nearby.enumerated()), id: \.element.id) { i, e in
-                        NodeRow(node: e.node, followedBy: e.followedByCount, isLast: i == model.nearby.count - 1) {
+                    ForEach(Array(nearby.enumerated()), id: \.element.id) { i, e in
+                        NodeRow(node: e.node, followedBy: e.followedByCount, isLast: i == nearby.count - 1) {
                             model.path.append(.profile(username: e.node.username))
                         }
                     }
@@ -68,8 +71,8 @@ struct GraphScreen: View {
     static let tapSlop: CGFloat = HPTokens.Space.rowGap
 
     private var layout: GraphLayout {
-        GraphLayout(me: model.myNode?.username ?? "", direct: model.direct.map(\.username),
-                    plusOne: model.nearby.map(\.node.username), edges: model.edges)
+        GraphLayout(me: model.myNode?.username ?? "", direct: model.visibleDirect.map(\.username),
+                    plusOne: model.visibleNearby.map(\.node.username), edges: model.visibleEdges)
     }
 }
 

@@ -21,6 +21,15 @@ struct SignInScreen: View {
                         .padding(.top, HPTokens.Space.rowGap)
                         .padding(.bottom, HPTokens.Space.cardPad)
                     HPCard { step }
+                    // §2.19: the only screen a signed-out reader sees, so the address is on it.
+                    Button { model.contactByMail() } label: {
+                        HPMuted(Moderation.contactAddress)
+                            .frame(minHeight: HPTokens.Space.touchMin, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Write to \(Moderation.contactAddress)")
+                    .padding(.top, HPTokens.Space.rowGap)
                 }
             }
         }

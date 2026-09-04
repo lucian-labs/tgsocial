@@ -193,6 +193,27 @@ then wait for `updateFile` with `local.isDownloadingCompleted`; read from
 `local.path` (native) or `readFile`/IndexedDB (web). Use the smallest photo
 size ≥ the display width. Cache by `file.remote.uniqueId`.
 
+### 4.11 Delete my node
+
+Removes the two channels the client created (`PRODUCT §2.21`). Order is
+fixed: comments channel, then node channel.
+
+1. If the card carries `replies: @<username>`, `searchPublicChat` it and check
+   `chat.canBeDeletedForAllUsers`. False → stop, nothing deleted, report "not
+   the owner". True → `deleteChat(chatId)`. Any error → stop, nothing else is
+   touched.
+2. Check `chat.canBeDeletedForAllUsers` on the node channel, then
+   `deleteChat(myNode.chatId)`. If this fails after step 1 succeeded, strip
+   `replies:` from the card and write it (§4.4) so the card stops pointing at
+   a channel that no longer exists.
+3. On success clear the `myNode` pointer, the card cache, the feed cache, the
+   comment index and the feed cursors — everything §7 calls discardable —
+   without `logOut`. The session stays authorized and the client is nodeless.
+
+`deleteChat` releases the channel's username. Feed channels listed in
+`feeds:` are never deleted: the client did not create them and other things
+may depend on them.
+
 ## 5. Discovery
 
 Three modalities; clients implement all three and union the results.
@@ -294,8 +315,66 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - Per-source feed cursors for pagination (discardable).
 - The comment index (§6.3): comments-channel → parsed pointers (discardable).
 - UI preferences.
+- The **safety lists** below.
 
-Signing out (`logOut`) clears all of it.
+Signing out (`logOut`) clears all of it except the safety lists.
+
+### 7.1 Safety lists
+
+The reader's own block, mute and report state (`PRODUCT §2.15`–`§2.18`). One
+record, stored apart from every cache:
+
+```json
+{
+  "v": 1,
+  "userId": 176543210,
+  "blocked": ["tgs_ana", "tgs_bob"],
+  "mutedFeeds": ["waveloop_devlog"],
+  "hidden": [
+    { "key": "waveloop_devlog/144", "reason": "Spam", "at": "2026-09-04T21:02:11Z" }
+  ]
+}
+```
+
+- `blocked` and `mutedFeeds` are **node** and **feed channel** usernames,
+  lowercased, no `@`. Compare with the same normalisation the card parser
+  uses (`usernameKey`) — Telegram usernames are case-insensitive and a list
+  that missed `@TGS_Ana` would be a filter with a hole in it.
+- `hidden[].key` is the §6.2 target key, `<channel>/<messageId>`, lowercased
+  — the same string a `re:` line resolves to, so a hidden post and a hidden
+  comment are the same kind of key and one lookup filters both.
+- `hidden[].reason` is the reason string `PRODUCT §2.15` sent in the email,
+  verbatim, so Settings can show what was reported without storing the
+  content. `at` is ISO 8601 UTC.
+- `v` is this record's own version and is **not** the cache schema version
+  (`PRODUCT §2.3`): a cache bump discards caches, and it must never discard
+  someone's block list. Unknown `v` is read as best it can be and never
+  dropped.
+
+**It survives Sign Out, for the same account.** `userId` is the Telegram user
+id that wrote the record; on reaching `authorizationStateReady` a client
+compares it and, on a mismatch, replaces the lists with empty ones. A block
+list that evaporated on sign-out would re-expose the reader to the person
+they blocked the next time they signed in, and a list inherited by a
+different account on a shared device would be someone else's judgement — the
+id settles both. `PRODUCT §2.21` (delete my node) keeps the record too: it
+protects the person, not the node.
+
+Per platform:
+
+| Platform | Home |
+| --- | --- |
+| iOS / Mac | `LocalStore` file `moderation.json` under `Application Support/tgsocial`. `LocalStore.clear()` must preserve it — it wipes the directory today, so sign-out reads the record, clears, and writes it back. |
+| Android | The `tgsocial` Preferences DataStore, key `moderation`, holding the JSON. `LocalStore.clear()` clears every other key. |
+| Web | `localStorage["tgs.moderation"]`, excluded from the sign-out loop over `LS` and from the versioned-cache path. |
+
+**Nothing here is published.** The lists are never written to the card, never
+sent to Telegram (a tgsocial block is not a Telegram block), and never leave
+the device by any route. No other client can read them, and the blocked node
+is not notified — there is nowhere for a notification to come from. The only
+thing that ever leaves is the report email in `PRODUCT §2.15`, which the
+reader's own mail client sends and which carries a link, a reason, and
+nothing about any list.
 
 ## 8. What v1 deliberately does not do
 

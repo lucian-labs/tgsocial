@@ -8,9 +8,16 @@ struct FeedScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshFeed() }) {
-            if model.posts.isEmpty {
+            // PRODUCT §2.18: the filter is applied at render, always, with no preference behind it.
+            let visible = model.visiblePosts
+            if visible.isEmpty {
                 if model.feedLoading && !model.feedReady {
                     FeedFooter(text: "Loading\u{2026}")
+                } else if !model.posts.isEmpty && !model.feedExhausted && !model.isOffline {
+                    // A page whose items are all filtered fetches the next one rather than
+                    // rendering an empty list (§2.18).
+                    FeedFooter(text: "Loading\u{2026}")
+                        .onAppear { Task { await model.loadMoreFeed() } }
                 } else if model.myNode == nil {
                     // PRODUCT §2.2: the skip path lands here with the §2.3 empty state linking back to Setup.
                     EmptyCard("Nothing here yet.", message: "Follow a node and their feeds show up here, newest first.",
@@ -21,11 +28,11 @@ struct FeedScreen: View {
                 }
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.posts) { post in
+                    ForEach(visible) { post in
                         PostCard(post: post) { username in model.path.append(.feedChannel(username: username)) }
                             .onAppear {
                                 // Load more when the last card is within two screens of the bottom.
-                                if let i = model.posts.firstIndex(where: { $0.id == post.id }), i >= model.posts.count - Self.prefetchDistance {
+                                if let i = visible.firstIndex(where: { $0.id == post.id }), i >= visible.count - Self.prefetchDistance {
                                     Task { await model.loadMoreFeed() }
                                 }
                             }

@@ -50,4 +50,11 @@ object PublicLink {
      */
     fun feed(username: String, origin: String?): String =
         if (origin == null) DeepLink.channel(username) else "$origin/f/$username"
+
+    /**
+     * `<origin>/n/<node>` — the card view (§2.13) — or `https://t.me/<node>` when no origin is configured:
+     * the card *is* that channel's pinned message, so the t.me link reads in plain Telegram.
+     */
+    fun node(username: String, origin: String?): String =
+        if (origin == null) DeepLink.channel(username) else "$origin/n/$username"
 }

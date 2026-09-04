@@ -11,14 +11,18 @@ export function render(app) {
   }
   const canvas = h('canvas.graph-canvas', { tabindex: 0, 'aria-label': 'Your network graph. Enter opens the first node you follow.' });
   const graphCard = h('div.card.graph-card', canvas);
-  const directMark = sectionMark('Direct', app.repo.myCard?.follows?.length ?? 0);
+  // §2.18 — a blocked node is not in `DIRECT · 12`, not in the list under it and
+  // not a dot on the canvas. Blocking never touches the card (§2.16), so they
+  // are still followed publicly; they are simply not drawn here.
+  const following = (app.repo.myCard?.follows ?? []).filter((u) => !app.safety.isBlocked(u));
+  const directMark = sectionMark('Direct', following.length);
   const directList = h('div.card');
   const plusMark = sectionMark('+1', 0);
   const plusList = h('div.card', h('p.muted', 'Loading…'));
   root.append(sectionMark('Your network'), graphCard, directMark, directList, plusMark, plusList);
 
   const me = { username: app.repo.myNode.username, name: app.repo.myCard?.name || app.repo.myNode.username };
-  const follows = (app.repo.myCard?.follows ?? []).map((u) => ({ username: u, name: app.repo.cachedCard(u)?.card?.name || u }));
+  const follows = following.map((u) => ({ username: u, name: app.repo.cachedCard(u)?.card?.name || u }));
   const graph = mount(canvas, {
     me,
     follows,

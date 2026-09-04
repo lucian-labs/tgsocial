@@ -223,6 +223,95 @@ try {
   const waitToast = async (re, ms = 6000) => {
     await page.waitForFunction(([src, flags]) => new RegExp(src, flags).test(document.getElementById('toast').textContent) && document.getElementById('toast').classList.contains('show'), [re.source, re.flags], { timeout: ms });
   };
+  /**
+   * The §2.3 gesture that opens a sheet: a 500 ms hold that jitters a few px,
+   * because real fingers do and the slop has to tolerate it. Used for the post
+   * sheet and, since §2.12, for the comment sheet.
+   */
+  const longPress = async (locator) => {
+    // hover() scrolls it in and picks a point nothing else covers; the press
+    // then jitters inside the slop, because real fingers do (§2.3)
+    await locator.hover();
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    const bb = await locator.boundingBox();
+    await page.mouse.move(bb.x + bb.width / 2 + 3, bb.y + bb.height / 2 + 2);
+    await page.waitForTimeout(450);
+    await page.mouse.up();
+    await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  };
+  /**
+   * The same §2.3 press, aimed at a point that is actually words.
+   *
+   * A post body is text with a mention and sometimes a link inside it, and the
+   * sheet is deliberately suppressed on those — they keep their own gestures.
+   * The corners are no safer: §2.3's controls carry 40pt hit overlays that
+   * reach past their painted bounds (COMPONENTS rule 6), and the title's
+   * reaches down over the top of the body. So the point is read off the
+   * rendered text and then confirmed with elementFromPoint, rather than
+   * guessed from the box — which is what made this press depend on how a
+   * particular post happened to wrap.
+   */
+  const longPressText = async (locator) => {
+    // to the middle of the viewport, not merely into it: the topbar and the
+    // floating dock are fixed, and a body parked under either has no point
+    // that elementFromPoint will hand back
+    await locator.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await page.waitForTimeout(200);
+    const at = await locator.evaluate((el) => {
+      const SUP = 'button, a, input, textarea, .media, .post-media, .player, .waveform, .scrubber, video, audio';
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        if (!n.nodeValue.trim() || n.parentElement?.closest(SUP)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        for (const rect of range.getClientRects()) {
+          if (rect.width < 16 || rect.height < 8) continue;
+          const x = rect.left + Math.min(20, rect.width / 2);
+          const y = rect.top + rect.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          if (hit && el.contains(hit) && !hit.closest(SUP)) return { x, y };
+        }
+      }
+      return null;
+    });
+    if (!at) throw new Error('no pressable words in this body');
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await page.waitForTimeout(150);
+    await page.mouse.move(at.x + 3, at.y + 2);
+    await page.waitForTimeout(450);
+    await page.mouse.up();
+    await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  };
+  const closeSheet = async () => {
+    await page.click('#modal button.btn.ghost:has-text("Close")');
+    await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+  };
+  const modalText = () => page.evaluate(() => document.getElementById('modal').innerText);
+  /**
+   * The first post card on screen attributed to <name> (§2.3's title line)
+   * whose body is one of the mock's plain paragraphs.
+   *
+   * Both halves matter. WHOSE post it is decides what §2.16 puts on its sheet —
+   * `Block @node` on somebody else's, nothing on my own — and "the first post"
+   * does not say which. And a press or a click has to land on words: the other
+   * bodies are a caption whose middle is a URL, and a tap there opens the link
+   * instead of the post.
+   */
+  const cardOf = async (name = null) => {
+    const key = await page.evaluate((n) => {
+      const c = [...document.querySelectorAll('#view article.post')].find((x) => {
+        if (!/^Post \d+: /.test(x.querySelector('.post-body')?.textContent ?? '')) return false;
+        return !n || x.querySelector('.post-title')?.textContent === n;
+      });
+      return c ? c.querySelector('.post-body').textContent.slice(0, 12) : null;
+    }, name);
+    if (!key) throw new Error(`no plain-text post${name ? ` attributed to ${name}` : ''} on screen`);
+    // by its own words, not by an index: the feed replaces its cards on every
+    // refresh, and an index read a round trip ago names a different post
+    return page.locator('#view article.post').filter({ hasText: key }).first();
+  };
 
   // ── fresh account: sign in → setup → create node → feeds ────────────────
   await page.goto(`${base}/?mock=fresh&mockflood=1`, { waitUntil: 'load' });
@@ -482,11 +571,11 @@ try {
     const rows = [...m.querySelectorAll('button.list-item')];
     const cs = getComputedStyle(m);
     const radius = getComputedStyle(document.documentElement).getPropertyValue('--radius').trim();
-    return rows.map((r) => r.textContent).join('|') === 'Open in Telegram|Copy Link' &&
+    return rows.map((r) => r.textContent).join('|') === 'Open in Telegram|Copy Link|Mute Feed' &&
       cs.borderTopLeftRadius === radius &&
       cs.boxShadow !== 'none' &&
       rows.every((r) => r.getBoundingClientRect().height >= 40);
-  }), 'channel: kebab opens the House Pour menu — Open in Telegram, Copy Link, 40pt rows');
+  }), 'channel: kebab opens the House Pour menu — Open in Telegram, Copy Link, Mute Feed, 40pt rows');
   // the only thing that animates on appear is the fade, and it settles opaque
   await page.waitForFunction(() => {
     const m = document.querySelector('.menu[role="menu"]');
@@ -615,16 +704,312 @@ try {
   await page.waitForFunction(() => /@notes_to_self/.test(document.getElementById('view').innerText), null, { timeout: 8000 });
   ok(true, 'manage: updateSupergroup while open re-queries — channel made public appears live');
 
-  // ── sign out ─────────────────────────────────────────────────────────────
+  // ── §2.15–§2.20 report, block, mute, and the lists behind them ───────────
+  //
+  // The filter is the product here: what these assert is that reported,
+  // blocked and muted things STOP PAINTING, not that a function ran.
   await page.goto(`${base}/?mock=fresh#/you`, { waitUntil: 'load' });
+  await waitText(/YOUR FEEDS/, 15000);
+  const youFoot = await text();
+  ok(/Questions or reports: elijah@lucianlabs\.ca/.test(youFoot), 'you: §2.19 contact line above the version line');
+  ok(/Reports are read by a person within 24 hours\./.test(youFoot), 'you: the response commitment');
+  ok(!/SIGN OUT/.test(youFoot) && /SETTINGS/.test(youFoot), 'you: §2.8 Sign Out moved to Settings');
+
+  await page.click('#view button.btn:has-text("Settings")');
+  await waitText(/BLOCKED · 0/, 10000);
+  const settings0 = await text();
+  ok(/The filter is always on; there is no switch\./.test(settings0), 'settings: §2.18 — the filter has no switch');
+  ok(/These lists live on this device only and nobody else can read them\./.test(settings0), 'settings: the lists are local');
+  ok(/You haven't blocked anyone\./.test(settings0) && /No muted feeds\./.test(settings0) && /Nothing hidden\./.test(settings0),
+    'settings: three empty states');
+  ok(/MUTED · 0/.test(settings0) && /HIDDEN · 0/.test(settings0), 'settings: serif counts on all three marks');
+  ok(/Content that breaks the rules is reported to Telegram, the only party that can remove it from the network\./.test(settings0),
+    'settings: §2.19 says what a serverless client can and cannot promise');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#view button.btn.danger')].map((b) => b.textContent).join('|') === 'Sign Out|Delete My Node'),
+    'settings: Sign Out, then Delete My Node — reversible before irreversible');
+  await snap('settings');
+
+  // ── §2.15 report a post: the email, and the immediate hide ───────────────
+  await page.goto(`${base}/?mock=fresh#/feed`, { waitUntil: 'load' });
+  await page.waitForSelector('#view article.post .post-body', { timeout: 20000 });
+  /**
+   * Who the feed's first page carries with empty lists. Every filter assertion
+   * below is a before/after against this: "gone" is only a claim when the same
+   * feed was showing them a moment ago.
+   */
+  const census = () => page.evaluate(() => ({
+    posts: document.querySelectorAll('#view article.post').length,
+    ana: [...document.querySelectorAll('#view .post-title')].filter((t) => t.textContent === 'Ana Iliovic').length,
+    tres: [...document.querySelectorAll('#view .post-sub')].filter((t) => t.textContent === 'Très Buchet').length,
+  }));
+  /** The cold-start cache paints before the refresh lands, so read a feed that stopped moving. */
+  const feedCensus = async () => {
+    await page.waitForSelector('#view article.post', { timeout: 20000 });
+    let prev = null;
+    for (let i = 0; i < 30; i += 1) {
+      const now = await census();
+      if (prev && now.posts === prev.posts && now.ana === prev.ana && now.tres === prev.tres) return now;
+      prev = now;
+      await page.waitForTimeout(600);
+    }
+    return prev;
+  };
+  const baseline = await feedCensus();
+  ok(baseline.ana > 0 && baseline.tres > 0, `feed baseline: ${baseline.ana} posts from Ana, ${baseline.tres} from Très Buchet`);
+  // §2.16's `Block @node` rides on the attributed node (§2.3) and is never
+  // offered on your own (js/views/safety.js), so the full block is asserted on
+  // a post that is somebody else's. The absent case has its own pair below.
+  await longPressText((await cardOf('Ana Iliovic')).locator('.post-body').first());
+  const theirSheet = await modalText();
+  ok(/SAFETY/.test(theirSheet), 'post sheet: the SAFETY block');
+  ok(/Report Post/i.test(theirSheet) && /Block @tgs_ana/i.test(theirSheet) && /Mute /i.test(theirSheet),
+    'post sheet: Report Post, Block @node, Mute <feed>');
+  await closeSheet();
+  const reported = page.locator('#view article.post:has(.post-body)').first();
+  const reportedText = (await reported.locator('.post-body').first().innerText()).slice(0, 30);
+  await longPress(reported.locator('.post-body').first());
+  const safetySheet = await modalText();
+  await page.click('#modal button.btn.danger:has-text("Report Post")');
+  await page.waitForSelector('#modal .reason-list', { timeout: 5000 });
+  const reportSheet = await modalText();
+  ok(/REPORT/.test(reportSheet) && /Report this post\./.test(reportSheet), 'report: REPORT mark and the post heading');
+  ok(/This sends an email from your mail app to the person who maintains tgsocial, with a link to it\. It disappears from this device as soon as you send\./.test(reportSheet),
+    'report: the explainer, verbatim');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#modal .reason-row .reason-label')].map((r) => r.textContent).join('|')
+    === 'Spam|Nudity or sexual content|Violence or threats|Hate or harassment|Child safety|Illegal content|Something else'),
+    'report: the seven reasons, in order');
+  ok(await page.evaluate(() => [...document.querySelectorAll('#modal .reason-row')].every((r) => r.getBoundingClientRect().height >= 40)),
+    'report: reason rows are 40pt');
+  ok(await page.evaluate(() => document.querySelector('#modal .modal-card[aria-label="Report"] button.btn.danger').disabled === true),
+    'report: Send Report is disabled until a reason is picked');
+  // the mail composer is the browser's; capture what we would hand it
+  await page.evaluate(() => {
+    const orig = HTMLAnchorElement.prototype.click;
+    window.__mailto = null;
+    window.__restoreClick = () => { HTMLAnchorElement.prototype.click = orig; };
+    HTMLAnchorElement.prototype.click = function click(...args) {
+      if (String(this.href).startsWith('mailto:')) {
+        window.__mailto = this.href;
+        return undefined;
+      }
+      return orig.apply(this, args);
+    };
+  });
+  await page.click('#modal .reason-row:has-text("Spam")');
+  ok(await page.evaluate(() => document.querySelector('#modal .reason-row[aria-checked="true"] .reason-label')?.textContent === 'Spam'
+    && document.querySelector('#modal .modal-card[aria-label="Report"] button.btn.danger').disabled === false),
+    'report: picking a reason checks that row and arms Send Report');
+  await snap('report');
+  await page.click('#modal button.btn.danger:has-text("Send Report")');
+  await waitToast(/Reported\. It's hidden here now\./);
+  const mail = await page.evaluate(() => window.__mailto);
+  const mailUrl = new URL(mail);
+  ok(mailUrl.pathname === 'elijah@lucianlabs.ca', 'report email: addressed to the published address');
+  ok(mailUrl.searchParams.get('subject') === 'tgsocial report — Spam', 'report email: subject is the reason, verbatim');
+  const mailBody = mailUrl.searchParams.get('body');
+  ok(/^Reason: Spam\nLink: https:\/\/t\.me\/[a-z_]+\/\d+\nChannel: @[a-z_]+\nMessage: \d+\nNode: (@[a-z_]+|unattributed)\nKind: post\nApp: tgsocial 1\.0\.0 \(1\) · Web\n\nAnything you want to add:\n\n$/.test(mailBody),
+    `report email: the body is §2.15's, ending on the blank line the cursor lands in`);
+  const hiddenNow = await page.evaluate(() => window.__tgsocial.safety.hidden);
+  ok(hiddenNow.length === 1 && hiddenNow[0].reason === 'Spam' && /^[a-z_]+\/\d+$/.test(hiddenNow[0].key),
+    'report: one hidden entry, keyed <channel>/<id>, reason stored verbatim');
+  ok(mailBody.includes(`Link: https://t.me/${hiddenNow[0].key}`), 'report: the email links the thing that was hidden');
+  await page.waitForFunction((t) => !document.getElementById('view').innerText.includes(t), reportedText, { timeout: 15000 });
+  ok(true, 'report: the post stops painting on this device at once (§2.18)');
+
+  // §2.20 — the hidden row names the channel and the id, never the content
+  await page.goto(`${base}/?mock=fresh#/settings`, { waitUntil: 'load' });
+  await waitText(/HIDDEN · 1/, 15000);
+  const hiddenRow = await page.evaluate(() => document.querySelector('#view .hidden-row')?.innerText ?? '');
+  ok(/ · \d+/.test(hiddenRow), 'settings: the hidden row is channel · message id');
+  ok(new RegExp(`Spam · reported \\d{4}-\\d{2}-\\d{2}`).test(hiddenRow), 'settings: reason · reported <date>');
+  ok(!hiddenRow.includes(reportedText), 'settings: and never a preview of what was reported');
+  await page.click('#view .hidden-row button.btn:has-text("Unhide")');
+  await waitToast(/Unhidden\. It's back in your feed\./);
+  await waitText(/HIDDEN · 0/);
+  ok(await page.evaluate(() => window.__tgsocial.safety.hidden.length === 0), 'settings: Unhide clears the entry');
+  await page.goto(`${base}/?mock=fresh#/feed`, { waitUntil: 'load' });
+  await page.waitForFunction((t) => document.getElementById('view').innerText.includes(t), reportedText, { timeout: 20000 });
+  ok(true, 'settings: and the post is back in the feed');
+
+  // §2.15 — no mail app: hidden anyway, and the toast names the address
+  await page.evaluate(() => {
+    window.__restoreClick();
+    const orig = HTMLAnchorElement.prototype.click;
+    window.__restoreClick = () => { HTMLAnchorElement.prototype.click = orig; };
+    HTMLAnchorElement.prototype.click = function click(...args) {
+      if (String(this.href).startsWith('mailto:')) throw new Error('no handler for mailto:');
+      return orig.apply(this, args);
+    };
+  });
+  await longPress(page.locator('#view article.post:has(.post-body)').first().locator('.post-body').first());
+  await page.click('#modal button.btn.danger:has-text("Report Post")');
+  await page.waitForSelector('#modal .reason-list', { timeout: 5000 });
+  await page.click('#modal .reason-row:has-text("Illegal content")');
+  await page.click('#modal button.btn.danger:has-text("Send Report")');
+  await waitToast(/No mail app\. Write to elijah@lucianlabs\.ca\./);
+  ok(await page.evaluate(() => window.__tgsocial.safety.hidden.length === 1
+    && window.__tgsocial.safety.hidden[0].reason === 'Illegal content'),
+    'report: a composer that refuses to open still hides it (§2.15)');
+  await page.evaluate(() => {
+    window.__restoreClick();
+    window.__tgsocial.safety.unhide(window.__tgsocial.safety.hidden[0].key);
+  });
+
+  // ── §2.16 block a node ───────────────────────────────────────────────────
+  await page.goto(`${base}/?mock=fresh#/node/tgs_ana`, { waitUntil: 'load' });
+  await waitText(/Voice, product, Vancouver\./, 20000);
+  await page.click('#view .profile-head button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  ok(await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] button.list-item')].map((r) => r.textContent).join('|')
+    === 'Open in Telegram|Copy Link|Block @tgs_ana'), 'profile: §2.5 kebab carries Block @node');
+  await page.click('.menu[role="menu"] button.list-item:has-text("Block @tgs_ana")');
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  const blockModal = await modalText();
+  ok(/Block @tgs_ana\?/.test(blockModal), 'block: the confirm names the node');
+  ok(/Their posts and their comments disappear from your feed, your threads, your graph, and search\. They are not told\. Undo it in Settings\./.test(blockModal),
+    'block: the confirm body, verbatim');
+  await snap('block');
+  await page.click('#modal button.btn.danger:has-text("Block")');
+  await waitToast(/Blocked @tgs_ana\./);
+  await waitText(/You blocked this node\./, 10000);
+  const blockedProfileText = await text();
+  ok(/@tgs_ana/.test(blockedProfileText) && /Nothing they post reaches you\./.test(blockedProfileText) && /UNBLOCK/.test(blockedProfileText),
+    'block: the profile is the one place they are drawn, and it says so');
+  ok(!/Voice, product, Vancouver\./.test(blockedProfileText) && !/FEEDS/.test(blockedProfileText),
+    'block: and it carries none of their card');
+  // §2.16 — blocking never edits the card: they stay followed, publicly
+  await page.waitForFunction(() => !!window.__tgsocial.repo.myCard, null, { timeout: 10000, polling: 300 });
+  ok(await page.evaluate(() => window.__tgsocial.repo.myCard.follows.includes('tgs_ana')
+    && /^follows: @tgs_ana$/m.test(window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text)),
+    'block: the card is untouched — enforcing a block would publish it');
+  await page.goto(`${base}/?mock=fresh#/feed`, { waitUntil: 'load' });
+  const blockedFeed = await feedCensus();
+  ok(blockedFeed.ana === 0 && blockedFeed.posts > 0,
+    `block: ${baseline.ana} posts from Ana became 0, with ${blockedFeed.posts} still in the feed — no tombstone, no row, no count`);
+  await page.goto(`${base}/?mock=fresh#/graph`, { waitUntil: 'load' });
+  await waitText(/DIRECT · 0/, 20000);
+  ok(true, 'block: not in DIRECT either (§2.18)');
+  await page.goto(`${base}/?mock=fresh#/settings`, { waitUntil: 'load' });
+  await waitText(/BLOCKED · 1/, 15000);
+  ok(/@tgs_ana/.test(await page.evaluate(() => document.querySelector('#view .node-row').innerText)), 'settings: the blocked row names them');
+  await page.click('#view .node-row button.btn:has-text("Unblock")');
+  await waitToast(/Unblocked @tgs_ana\./);
+  await waitText(/BLOCKED · 0/);
+  ok(true, 'settings: Unblock is one tap, no confirm');
+
+  // ── §2.17 mute a feed ────────────────────────────────────────────────────
+  await page.goto(`${base}/?mock=fresh#/feed/tresbuchet`, { waitUntil: 'load' });
+  await page.waitForSelector('#view article.post', { timeout: 20000 });
+  const channelPosts = await page.locator('#view article.post').count();
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  await page.click('.menu[role="menu"] button.list-item:has-text("Mute Feed")');
+  await waitToast(/Muted Très Buchet\./);
+  await page.waitForSelector('#view article.post', { timeout: 20000 });
+  ok((await page.locator('#view article.post').count()) >= channelPosts,
+    'mute: the channel stays complete on its own screen (§2.17)');
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  ok(await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] button.list-item')].some((r) => r.textContent === 'Unmute Feed')),
+    'mute: the kebab reads the state, because the undo is the same tap');
+  await page.keyboard.press('Escape');
+  await page.goto(`${base}/?mock=fresh#/feed`, { waitUntil: 'load' });
+  const mutedFeed = await feedCensus();
+  ok(mutedFeed.tres === 0 && mutedFeed.ana > 0,
+    `mute: ${baseline.tres} posts from Très Buchet became 0 in the merged feed, and nobody else moved`);
+  await page.goto(`${base}/?mock=fresh#/node/tgs_newbie`, { waitUntil: 'load' });
+  // the profile paints its feed rows as bare handles and fills each one in from
+  // its own read, twice — once off the cache, once off the forced one — so the
+  // titled row can be replaced by a bare one again a moment after it appears.
+  // Wait for the state, do not sample it.
+  await page.waitForFunction(() => {
+    const row = [...document.querySelectorAll('#view .feed-row')].find((r) => /Très Buchet/.test(r.innerText));
+    return row?.querySelector('.row-name .pill')?.textContent === 'Muted';
+  }, null, { timeout: 20000 });
+  ok(true, 'mute: the feed keeps its row on the profile and carries a faint Muted pill');
+  await page.goto(`${base}/?mock=fresh#/feed/tresbuchet`, { waitUntil: 'load' });
+  await page.waitForSelector('#view .head-actions button.kebab', { timeout: 20000 });
+  await page.click('#view .head-actions button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  await page.click('.menu[role="menu"] button.list-item:has-text("Unmute Feed")');
+  await waitToast(/Unmuted Très Buchet\./);
+  ok(await page.evaluate(() => window.__tgsocial.safety.mutedFeeds.length === 0), 'mute: unmuted');
+
+  // ── §2.21 delete my node ─────────────────────────────────────────────────
+  const nodeIds = await page.evaluate(async () => {
+    const repo = window.__tgsocial.repo;
+    // a comments channel, so both steps of PROTOCOL §4.11 actually run
+    if (!repo.myCard?.replies) await repo.createRepliesChannel('tgs_newbie_r');
+    const sg = Object.values(window.__mock.supergroups).find((s) => s.usernames?.editable_username === 'tgs_newbie_r');
+    const repliesChat = Object.values(window.__mock.chats).find((c) => c.type.supergroup_id === sg?.id);
+    const c = window.__mock.client;
+    const orig = c.handle.bind(c);
+    window.__deletes = [];
+    c.handle = (q) => {
+      if (q['@type'] === 'deleteChat') window.__deletes.push(q.chat_id);
+      return orig(q);
+    };
+    return { node: repo.myNode.chatId, replies: repliesChat.id };
+  });
+  // not the owner: nothing is deleted, and the modal says who to ask
+  await page.evaluate((id) => { window.__mock.chats[id].can_be_deleted_for_all_users = false; }, nodeIds.node);
+  await page.goto(`${base}/?mock=fresh#/settings`, { waitUntil: 'load' });
+  await waitText(/DELETE MY NODE/, 15000);
+  await page.click('#view button.btn.danger:has-text("Delete My Node")');
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  const deleteModal = await modalText();
+  ok(/Delete my node\./.test(deleteModal), 'delete: the heading');
+  ok(/This deletes the channel @tgs_newbie and your comments channel @tgs_newbie_r from Telegram\./.test(deleteModal)
+    && /the names are released for anyone to take\. This cannot be undone\./.test(deleteModal), 'delete: names both channels and the consequence');
+  ok(/Your feed channels are not touched\./.test(deleteModal), 'delete: and what it does not touch');
+  ok(/TYPE @TGS_NEWBIE TO CONFIRM/i.test(deleteModal), 'delete: type-the-username field label');
+  ok(await page.evaluate(() => document.querySelector('#modal button.btn.danger').disabled === true), 'delete: disabled before the input matches');
+  await page.fill('#modal input', 'tgs_new');
+  ok(await page.evaluate(() => document.querySelector('#modal button.btn.danger').disabled === true), 'delete: a near miss does not arm it');
+  await page.fill('#modal input', 'TGS_NEWBIE');
+  ok(await page.evaluate(() => document.querySelector('#modal button.btn.danger').disabled === false),
+    'delete: the match is case-insensitive and forgives a missing @');
+  await snap('delete-node');
+  await page.click('#modal button.btn.danger:has-text("Delete My Node")');
+  await page.waitForFunction(() => /only the channel's owner can/.test(document.getElementById('modal').innerText), null, { timeout: 10000 });
+  ok(/Telegram won't let you delete @tgs_newbie — only the channel's owner can\. Open it in Telegram to see who owns it\./.test(await modalText()),
+    'delete: the not-owner modal, verbatim');
+  ok(await page.evaluate(() => window.__deletes.length === 0), 'delete: and nothing was deleted');
+  await page.click('#modal button.btn.ghost:has-text("Close")');
+  // the owner's path: comments channel first, node second (PROTOCOL §4.11)
+  await page.evaluate((id) => { window.__mock.chats[id].can_be_deleted_for_all_users = true; }, nodeIds.node);
+  await page.click('#view button.btn.danger:has-text("Delete My Node")');
+  await page.waitForSelector('#modal input', { timeout: 5000 });
+  await page.fill('#modal input', '@tgs_newbie');
+  await page.click('#modal button.btn.danger:has-text("Delete My Node")');
+  await waitToast(/Your node is gone\./, 15000);
+  ok(await page.evaluate(([replies, node]) => window.__deletes.join(',') === `${replies},${node}`, [nodeIds.replies, nodeIds.node]),
+    'delete: the comments channel goes first, the node second — a dead backlink is the one unrecoverable order');
+  ok(await page.evaluate(([replies, node]) => !window.__mock.chats[replies] && !window.__mock.chats[node], [nodeIds.replies, nodeIds.node]),
+    'delete: both channels are gone from Telegram');
+  await page.waitForFunction(() => location.hash === '#/setup', null, { timeout: 10000 });
+  ok(await page.evaluate(() => window.__tgsocial.repo.myNode === null), 'delete: nodeless, still signed in, back at Setup');
+
+  // ── sign out (from Settings, §2.20) ──────────────────────────────────────
+  //
+  // The lists are what survives it (PROTOCOL §7.1): a block list that
+  // evaporated on sign-out would re-expose the reader to the person they
+  // blocked the next time they signed in. The UI path for blocking is measured
+  // above; what is under test here is that the record outlives `logOut`.
+  await page.evaluate(() => window.__tgsocial.safety.block('tgs_ana'));
+  await page.goto(`${base}/?mock=fresh#/settings`, { waitUntil: 'load' });
   await waitText(/SIGN OUT/, 15000);
-  await page.click('#view button.btn.danger');
+  await page.click('#view button.btn.danger:has-text("Sign Out")');
   await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
   ok(/Sign out of tgsocial\?/.test(await page.evaluate(() => document.getElementById('modal').innerText)), 'sign out: confirm modal copy');
   await snap('signout');
   await page.click('#modal button.btn.danger');
-  await page.waitForFunction(() => /Your Telegram, as a feed\./.test(document.getElementById('view').innerText) && Object.keys(localStorage).length === 0, null, { timeout: 15000 });
-  ok(true, 'sign out: local state wiped, back at sign-in');
+  await page.waitForFunction(() => /Your Telegram, as a feed\./.test(document.getElementById('view').innerText)
+    && Object.keys(localStorage).join() === 'tgs.moderation', null, { timeout: 15000 });
+  ok(true, 'sign out: every cache wiped, back at sign-in');
+  ok(await page.evaluate(() => JSON.parse(localStorage.getItem('tgs.moderation')).blocked.join() === 'tgs_ana'),
+    'sign out: the safety lists survive it, for the same account (PROTOCOL §7.1)');
+  await page.evaluate(() => localStorage.removeItem('tgs.moderation'));
 
   // ── node scenario: existing node found, cold-start cache ─────────────────
   await page.goto(`${base}/?mock=node`, { waitUntil: 'load' });
@@ -1600,6 +1985,23 @@ try {
     const chat = Object.values(window.__mock.chats).find((c) => c.type.supergroup_id === sg?.id);
     return chat && /^re: https:\/\/t\.me\/waveloop_devlog\/\d+\nFrom the web thread\.$/.test(window.__mock.history[chat.id]?.[0]?.content?.text?.text ?? '');
   }), 'composer: comment lands in my channel with the re: pointer');
+  // ── §2.12 the comment sheet, and §2.15's SAFETY block on it ──────────────
+  await longPress(page.locator('#view .comment', { hasText: 'Nice one. The bass is huge.' }).first().locator('.post-body').first());
+  const anaSheet = await modalText();
+  ok(/COMMENT/.test(anaSheet) && /@tgs_ana_r/.test(anaSheet), 'comment sheet: the comment rows, naming the channel it lives in');
+  ok(/SAFETY/.test(anaSheet) && /Report Comment/i.test(anaSheet) && /Block @tgs_ana/i.test(anaSheet),
+    'comment sheet: Report Comment and Block the commenter');
+  ok(!/Mute /i.test(anaSheet), 'comment sheet: no Mute — mute is about a channel’s posts, and a comment is not one (§2.17)');
+  await snap('comment-sheet');
+  await closeSheet();
+  await longPress(page.locator('#view .comment', { hasText: 'From the web thread.' }).first().locator('.post-body').first());
+  const mineSheet = await modalText();
+  ok(!/Report Comment/i.test(mineSheet) && /Delete/i.test(mineSheet),
+    'comment sheet: on your own comment, Delete stands in for Report Comment');
+  // the control is @tgs_ana's sheet above, which does carry it (§2.16)
+  ok(!/Block @/i.test(mineSheet), 'comment sheet: and no Block @<yourself> on it either');
+  await closeSheet();
+
   await page.locator('#view .comment', { hasText: 'From the web thread.' }).first().locator('button:has-text("Delete")').click();
   await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
   ok(/Delete this comment\?/.test(await page.evaluate(() => document.getElementById('modal').innerText)), 'delete: confirm copy');
@@ -2078,6 +2480,117 @@ try {
   await ctx.setOffline(false);
   await page.waitForFunction(() => document.getElementById('status').textContent === 'Synced', null, { timeout: 5000 });
 
+  // ── §2.18 the filter reaches the Thread screen ───────────────────────────
+  //
+  // §2.15 says the reported thing "vanishes from every surface" and §2.18
+  // names Thread in the list of screens that drop it. Reporting is reachable
+  // from the post card at the top of this screen, so the toast that says it is
+  // gone and the post still being painted under it cannot both be true. §2.16
+  // forbids a tombstone in its place, so what is asserted is that the screen
+  // itself goes — and that the same URL, entered again from scratch with no
+  // seed, does not bring it back.
+  await page.goto(`${base}/?mock=node#/feed`, { waitUntil: 'load' });
+  await page.waitForSelector('#view article.post .post-body', { timeout: 20000 });
+  // the mail composer is the browser's; capture the mailto instead of handing
+  // it to a handler this headless Chromium does not have
+  await page.evaluate(() => {
+    const orig = HTMLAnchorElement.prototype.click;
+    window.__mailto = null;
+    window.__restoreClick = () => { HTMLAnchorElement.prototype.click = orig; };
+    HTMLAnchorElement.prototype.click = function click(...args) {
+      if (String(this.href).startsWith('mailto:')) {
+        window.__mailto = this.href;
+        return undefined;
+      }
+      return orig.apply(this, args);
+    };
+  });
+  await (await cardOf()).locator('.post-comments-count').click();
+  await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, { timeout: 10000 });
+  const threadRoute = await page.evaluate(() => location.hash);
+  // the comment panel lands after the post card; press once the screen is whole
+  await waitText(/COMMENTS/, 20000);
+  await page.waitForTimeout(400);
+  const threadPostText = (await page.locator('#view article.post .post-body').first().innerText()).slice(0, 30);
+  await longPressText(page.locator('#view article.post .post-body').first());
+  await page.click('#modal button.btn.danger:has-text("Report Post")');
+  await page.waitForSelector('#modal .reason-list', { timeout: 5000 });
+  await page.click('#modal .reason-row:has-text("Spam")');
+  await page.click('#modal button.btn.danger:has-text("Send Report")');
+  await waitToast(/Reported\. It's hidden here now\./);
+  await page.waitForFunction(() => !location.hash.startsWith('#/thread/'), null, { timeout: 15000 });
+  ok(true, 'thread: reporting the post leaves the screen that was about it — no tombstone (§2.15, §2.16)');
+  await page.waitForFunction((t) => !document.getElementById('view').innerText.includes(t), threadPostText, { timeout: 15000 });
+  ok(true, 'thread: and the post is not painted where it lands either');
+  // and again with nothing in hand: the route alone decides, before any fetch
+  await page.evaluate((hash) => { location.hash = hash; }, threadRoute);
+  await page.waitForFunction((hash) => location.hash !== hash, threadRoute, { timeout: 10000 });
+  ok(!(await text()).includes(threadPostText),
+    'thread: re-entering the hidden thread from scratch never paints it');
+  // the control: lift the hide and the same URL is an ordinary thread again,
+  // so the two assertions above are about the filter and not about the route
+  await page.evaluate(() => {
+    const s = window.__tgsocial.safety;
+    for (const h of [...s.hidden]) s.unhide(h.key);
+  });
+  await page.evaluate((hash) => { location.hash = hash; }, threadRoute);
+  await page.waitForFunction((t) => document.getElementById('view').innerText.includes(t), threadPostText, { timeout: 20000 });
+  ok((await page.evaluate(() => location.hash)) === threadRoute, 'thread: unhidden, the same thread opens and paints');
+
+  // §2.16 on the same screen: a blocked node's post is dropped on Thread too.
+  // Thread is not the profile the exception is about, so there is nothing here
+  // for a blocked node to be either.
+  await page.goto(`${base}/?mock=node#/feed`, { waitUntil: 'load' });
+  await page.waitForSelector('#view article.post .post-body', { timeout: 20000 });
+  await (await cardOf('Ana Iliovic')).locator('.post-comments-count').click();
+  await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, { timeout: 10000 });
+  await waitText(/COMMENTS/, 20000);
+  await page.waitForTimeout(400);
+  const anaThreadText = (await page.locator('#view article.post .post-body').first().innerText()).slice(0, 30);
+  await longPressText(page.locator('#view article.post .post-body').first());
+  await page.click('#modal button.btn.ghost:has-text("Block @tgs_ana")');
+  await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+  await page.click('#modal button.btn.danger:has-text("Block")');
+  await waitToast(/Blocked @tgs_ana\./);
+  await page.waitForFunction(() => !location.hash.startsWith('#/thread/'), null, { timeout: 15000 });
+  ok(true, 'thread: blocking the node the post is attributed to takes the thread with it (§2.18)');
+  await page.waitForFunction((t) => !document.getElementById('view').innerText.includes(t), anaThreadText, { timeout: 15000 });
+  ok(true, 'thread: and their post is gone from where it lands');
+  await page.evaluate(() => window.__tgsocial.safety.unblock('tgs_ana'));
+
+  // ── §2.16 there is no Block @<yourself> ──────────────────────────────────
+  //
+  // The confirm is written about a second party — "Their posts and their
+  // comments disappear… They are not told" — and blocking yourself empties
+  // your own feed and your own DIRECT list to no end. Each assertion below has
+  // its control on the same screen: the row is missing on my node and present
+  // on somebody else's, so removing the feature outright fails this too.
+  await page.goto(`${base}/?mock=node#/feed`, { waitUntil: 'load' });
+  await page.waitForSelector('#view article.post .post-body', { timeout: 20000 });
+  await longPressText((await cardOf('Elijah Lucian')).locator('.post-body').first());
+  const ownPostSheet = await modalText();
+  ok(/SAFETY/.test(ownPostSheet) && /Report Post/i.test(ownPostSheet) && /Mute /i.test(ownPostSheet),
+    'post sheet: my own post keeps Report Post and Mute');
+  ok(!/Block @/i.test(ownPostSheet), 'post sheet: and carries no Block @tgs_elijah — §2.16 is about someone else');
+  await closeSheet();
+  await longPressText((await cardOf('Ana Iliovic')).locator('.post-body').first());
+  ok(/Block @tgs_ana/i.test(await modalText()), 'post sheet: the same sheet on a node that is not mine still carries Block');
+  await closeSheet();
+  await page.goto(`${base}/?mock=node#/node/tgs_elijah`, { waitUntil: 'load' });
+  await waitText(/FEEDS/i, 20000);
+  await page.click('#view .profile-head button.kebab');
+  await page.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+  ok(await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] button.list-item')].map((r) => r.textContent).join('|')
+    === 'Open in Telegram|Copy Link'),
+    'profile: my own §2.5 kebab is the two share actions and nothing else');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => {
+    const s = window.__tgsocial.safety;
+    for (const h of [...s.hidden]) s.unhide(h.key);
+    for (const u of [...s.blocked]) s.unblock(u);
+    window.__restoreClick?.();
+  });
+
   // ── §2.3 stale cache guard ───────────────────────────────────────────────
   // an old build's cache (pre-versioning: a raw array, oldest-first) must be
   // discarded on boot — never painted
@@ -2377,8 +2890,13 @@ try {
     await pub.waitForSelector('#modal .modal-card', { timeout: 5000 });
     const sheet = await pub.evaluate(() => document.getElementById('modal').innerText);
     ok(/POST/i.test(sheet) && /Open in Telegram/i.test(sheet) && /Views/i.test(sheet), 'public: the long-press post sheet');
-    await pub.click('#modal .modal-card button.btn.ghost');
+    // §2.15 works signed out against the same local lists; §2.16 needs a node,
+    // and a channel page has none to attribute to (PRODUCT §2.3)
+    ok(/SAFETY/.test(sheet) && /Report Post/i.test(sheet) && /Mute tastycrow/i.test(sheet) && !/Block @/i.test(sheet),
+      'public: the sheet carries Report and Mute, and no Block where the post is unattributed');
+    await pub.click('#modal .modal-card button.btn.ghost:has-text("Close")');
     await pub.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+    ok(await pub.evaluate(() => window.__tgsocial.safety.mutedFeeds.length === 0), 'public: and closing the sheet changed nothing');
 
     // ── the nag (§2.13), verbatim ──────────────────────────────────────────
     const nag = await pub.evaluate(() => {
@@ -2615,6 +3133,94 @@ try {
       ok(raw.scripts === 0 && raw.widgets === 0 && raw.tbase === 'undefined',
         `public proxy: a direct visit runs nothing — ${raw.scripts} scripts, ${raw.widgets} parsed message nodes`);
     }
+
+    // ── §2.15 reporting from a public route ────────────────────────────────
+    //
+    // "Reporting works signed out, on the public routes too; the hidden list
+    // is the same list." The email is the only artifact this serverless
+    // feature emits and the operator's only sortable record, so what matters
+    // is that its `Message:` line names the message its `Link:` line names.
+    // On this path the parser hands the app a bare server id already
+    // (js/public/preview.js), so anything that shifts it a second time mails
+    // `Message: 0` for every post under a million and the report is unusable.
+    await pub.goto(`${base}/u/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    await pub.evaluate(() => {
+      const orig = HTMLAnchorElement.prototype.click;
+      window.__mailto = null;
+      window.__restoreClick = () => { HTMLAnchorElement.prototype.click = orig; };
+      HTMLAnchorElement.prototype.click = function click(...args) {
+        if (String(this.href).startsWith('mailto:')) {
+          window.__mailto = this.href;
+          return undefined;
+        }
+        return orig.apply(this, args);
+      };
+    });
+    const pubReported = (await pub.locator('#view article.post .post-body').first().innerText()).slice(0, 30);
+    await pub.click('#view article.post .post-body >> nth=0', { button: 'right' });
+    await pub.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    await pub.click('#modal button.btn.danger:has-text("Report Post")');
+    await pub.waitForSelector('#modal .reason-list', { timeout: 5000 });
+    await pub.click('#modal .reason-row:has-text("Spam")');
+    await pub.click('#modal button.btn.danger:has-text("Send Report")');
+    await pub.waitForFunction(() => /Reported\. It's hidden here now\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    const pubBody = new URL(await pub.evaluate(() => window.__mailto)).searchParams.get('body');
+    const pubHidden = await pub.evaluate(() => window.__tgsocial.safety.hidden);
+    const mailedId = /^Message: (\d+)$/m.exec(pubBody)?.[1];
+    const linkedId = /^Link: https:\/\/t\.me\/[a-z_]+\/(\d+)$/m.exec(pubBody)?.[1];
+    ok(!!mailedId && mailedId === linkedId,
+      `public: a report sent from a public route names one message, not two (Link …/${linkedId}, Message: ${mailedId})`);
+    ok(pubHidden.length === 1 && pubHidden[0].key === `tastycrow/${mailedId}`,
+      `public: and the hidden entry written beside it carries the same id (${pubHidden[0]?.key})`);
+    await pub.waitForFunction((t) => !document.getElementById('view').innerText.includes(t), pubReported, { timeout: 15000 });
+    ok(true, 'public: the reported post stops painting on the public page too (§2.18)');
+    await pub.evaluate(() => {
+      const s = window.__tgsocial.safety;
+      for (const h of [...s.hidden]) s.unhide(h.key);
+      window.__restoreClick();
+    });
+
+    // ── §2.16 a blocked node on a public route ─────────────────────────────
+    //
+    // §2.16 names "a public URL (§2.13)" as one of the three deliberate ways
+    // to reach a blocked node, and says why the exception exists: "An empty
+    // screen there reads as a broken app, so it says so." /u/ is also where a
+    // visitor can block — the sheet carries `Block @node` because /u/ posts
+    // are attributed — and that visitor has no Settings to undo it in, so the
+    // card is the only place the confirm's promise can be kept.
+    await pub.goto(`${base}/u/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForSelector('#view article.post', { timeout: 20000 });
+    await pub.click('#view article.post .post-body >> nth=0', { button: 'right' });
+    await pub.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    ok(/Block @tgs_dankcoin/i.test(await pub.evaluate(() => document.getElementById('modal').innerText)),
+      'public: /u/ attributes its posts, so the sheet offers Block @node (§2.13)');
+    await pub.click('#modal button.btn.ghost:has-text("Block @tgs_dankcoin")');
+    await pub.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    await pub.click('#modal button.btn.danger:has-text("Block")');
+    await pub.waitForFunction(() => /Blocked @tgs_dankcoin\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    await pub.waitForFunction(() => /You blocked this node\./.test(document.getElementById('view').innerText), null, { timeout: 15000 });
+    const blockedPerson = await pubText();
+    ok(/@tgs_dankcoin/.test(blockedPerson) && /Nothing they post reaches you\./.test(blockedPerson) && /UNBLOCK/.test(blockedPerson),
+      'public: /u/ of a blocked node is §2.16\'s card — not a head over an empty list');
+    ok(await pub.evaluate(() => document.querySelectorAll('#view article.post').length === 0),
+      'public: and none of their posts');
+    // cold, on the same URL: the substitution is not just the repaint
+    await pub.goto(`${base}/u/tastycrow`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /You blocked this node\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    ok(await pub.evaluate(() => document.querySelectorAll('#view article.post').length === 0),
+      'public: still the card on a cold load of /u/<blocked>');
+    await pub.goto(`${base}/n/tgs_dankcoin`, { waitUntil: 'load' });
+    await pub.waitForFunction(() => /You blocked this node\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    const blockedNodePage = await pubText();
+    ok(!/FEEDS/i.test(blockedNodePage) && !/FOLLOWS/i.test(blockedNodePage) && !/tastycrow/.test(blockedNodePage),
+      'public: /n/<blocked> is the same card, and carries none of their card');
+    // the undo the confirm promised, reachable by the visitor who has no Settings
+    await pub.click('#view button.btn:has-text("Unblock")');
+    await pub.waitForFunction(() => /Unblocked @tgs_dankcoin\./.test(document.getElementById('toast').textContent), null, { timeout: 6000 });
+    await pub.waitForFunction(() => /FEEDS/i.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    ok(await pub.evaluate(() => window.__tgsocial.safety.blocked.length === 0),
+      'public: Unblock is reachable with no Settings screen, and the card comes back');
 
     await pub.goto(`${base}/f/tgs_blank`, { waitUntil: 'load' });
     await pub.waitForFunction(() => /Channel not found\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });

@@ -7,6 +7,7 @@ import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.model.PostText
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CommentFormat
+import ca.lucianlabs.tgsocial.protocol.CommentThread
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Username
 import ca.lucianlabs.tgsocial.td.TelegramClient
@@ -176,25 +177,13 @@ class CommentRepo(
 
     // ------------------------------------------------------------------ threads
 
-    /**
-     * PRODUCT §2.12 — the reply tree for one post: roots target the post, replies target a comment's own link
-     * (`re:` chains, §6.2). Oldest first within a level so a thread reads top-down; cycles cannot recurse.
-     */
-    fun tree(postTargetKey: String, index: Map<String, List<Comment>> = _index.value): List<CommentNode> {
-        val visited = HashSet<String>()
-        fun nodesFor(key: String): List<CommentNode> {
-            val here = index[key] ?: return emptyList()
-            return here
-                .filter { visited.add(it.key) }
-                .sortedWith(compareBy<Comment> { it.date }.thenBy { it.messageId })
-                .map { c -> CommentNode(c, CommentFormat.targetKey(c.link)?.let { nodesFor(it) } ?: emptyList()) }
-        }
-        return nodesFor(postTargetKey)
-    }
+    /** PRODUCT §2.12 — the reply tree for one post, over whichever index the caller renders (§2.18 filters it). */
+    fun tree(postTargetKey: String, index: Map<String, List<Comment>> = _index.value): List<CommentNode> =
+        CommentThread.of(postTargetKey, index)
 
     /** The post footer's honest number: every comment in the post's thread, from my network (§6.3). */
     fun countFor(postTargetKey: String, index: Map<String, List<Comment>> = _index.value): Int =
-        tree(postTargetKey, index).sumOf { it.count }
+        CommentThread.count(postTargetKey, index)
 
     // ------------------------------------------------------------------ optimistic entries
 

@@ -127,6 +127,7 @@ js/td.js              TdClient wrapper: auth stream, send + FLOOD_WAIT backoff, 
 js/activity.js        in-flight operation registry behind the Syncing pill and the Status sheet
 js/protocol.js        pure protocol module (card + replies, comments, usernames, backlink, deep link, merge cursor, entities) — no DOM/TDLib
 js/repo.js            MyNode, card cache, feed sources + FeedSession, comment index, discovery, posting (localStorage state)
+js/moderation.js      PRODUCT §2.15–§2.18 / PROTOCOL §7.1: the reader's block, mute and hidden lists, the filter, the report email
 js/media.js           PRODUCT §2.11: inline players, full-screen viewer, one-audio-at-a-time, download rings
 js/graph.js           canvas radial graph
 js/public/preview.js  PUBLIC §3: t.me/s/<channel> HTML → the same Post model, text + entities only, never HTML
@@ -210,7 +211,10 @@ origin that stores the TDLib session, and `index.html` carries a
 origin.
 
 **Which shell a visitor gets is decided before TDLib boots.** `App.boot()`
-looks for `tgs.*` local state: absent on a public URL means a visitor, so the
+looks for `tgs.*` local state — every key but `tgs.moderation`, which survives
+sign-out by design and is written on the public routes too (PROTOCOL §7.1), so
+counting it would boot 14 MB of wasm at somebody who only hid one post. Absent
+on a public URL means a visitor, so the
 tab enters `publicMode` — no TDLib, no repo, no 14 MB wasm — with the tab bar
 hidden, a neutral `Public` pill, no Comment/comment counts/Follow, and the
 dismissible nag in the floating-bar slot. Present means a reader coming back to
