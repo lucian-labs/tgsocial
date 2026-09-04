@@ -40,7 +40,7 @@ import ca.lucianlabs.tgsocial.protocol.Replies
 import ca.lucianlabs.tgsocial.protocol.ReportSubject
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Sheet
-import ca.lucianlabs.tgsocial.ui.components.openLink
+import ca.lucianlabs.tgsocial.ui.components.openInTelegram
 import ca.lucianlabs.tgsocial.ui.components.openMail
 
 /**
@@ -148,7 +148,7 @@ fun ColumnScope.CommentSheet(vm: AppViewModel, comment: Comment) {
     StatusRow("From", "@${comment.authorUsername}")
     StatusRow("Channel", "@${comment.channelUsername}", isLast = true)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
-    HPButton("Open in Telegram", { openLink(context, comment.link.ifEmpty { DeepLink.channel(comment.channelUsername) }) }, style = HPButtonStyle.NEUTRAL)
+    HPButton("Open in Telegram", { openInTelegram(context, comment.link.ifEmpty { DeepLink.channel(comment.channelUsername) }) }, style = HPButtonStyle.NEUTRAL)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPSectionMark("Safety")
     Spacer(Modifier.height(HPTokens.Space.rowGap))
@@ -189,7 +189,7 @@ fun ColumnScope.DeleteNodeSheet(vm: AppViewModel) {
         val open = state.openUsername
         if (open != null) {
             // Not the owner: the answer is in Telegram, not in trying again.
-            HPButton("Open in Telegram", { openLink(context, DeepLink.channel(open)) }, style = HPButtonStyle.NEUTRAL)
+            HPButton("Open in Telegram", { openInTelegram(context, DeepLink.channel(open)) }, style = HPButtonStyle.NEUTRAL)
         } else {
             HPButton("Try Again", vm::deleteMyNode, style = HPButtonStyle.DANGER)
         }

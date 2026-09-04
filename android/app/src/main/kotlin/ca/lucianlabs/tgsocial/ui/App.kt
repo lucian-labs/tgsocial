@@ -59,7 +59,11 @@ import ca.lucianlabs.tgsocial.ui.media.PostViewer
 import ca.lucianlabs.tgsocial.ui.media.rememberTgApp
 import ca.lucianlabs.tgsocial.ui.screens.BlockSheet
 import ca.lucianlabs.tgsocial.ui.screens.CommentComposerSheet
+import ca.lucianlabs.tgsocial.ui.components.DemoPill
+import ca.lucianlabs.tgsocial.ui.components.DemoStrip
+import ca.lucianlabs.tgsocial.ui.components.DemoViewerStrip
 import ca.lucianlabs.tgsocial.ui.screens.CommentSheet
+import ca.lucianlabs.tgsocial.ui.screens.DemoSheet
 import ca.lucianlabs.tgsocial.ui.screens.ComposeSheet
 import ca.lucianlabs.tgsocial.ui.screens.DeleteCommentSheet
 import ca.lucianlabs.tgsocial.ui.screens.DeleteNodeSheet
@@ -86,7 +90,10 @@ fun TgSocialApp(vm: AppViewModel = viewModel()) {
     HousePourTheme {
         HPBackdrop {
             val auth by vm.auth.collectAsStateWithLifecycle()
-            if (auth.step != AuthStep.READY) {
+            val demo by vm.demo.collectAsStateWithLifecycle()
+            // PRODUCT §2.22 — the demo is "the rest of the app, running on an invented network". It is the
+            // same shell, so it reaches it without an authorized session behind it.
+            if (auth.step != AuthStep.READY && demo == null) {
                 SignInScreen(vm)
             } else {
                 Shell(vm)
@@ -106,6 +113,8 @@ private fun Shell(vm: AppViewModel) {
     val setupNeeded by vm.setupNeeded.collectAsStateWithLifecycle()
     val viewer by vm.viewer.collectAsStateWithLifecycle()
     val safety by vm.safety.collectAsStateWithLifecycle()
+    val demo by vm.demo.collectAsStateWithLifecycle()
+    val inDemo = demo != null
     val screen = stack.last()
     val pushed = stack.size > 1
 
@@ -154,7 +163,7 @@ private fun Shell(vm: AppViewModel) {
                     }
                     Screen.Settings -> {
                         val myNode by vm.myNode.collectAsStateWithLifecycle()
-                        ColumnList(key = screen, state = remember(screen) { LazyListState() }) { SettingsItems(vm, safety, myNode) }
+                        ColumnList(key = screen, state = remember(screen) { LazyListState() }) { SettingsItems(vm, safety, myNode, inDemo) }
                     }
                     is Screen.Thread -> {
                         // PRODUCT §2.12 — the thread refreshes its comment index when opened; pull-to-refresh re-scans.
@@ -176,14 +185,26 @@ private fun Shell(vm: AppViewModel) {
             }
         }
         if (viewer == null) {
-            HPTopbar(
+            // PRODUCT §2.22 item 2 — the strip is docked under the topbar and sticky with it, so it is measured
+            // as one block: the lists' top inset is bar + strip and the first card starts below both.
+            Column(
                 modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { topbarHeight = with(density) { it.height.toDp() } },
-                leading = {
-                    if (pushed) HPButton("‹ Back", { vm.back() }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, contentDescription = "Back")
-                    else HPWordmark(modifier = Modifier.semantics { contentDescription = "tgsocial" })
-                },
-                trailing = { StatusPill(status) { vm.openSheet(Sheet.Status) } },
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                HPTopbar(
+                    leading = {
+                        if (pushed) HPButton("‹ Back", { vm.back() }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL, contentDescription = "Back")
+                        else HPWordmark(modifier = Modifier.semantics { contentDescription = "tgsocial" })
+                    },
+                    // §2.22 item 1 — the pill reads `Demo`, in the neutral tone, and never gold: gold on that
+                    // pill means a live Telegram connection (§1). It opens the demo sheet, not the status sheet.
+                    trailing = {
+                        if (inDemo) DemoPill { vm.openSheet(Sheet.Demo) }
+                        else StatusPill(status) { vm.openSheet(Sheet.Status) }
+                    },
+                )
+                if (inDemo) DemoStrip()
+            }
         }
         if (tabsVisible || dockVisible) {
             BottomOverlay(
@@ -210,6 +231,10 @@ private fun Shell(vm: AppViewModel) {
             val hidden = !SafetyFilter.keeps(open.post, safety, mainFeed = false)
             LaunchedEffect(hidden) { if (hidden) vm.closeViewer() }
             if (!hidden) key(open.post.key) { PostViewer(vm, open) }
+            // §2.22 item 2 — the strip follows into the viewers and the carousel, the one place the topbar
+            // hides. An unmarked full-screen photo is exactly the screenshot that could be mistaken for
+            // someone's real Telegram, so it is drawn over the dark surface in the same mono small.
+            if (!hidden && inDemo) DemoViewerStrip(modifier = Modifier.align(Alignment.TopCenter))
         }
     }
 
@@ -223,6 +248,7 @@ private fun Shell(vm: AppViewModel) {
             Sheet.EditCard -> EditCardSheet(vm)
             Sheet.SignOut -> SignOutSheet(vm)
             Sheet.Status -> StatusSheet(vm)
+            Sheet.Demo -> DemoSheet(vm)
             is Sheet.CommentComposer -> CommentComposerSheet(vm)
             is Sheet.DeleteComment -> DeleteCommentSheet(vm, s.comment)
             is Sheet.PostSheet -> PostSheet(vm, s.post)

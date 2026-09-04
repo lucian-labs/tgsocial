@@ -8,7 +8,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import android.net.Uri
+import ca.lucianlabs.tgsocial.demo.DemoFiles
+import ca.lucianlabs.tgsocial.demo.DemoMedia
 import ca.lucianlabs.tgsocial.model.FileRef
+import java.io.File
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.repo.MediaRepo
 import ca.lucianlabs.tgsocial.repo.TdDataSource
@@ -65,8 +69,20 @@ class PlaybackHub(private val context: Context, private val tg: TelegramClient) 
             .setMediaSourceFactory(DefaultMediaSourceFactory(TdDataSource.Factory(tg, priority)))
             .build()
 
-    fun mediaItem(ref: FileRef, mimeType: String): MediaItem =
-        MediaItem.Builder().setUri(TdDataSource.uri(ref)).apply { if (mimeType.isNotBlank()) setMimeType(mimeType) }.build()
+    /**
+     * PRODUCT §2.22.4 — a demo fixture plays from the file the generator wrote, never through the TDLib data
+     * source. Same player, same transport, same `MediaItem`; a different URI, and no `downloadFile` behind it.
+     */
+    fun mediaItem(ref: FileRef, mimeType: String): MediaItem {
+        // `existing`, not `path`: this runs on the main thread while a player is being built, and generating
+        // an 18-second clip here would be an ANR. The surfaces below pre-warm the file before they let a tap
+        // start playback, exactly as they wait on a download.
+        val uri = if (DemoMedia.isDemo(ref)) DemoFiles.existing(ref)?.let { Uri.fromFile(File(it)) } else TdDataSource.uri(ref)
+        return MediaItem.Builder()
+            .setUri(uri ?: TdDataSource.uri(ref))
+            .apply { if (mimeType.isNotBlank()) setMimeType(mimeType) }
+            .build()
+    }
 
     private fun audioPlayer(): ExoPlayer = audio ?: newPlayer(MediaRepo.PRIORITY_TAPPED).also { p ->
         audio = p

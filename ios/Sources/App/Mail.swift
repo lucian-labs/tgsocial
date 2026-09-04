@@ -55,8 +55,12 @@ enum ReportMail {
 
     /// The body ends on a blank line so the composer's cursor lands under the prompt. The app adds
     /// nothing else — no phone number, no device id.
-    static func body(subject s: ReportSubject, reason: String, app: String) -> String {
-        let lines = [
+    ///
+    /// `prefix` is the single exception, written down in PRODUCT §2.22.2: a report sent from the
+    /// demo leads with a line saying so, because the link in it points at a channel that does not
+    /// exist and the operator would otherwise go looking for it.
+    static func body(subject s: ReportSubject, reason: String, app: String, prefix: String? = nil) -> String {
+        var lines = [
             "Reason: " + reason,
             "Link: " + s.link,
             "Channel: @" + s.channel,
@@ -65,6 +69,7 @@ enum ReportMail {
             "Kind: " + s.kind.rawValue,
             "App: " + app,
         ]
+        if let prefix, !prefix.isEmpty { lines.insert(prefix, at: 0) }
         return lines.joined(separator: "\n") + "\n\nAnything you want to add:\n\n"
     }
 

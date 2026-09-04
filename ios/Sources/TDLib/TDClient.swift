@@ -36,7 +36,24 @@ final class TDClient {
     /// manager statically makes that harmless: extra `TDClient`s share this one receive loop.
     private static let manager = TDLibClientManager()
 
-    private(set) var api: TDLibClient
+    /// Created on first access, not in `init` (PRODUCT §2.22.4: "TDLib is never created").
+    ///
+    /// Touching this is what spawns the manager's `td_receive` thread and hands TDLib a client, so
+    /// a demo session that never touches it never starts either. `AppModel` constructs its
+    /// repositories around a `TDClient` at launch — they hold this object, not a live handle — and
+    /// `start()` is the one call that lights it up.
+    private var client: TDLibClient?
+
+    var api: TDLibClient {
+        if let client { return client }
+        let made = Self.makeClient(Self.manager, updates)
+        client = made
+        return made
+    }
+
+    /// Whether a TDLib client exists at all. The Status sheet and the demo both ask.
+    var isStarted: Bool { client != nil }
+
     private let updates: AsyncStream<Update>.Continuation
     private let pump: Task<Void, Never>
 
@@ -48,7 +65,21 @@ final class TDClient {
         pump = Task { @MainActor in
             for await update in stream { onUpdate(update) }
         }
-        api = Self.makeClient(Self.manager, continuation)
+    }
+
+    /// Brings the client up. Idempotent — a second call returns the same handle.
+    func start() { _ = api }
+
+    /// Shuts the client down and forgets it, so `isStarted` is false again and the next `api` makes
+    /// a fresh one. TDLib answers with `authorizationStateClosed`, which the model routes.
+    ///
+    /// PRODUCT §2.22.4 wants no handle alive behind the fixtures: `Look Around First` is on §2.1
+    /// step 1, so nothing is in flight when it is tapped, and whatever handle the launch made is
+    /// closed before the first fixture paints.
+    func close() async {
+        guard let client else { return }
+        self.client = nil
+        _ = try? await client.close()
     }
 
     deinit { updates.finish(); pump.cancel() }
@@ -63,7 +94,7 @@ final class TDClient {
     }
 
     /// After `logOut` TDLib closes the client instance; a fresh one restarts the auth flow on the same stream.
-    func recreate() { api = Self.makeClient(Self.manager, updates) }
+    func recreate() { client = Self.makeClient(Self.manager, updates) }
 
     /// Blocking; call only from willTerminate.
     func closeClients() { Self.manager.closeClients() }

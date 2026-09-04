@@ -16,10 +16,13 @@ import dev.g000sha256.tdl.dto.ConnectionStateReady
 import dev.g000sha256.tdl.dto.ConnectionStateWaitingForNetwork
 import dev.g000sha256.tdl.dto.File
 import dev.g000sha256.tdl.dto.Message
+import dev.g000sha256.tdl.dto.NetworkTypeNone
+import dev.g000sha256.tdl.dto.NetworkTypeOther
 import dev.g000sha256.tdl.dto.UpdateFile
 import dev.g000sha256.tdl.dto.UpdateMessageSendFailed
 import dev.g000sha256.tdl.dto.UpdateMessageSendSucceeded
 import dev.g000sha256.tdl.dto.UpdateNewMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,6 +122,35 @@ class TelegramClient(private val context: Context) {
     val isOffline: Boolean get() = _connection.value is ConnectionStateWaitingForNetwork
 
     val tdlibVersion: String get() = TdlClient.TDL_VERSION
+
+    /**
+     * PRODUCT §2.22.4 — "the demo makes no request, of any kind, to anything… a property of the build rather
+     * than a discipline at each call site".
+     *
+     * iOS and web construct their TDLib handle lazily and close it on the way into the demo. Android cannot:
+     * the handle is built in `TgApp.onCreate` because the authorization state is what decides whether the
+     * first screen is sign-in or the feed, and it is that sign-in screen the demo is entered from. So the
+     * Android mechanism is this instead — TDLib is told the device has no network, which stops its own
+     * connection and every retry behind it, reversibly and without throwing an authorized session away.
+     *
+     * Suspending, and answered before the caller goes on. `setNetworkType` is handled inside TDLib with no
+     * round trip, so the wait is microseconds in practice; making it a wait at all is what stops the demo's
+     * first fixture from painting while the socket is still up. [timeoutMs] bounds a wedged client: the entry
+     * must not read as a dead button, and the demo is un-networked by substitution regardless (`DemoRepo`
+     * holds no client), so a lapsed bound loses the second belt, not the first.
+     *
+     * Deliberately not routed through [callOrNull]: this is the one request the demo itself issues, and it
+     * must not be subject to anything that might later refuse requests while the demo is open.
+     */
+    suspend fun setNetworkAvailable(available: Boolean, timeoutMs: Long = 3_000L): Boolean =
+        try {
+            withTimeoutOrNull(timeoutMs) {
+                client.setNetworkType(type = if (available) NetworkTypeOther() else NetworkTypeNone())
+            } is TdlResult.Success
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            false
+        }
 
     fun start() {
         attach()

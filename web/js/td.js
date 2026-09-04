@@ -98,6 +98,14 @@ export class Td {
     this.connectionSince = 0;
     this.lastNudge = 0;
     this.watchdog = null;
+    /**
+     * Undo for every window/document listener the watchdog and the memory
+     * watch put up. `close()` runs them, so a client's listeners live exactly
+     * as long as the client: the demo (PRODUCT §2.22) makes enter → leave a
+     * loop a reader can run any number of times, and each pass calls `init()`
+     * again — without this, five handlers accumulate per cycle, without bound.
+     */
+    this.lifecycleOff = [];
     /** Bumped by init/close; updates from a superseded client are dropped. */
     this.generation = 0;
   }
@@ -209,6 +217,36 @@ export class Td {
     return this.authState;
   }
 
+  /**
+   * PRODUCT §2.22.4 — hand the client back. `close` shuts the TDLib instance
+   * down without touching the session (that is `logOut`), the generation bump
+   * drops any update still in flight from it, and everything this object was
+   * holding on its behalf goes with it. `init()` builds a fresh one, which is
+   * what leaving the demo does before showing §2.1 again.
+   */
+  async close() {
+    const client = this.client;
+    if (!client) return;
+    this.generation += 1;
+    this.client = null;
+    this.authState = null;
+    this.connectionState = null;
+    this.tdlibVersion = null;
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
+    if (this.memoryTimer) clearInterval(this.memoryTimer);
+    this.memoryTimer = null;
+    // the timers were never the whole of it: the five window/document handlers
+    // go with them, or an enter → leave → enter loop stacks a set per pass
+    for (const off of this.lifecycleOff.splice(0)) off();
+    this.flushMedia('close');
+    try {
+      await client.close();
+    } catch (e) {
+      console.warn('[td] close', e?.message ?? e);
+    }
+  }
+
   waitAuth(predicate, timeoutMs = 60000) {
     if (predicate(this.authState)) return Promise.resolve(this.authState);
     return new Promise((resolve, reject) => {
@@ -246,9 +284,14 @@ export class Td {
   startWatchdog() {
     if (this.watchdog || typeof window === 'undefined') return;
     const nudge = () => this.nudge();
-    window.addEventListener('online', nudge);
-    document.addEventListener('visibilitychange', () => {
+    const onVisible = () => {
       if (document.visibilityState === 'visible') nudge();
+    };
+    window.addEventListener('online', nudge);
+    document.addEventListener('visibilitychange', onVisible);
+    this.lifecycleOff.push(() => {
+      window.removeEventListener('online', nudge);
+      document.removeEventListener('visibilitychange', onVisible);
     });
     this.watchdog = setInterval(() => {
       const c = this.connectionState;
@@ -618,10 +661,18 @@ export class Td {
   startMemoryWatch() {
     if (typeof window === 'undefined' || this.memoryTimer) return;
     const flush = (reason) => this.flushMedia(reason);
-    window.addEventListener('pagehide', () => flush('pagehide'));
-    document.addEventListener('freeze', () => flush('freeze'));
-    document.addEventListener('visibilitychange', () => {
+    const onPagehide = () => flush('pagehide');
+    const onFreeze = () => flush('freeze');
+    const onHidden = () => {
       if (document.visibilityState === 'hidden') this.media.trimTo(HIDDEN_KEEP);
+    };
+    window.addEventListener('pagehide', onPagehide);
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('visibilitychange', onHidden);
+    this.lifecycleOff.push(() => {
+      window.removeEventListener('pagehide', onPagehide);
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('visibilitychange', onHidden);
     });
     this.memoryTimer = setInterval(() => {
       const m = typeof performance !== 'undefined' ? performance.memory : null;

@@ -6,6 +6,9 @@
  *   - TdClient reaches authorizationStateWaitPhoneNumber within 60 s
  *   - PRODUCT §2.13's premise: real TDLib refuses chat reads before
  *     authorization (searchPublicChat → 401) while getOption answers
+ *   - PRODUCT §2.22.4: the demo, entered from a real sign-in screen with a
+ *     real TDLib client running, makes no request to any origin but the page's
+ *     own and constructs no client of its own
  *
  *   node test/smoke.mjs
  *
@@ -326,6 +329,184 @@ try {
         await p3.close();
       } else {
         notes.push(`environment: t.me not reachable through the proxy (status ${live.status}); the live public-page assertions were skipped`);
+      }
+
+      /* PRODUCT §2.22.4 — "Web asserts it end to end", and this is that end.
+       *
+       * It runs here rather than in test/flows.mjs because flows drives
+       * test/mock-tdweb.js, which makes no request whatever the demo does: a
+       * no-network assertion against a mock still passes with the property
+       * removed. This tab boots the real bundled tdweb, waits until a real
+       * TdClient has been constructed — asserted, so the counter below is
+       * known to be measuring something — and only then taps `Look Around
+       * First`. From the tap on, every request the tab makes is recorded.
+       *
+       * The visit arrives on a public link (§2.13) with an ordinary `tgs.*`
+       * leftover in local storage — the shape whose destination the demo used
+       * to spend on its way in, landing on a real channel the fixture world
+       * has never heard of, or swallowing the link quietly depending on which
+       * render got there first. §2.1 enters at Feed, the destination is parked
+       * rather than spent, and it is named on the sign-in screen again after
+       * `Leave Demo`.
+       */
+      if (hasConfig) {
+        const demoCtx = await browser.newContext();
+        const d = await demoCtx.newPage();
+        await d.addInitScript(() => {
+          // tdweb is a UMD bundle that assigns window.tdweb; this wraps its
+          // TdClient on the way in and counts constructions
+          let real;
+          window.__tdBuilds = 0;
+          Object.defineProperty(window, 'tdweb', {
+            configurable: true,
+            get: () => real,
+            set: (v) => {
+              real = v;
+              if (v && typeof v.default === 'function') {
+                const Client = v.default;
+                v.default = function (...args) {
+                  window.__tdBuilds += 1;
+                  return new Client(...args);
+                };
+                v.default.prototype = Client.prototype;
+              }
+            },
+          });
+          // window/document listeners, net of removals: §2.22 makes enter →
+          // leave a loop a reader can run any number of times
+          window.__lcount = {};
+          for (const [name, target] of [['win', window], ['doc', document]]) {
+            const add = target.addEventListener.bind(target);
+            const remove = target.removeEventListener.bind(target);
+            target.addEventListener = (type, ...rest) => {
+              window.__lcount[`${name}:${type}`] = (window.__lcount[`${name}:${type}`] ?? 0) + 1;
+              return add(type, ...rest);
+            };
+            target.removeEventListener = (type, ...rest) => {
+              window.__lcount[`${name}:${type}`] = (window.__lcount[`${name}:${type}`] ?? 0) - 1;
+              return remove(type, ...rest);
+            };
+          }
+          // §2.13's `hasLocalSession`: any leftover tgs.* key is a reader
+          // coming back to their own app, so this URL is the app, not a
+          // public page — and the sign-in screen names the destination
+          try {
+            localStorage.setItem('tgs.nagDismissed', '1');
+          } catch {}
+        });
+        let phase = 'boot';
+        d.on('console', (m) => {
+          if (m.type() === 'error') consoleErrors.push(`demo[${phase}]: ${m.text()}`);
+        });
+        d.on('pageerror', (e) => consoleErrors.push(`demo[${phase}] pageerror: ${e.message}`));
+        let watching = false;
+        const offsite = [];
+        d.on('request', (r) => {
+          const url = r.url();
+          if (!watching || url.startsWith(devBase) || url.startsWith('data:') || url.startsWith('blob:')) return;
+          offsite.push(url);
+        });
+        /**
+         * TDLib's transport is a socket, not a fetch, so `request` alone would
+         * never see it. Every socket this tab has ever opened is checked at the
+         * end of the walk: a demo that left the client running is a demo with
+         * `wss://…/apiws` still open, whatever it did or did not send down it.
+         * Which side of the tap a socket opened on is not asked, because the
+         * event arrives asynchronously and the answer would be a coin toss.
+         */
+        const sockets = [];
+        d.on('websocket', (ws) => sockets.push(ws));
+
+        try {
+          await d.goto(`${devBase}/f/tastycrow`, { waitUntil: 'load' });
+          await d.waitForFunction(
+            () => window.__tgsocial?.td?.authState?.['@type'] === 'authorizationStateWaitPhoneNumber',
+            null, { timeout: 120000 },
+          );
+          const built = await d.evaluate(() => window.__tdBuilds);
+          ok(built >= 1, `demo: a real TdClient was constructed at boot (${built}) — the count below is measuring something`);
+          ok(await d.evaluate(() => /Sign in to see @tastycrow\./.test(document.getElementById('view').innerText)),
+            '§2.13: the visit arrived on a public link and sign-in names where it was going');
+
+          watching = true;
+          phase = 'enter';
+          await d.click('#view .signin-demo button.btn:has-text("Look Around First")');
+          await d.waitForSelector('#view article.post', { timeout: 30000 });
+          const entered = await d.evaluate(() => ({
+            hash: location.hash,
+            posts: document.querySelectorAll('#view article.post').length,
+            text: document.getElementById('view').innerText.slice(0, 120),
+            pill: document.getElementById('status').textContent,
+            gold: document.getElementById('status').classList.contains('gold'),
+            strip: document.querySelector('#head .demo-strip')?.textContent ?? null,
+            noClient: window.__tgsocial.td.client === null,
+            repo: window.__tgsocial.app.repo.constructor.name,
+          }));
+          ok(entered.hash === '#/feed' && entered.posts > 0 && !/Channel not found\./.test(entered.text),
+            `§2.1: Look Around First enters at Feed, public link or not (${entered.hash}, ${entered.posts} posts)`);
+          ok(entered.pill === 'Demo' && !entered.gold && entered.strip === 'Demo. Everyone here is invented. Nothing leaves this device.',
+            `§2.22: the neutral Demo pill and the strip are up (${entered.pill}, ${entered.strip})`);
+          ok(entered.noClient && entered.repo === 'DemoRepo',
+            `§2.22.4: the TDLib handle is closed and the repo is a different object (${entered.repo})`);
+
+          // the walk §2.22.4 names: Feed, a thread, a profile, a full-screen photo
+          phase = 'walk';
+          await d.evaluate(() => { location.hash = '#/thread/demo_tidewright/144'; });
+          await d.waitForFunction(() => /COMMENTS · 5/.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+          await d.evaluate(() => { location.hash = '#/node/tgs_demo_wren'; });
+          await d.waitForFunction(() => /Wren Alderiss/.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+          await d.evaluate(() => { location.hash = '#/feed'; });
+          await d.waitForSelector('#view .post-mosaic-tile', { timeout: 20000 });
+          await d.locator('#view .post-mosaic-tile').first().click();
+          await d.waitForSelector('.viewer', { timeout: 15000 });
+          ok(await d.evaluate(() => document.querySelector('.demo-strip')?.getBoundingClientRect().height > 0),
+            '§2.22: the strip stays painted in the full-screen viewer, where the topbar hides');
+          await d.click('.viewer button.btn.ghost');
+          await d.waitForFunction(() => !document.querySelector('.viewer'), null, { timeout: 10000 });
+
+          phase = 'checks';
+          // the socket closes a fraction of a second after the tap; give a slow
+          // machine ten of them before calling it open
+          for (let i = 0; i < 40 && sockets.some((ws) => !ws.isClosed()); i += 1) await d.waitForTimeout(250);
+          const open = sockets.filter((ws) => !ws.isClosed()).map((ws) => ws.url());
+          ok(offsite.length === 0, `§2.22.4: the demo made no request to any origin but this page's own${offsite.length ? `: ${offsite.slice(0, 4).join(' | ')}` : ''}`);
+          ok(open.length === 0,
+            `§2.22.4: every socket the client had is closed while the demo runs (${sockets.length} opened${open.length ? `, still open: ${open.join(' | ')}` : ''})`);
+          ok(await d.evaluate(() => window.__tdBuilds) === built && await d.evaluate(() => window.__tgsocial.td.client === null),
+            `§2.22.4: no TDLib client was constructed while the demo ran, and the handle stayed closed (${built} in all)`);
+          watching = false;
+
+          // §2.22 — leaving, and coming back: the destination is still there,
+          // and the cycle leaves nothing behind (td.js used to leak five
+          // window/document listeners per pass)
+          const before = await d.evaluate(() => ({ ...window.__lcount }));
+          phase = 'leave';
+          await d.evaluate(() => window.__tgsocial.app.leaveDemo());
+          await d.waitForSelector('#view input[type="tel"]', { timeout: 30000 });
+          const left = await d.evaluate(() => ({
+            demo: window.__tgsocial.demo,
+            strip: !!document.querySelector('.demo-strip'),
+            names: /Sign in to see @tastycrow\./.test(document.getElementById('view').innerText),
+          }));
+          ok(left.demo === null && !left.strip && left.names,
+            '§2.22 / §2.13: Leave Demo returns to sign-in with the public link still waiting');
+          await d.waitForFunction(
+            () => window.__tgsocial?.td?.authState?.['@type'] === 'authorizationStateWaitPhoneNumber',
+            null, { timeout: 120000 },
+          );
+          phase = 'reenter';
+          await d.click('#view .signin-demo button.btn:has-text("Look Around First")');
+          await d.waitForSelector('#view article.post', { timeout: 30000 });
+          const after = await d.evaluate(() => ({ ...window.__lcount }));
+          const drift = ['win:online', 'win:pagehide', 'doc:visibilitychange', 'doc:freeze']
+            .filter((k) => (after[k] ?? 0) !== (before[k] ?? 0))
+            .map((k) => `${k} ${before[k] ?? 0}→${after[k] ?? 0}`);
+          ok(drift.length === 0, `§2.22: an enter → leave → enter cycle leaves no listener behind${drift.length ? `: ${drift.join(', ')}` : ''}`);
+        } finally {
+          await demoCtx.close();
+        }
+      } else {
+        notes.push('config.json absent: the §2.22.4 demo walk was skipped (it needs a real TDLib boot to close)');
       }
     } finally {
       proxy.kill();

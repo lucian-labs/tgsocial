@@ -7,9 +7,48 @@ import { entityRuns, formatTime, formatExactTime, compactCount, serverMessageId 
 import { userMessage } from '../repo.js';
 import { mediaBlocks, bindPicture } from '../media.js';
 import { postSubject, safetyBlock } from './safety.js';
+import { LINKS_REFUSED, NOT_ON_TELEGRAM } from '../demo/mode.js';
 
 export function openExternal(url) {
   window.open(url, '_blank', 'noopener');
+}
+
+/**
+ * PRODUCT §2.22.3 — the two refusals that are not writes, kept apart because
+ * each names a different truth. `Open in Telegram`, `Copy Link` and `Share`
+ * are about a message that is not on Telegram at all; a link, a link preview
+ * or a `t.me` link inside post text is about the demo not navigating anywhere.
+ * Nothing is greyed out and nothing is missing: every control stays where it
+ * is, stays tappable, and answers.
+ */
+export function openTelegram(app, url) {
+  if (app?.demo) {
+    app.toast(NOT_ON_TELEGRAM, 'bad');
+    return;
+  }
+  openExternal(url);
+}
+
+export function openLink(app, url) {
+  if (app?.demo) {
+    app.toast(LINKS_REFUSED, 'bad');
+    return;
+  }
+  openExternal(url);
+}
+
+/** `Copy Link` — same refusal as `Open in Telegram`, because it is the same link. */
+export async function copyLink(app, url) {
+  if (app?.demo) {
+    app.toast(NOT_ON_TELEGRAM, 'bad');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    app.toast('Link copied.', 'good');
+  } catch {
+    app.toast("Couldn't copy the link.", 'bad');
+  }
 }
 
 /**
@@ -28,7 +67,18 @@ export function renderEntities(app, text, entities, { rel = 'noopener noreferrer
     if (run.bold) node = h('b', node);
     if (run.italic) node = h('i', node);
     if (run.href) {
-      node = h('a', { href: safeHref(run.href), target: '_blank', rel, onclick: (e) => e.stopPropagation() }, node);
+      node = h('a', {
+        href: safeHref(run.href),
+        target: '_blank',
+        rel,
+        onclick: (e) => {
+          e.stopPropagation();
+          // §2.22.3 — a link in post text does not navigate out of the demo
+          if (!app.demo) return;
+          e.preventDefault();
+          app.toast(LINKS_REFUSED, 'bad');
+        },
+      }, node);
     } else if (run.mention) {
       node = h('a', {
         href: app.publicMode ? `/n/${run.mention}` : `#/node/${run.mention}`,
@@ -105,6 +155,11 @@ export function openThread(app, post, { compose = false } = {}) {
 
 /** PRODUCT §2.3 — Share: navigator.share when available, else copy the link + toast. */
 async function sharePost(app, post) {
+  // §2.22.3 — nothing here is on Telegram, so there is no link to hand over
+  if (app.demo) {
+    app.toast(NOT_ON_TELEGRAM, 'bad');
+    return;
+  }
   if (typeof navigator !== 'undefined' && navigator.share) {
     try {
       await navigator.share({ url: post.link });
@@ -129,7 +184,7 @@ async function sharePost(app, post) {
 export function openPostSheet(app, post) {
   const row = (label, value) => h('div.list-item.sheet-row', h('span.sheet-label', label), h('span.sheet-value', value));
   let m = null;
-  const open = button('Open in Telegram', { onClick: () => openExternal(post.link) });
+  const open = button('Open in Telegram', { onClick: () => openTelegram(app, post.link) });
   const close = button('Close', { style: 'ghost', onClick: () => m.close() });
   m = modal([
     sectionMark('Post'),
@@ -276,7 +331,7 @@ export function postCard(app, post, { thread = true } = {}) {
     parts.push(body);
   }
   // media renders and plays in the app (PRODUCT §2.11); taps there never leave it
-  parts.push(...mediaBlocks(app, normalisePostMedia(post), { openExternal }));
+  parts.push(...mediaBlocks(app, normalisePostMedia(post), { openExternal: (url) => openLink(app, url) }));
 
   // footer (§2.3): N reactions · N comments, Comment ghost sm — no views, no
   // Open in Telegram on the card face (both live in the post sheet now)

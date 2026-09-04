@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.FileProvider
 import ca.lucianlabs.tgsocial.audio.AudioStrip
+import ca.lucianlabs.tgsocial.demo.DemoFiles
+import ca.lucianlabs.tgsocial.demo.DemoMedia
 import ca.lucianlabs.tgsocial.model.FileRef
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import kotlinx.coroutines.Dispatchers
@@ -184,8 +186,16 @@ class MediaRepo(
         }
     }
 
-    /** The local path when the file is already complete on disk, else null. */
+    /**
+     * The local path when the file is already complete on disk, else null.
+     *
+     * PRODUCT §2.22.4 — a demo fixture is generated here instead, off the main thread and from the item key as
+     * a seed. This is the one branch the whole demo media path needs: `image`, `AudioStripRepo` and the inline
+     * players all reach bytes through this function, so a fixture takes the same code path a downloaded file
+     * takes, and `downloadFile` is never reached because a fixture never gets past this line.
+     */
     override suspend fun localPath(ref: FileRef): String? {
+        if (DemoMedia.isDemo(ref)) return withContext(Dispatchers.IO) { DemoFiles.path(ref) }
         ref.localPath?.takeIf { File(it).exists() }?.let { return it }
         state(ref)?.path?.takeIf { File(it).exists() }?.let { return it }
         val f = tg.callOrNull(10_000L) { getFile(fileId = ref.id) } ?: return null
@@ -200,6 +210,9 @@ class MediaRepo(
      */
     override suspend fun download(ref: FileRef, priority: Int, label: String, timeoutMs: Long): String? {
         localPath(ref)?.let { return it }
+        // §2.22.4 — "media cannot reach the network because fixture media has no file id". A generation that
+        // failed is not a download that can be retried: there is nothing to ask Telegram for.
+        if (DemoMedia.isDemo(ref)) return null
         return activity.track(label) {
             val started = tg.callOrNull { downloadFile(fileId = ref.id, priority = priority, offset = 0L, limit = 0L, synchronous = false) }
             if (started != null) record(started.id, started.state())

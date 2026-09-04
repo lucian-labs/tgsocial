@@ -3,16 +3,25 @@
 import SwiftUI
 
 /// The status pill is a button: tapping it opens the Status sheet (PRODUCT §1, §2.10).
+///
+/// In the demo it reads `Demo` and opens the demo sheet instead (§2.22.5). Neutral either way for
+/// everything but `Synced`, and never gold here — gold on this pill means a live Telegram
+/// connection, and the demo does not have one.
 struct StatusPill: View {
     @Environment(AppModel.self) private var model
     let status: StatusKind
+
+    private var opensDemoSheet: Bool { status == .demo }
+
     var body: some View {
-        Button { model.modal = .status } label: {
+        Button { model.modal = opensDemoSheet ? .demo : .status } label: {
             HPPill(status.label, tone: status == .synced ? .gold : .neutral)
                 .hpTouchTarget()
         }
         .buttonStyle(HPPressStyle())
-        .accessibilityLabel("Status: \(status.label). Opens the status sheet.")
+        .accessibilityLabel(opensDemoSheet
+            ? "Demo. Opens the demo sheet."
+            : "Status: \(status.label). Opens the status sheet.")
     }
 }
 
@@ -43,6 +52,8 @@ struct Screen<Content: View>: View {
             } trailing: {
                 StatusPill(status: model.status)
             }
+            // §2.22, indicator 2: sticky with the topbar, on every screen that has one.
+            if model.isDemo { DemoStrip() }
             scroll
         }
         .toolbar(.hidden, for: .navigationBar)

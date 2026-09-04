@@ -361,12 +361,16 @@ struct ViewerRequest: Equatable {
 
 enum StatusKind: Equatable {
     case synced, syncing, offline, signedOut
+    /// PRODUCT §2.22: the demo's pill. Neutral, never gold — gold on that pill means a live
+    /// Telegram connection (§1), and there is not one.
+    case demo
     var label: String {
         switch self {
         case .synced: return "Synced"
         case .syncing: return "Syncing"
         case .offline: return "Offline"
         case .signedOut: return "Signed out"
+        case .demo: return DemoCopy.pill
         }
     }
 }

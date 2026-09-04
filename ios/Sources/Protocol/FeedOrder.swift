@@ -24,3 +24,21 @@ public enum FeedOrder {
         return true
     }
 }
+
+/// Explore's NEARBY and the +1 list (PRODUCT §2.4, §2.7): most of my follows first, ties broken by
+/// username **ascending**.
+///
+/// One function because two callers rank the same list — the graph walk over live cards, and the
+/// demo's fixed world (PRODUCT §2.22.1, which writes the resulting order down). §2.22.1 spells the
+/// tie-break out "because otherwise three platforms produce three orders", and the same argument
+/// applies to two code paths inside one platform: a tuple comparison here reads as ascending and
+/// sorts descending, which is exactly the drift this is here to stop. Pure, so the demo can call it
+/// without reaching anything that imports TDLib.
+public enum NearbyOrder {
+    public static func ranked(_ counts: [String: Int]) -> [String] {
+        counts.keys.sorted { a, b in
+            let (ca, cb) = (counts[a] ?? 0, counts[b] ?? 0)
+            return ca != cb ? ca > cb : a < b
+        }
+    }
+}

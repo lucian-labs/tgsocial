@@ -26,7 +26,7 @@
 import { h, button, field, modal, confirm, pill, replace, sectionMark } from '../../vendor/house-pour.js';
 import { normaliseUsername, isFollowing, formatExactTime, formatTime } from '../protocol.js';
 import { userMessage } from '../repo.js';
-import { attachSheet, avatarFor, renderEntities, openExternal } from './shared.js';
+import { attachSheet, avatarFor, renderEntities, openLink, openTelegram } from './shared.js';
 import { commentSubject, safetyBlock } from './safety.js';
 import { mediaBlocks, releaseMedia } from '../media.js';
 
@@ -50,7 +50,7 @@ export function openCommentSheet(app, comment, { onDelete = null } = {}) {
       row('Channel', `@${comment.channel}`),
     ),
     ...safetyBlock(app, commentSubject(comment), { close: () => m.close(), onDelete }),
-    button('Open in Telegram', { onClick: () => openExternal(comment.link) }),
+    button('Open in Telegram', { onClick: () => openTelegram(app, comment.link) }),
     button('Close', { style: 'ghost', onClick: () => m.close() }),
   ], { label: 'Comment' });
   return m;
@@ -219,7 +219,7 @@ export function commentsPanel(app, post) {
       header.append(pill('+1'));
     }
     if (comment.text) parts.push(h('div.post-body', renderEntities(app, comment.text, comment.entities)));
-    if (comment.media) parts.push(...mediaBlocks(app, comment, { openExternal }));
+    if (comment.media) parts.push(...mediaBlocks(app, comment, { openExternal: (url) => openLink(app, url) }));
 
     const meta = h('div.comment-meta');
     if (comment.pending) {

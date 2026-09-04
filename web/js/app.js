@@ -28,6 +28,8 @@ import { audioRowStats, closeViewer, currentAudio, useHost, watchMedia } from '.
 import { stripStats } from './strip.js';
 import { PublicSource } from './public/source.js';
 import { openStatusSheet } from './views/status.js';
+import { DemoRepo } from './demo/repo.js';
+import { LEFT_TOAST, PILL_TEXT, demoSafetyLists, demoStrip, openDemoSheet } from './demo/mode.js';
 import * as publicView from './views/public.js';
 import * as signin from './views/signin.js';
 import * as setup from './views/setup.js';
@@ -124,6 +126,21 @@ class App {
     this.pendingDest = null;
     /** True while this tab is a public page: no TDLib, no repo, no tab bar (§2.13). */
     this.publicMode = false;
+    /**
+     * PRODUCT §2.22 — true while the demo is open. It is not a flag the data
+     * layer consults: `repo` and `safety` have been SUBSTITUTED by then, and
+     * this is only what the shell reads to paint the pill, the strip and the
+     * three refusals (§2.22.3).
+     */
+    this.demo = false;
+    /** True from the tap until the demo is open — the re-entry guard spans an await (enterDemo). */
+    this.demoEntering = false;
+    /** The real repo and lists, parked while the demo holds their place. */
+    this.realRepo = null;
+    this.realSafety = null;
+    /** §2.13's destination, parked with them: the demo enters at Feed, it does not spend the link. */
+    this.demoDest = null;
+    this.strip = null;
     /** The preview reader behind the public pages (js/public/source.js). */
     this.source = null;
     /** The dismissible nag docked in the floating-bar slot on a public page. */
@@ -139,6 +156,7 @@ class App {
     this.td.activity = this.activity;
     this.els = {
       app: document.getElementById('app'),
+      head: document.getElementById('head'),
       lead: document.getElementById('topbar-lead'),
       status: document.getElementById('status'),
       dock: document.getElementById('dock'),
@@ -150,7 +168,10 @@ class App {
     // the pill is a button signed in (§2.10); on a public page it is a neutral
     // label — there is no session to report on
     this.els.status.addEventListener('click', () => {
-      if (!this.publicMode) openStatusSheet(this);
+      // §2.22: in the demo the pill is a button like the one it replaces, and
+      // it opens the demo sheet instead of the status sheet (§2.10)
+      if (this.demo) openDemoSheet(this);
+      else if (!this.publicMode) openStatusSheet(this);
     });
     this.toast = (message, tone, opts) => {
       if (tone === 'bad') this.lastError = { text: message, at: Date.now() };
@@ -180,6 +201,9 @@ class App {
    * after 30 s regardless (js/activity.js).
    */
   status() {
+    // §2.22: `Demo`, in the neutral pill and never gold — gold on this pill
+    // means a live Telegram connection (§1), and there is none.
+    if (this.demo) return PILL_TEXT;
     // §2.13: a public page carries a neutral `Public` pill — never gold, never
     // a status, because there is no session behind it.
     if (this.publicMode) return 'Public';
@@ -206,7 +230,8 @@ class App {
     const s = this.status();
     el.textContent = s;
     el.classList.toggle('gold', s === 'Synced');
-    el.setAttribute('aria-label', this.publicMode ? 'Public page' : 'Status. Opens the status sheet');
+    if (this.demo) el.setAttribute('aria-label', 'Demo. Opens the demo sheet');
+    else el.setAttribute('aria-label', this.publicMode ? 'Public page' : 'Status. Opens the status sheet');
     el.toggleAttribute('aria-disabled', this.publicMode);
   }
 
@@ -486,7 +511,7 @@ class App {
       return;
     }
 
-    if (!this.td.isReady) {
+    if (!this.demo && !this.td.isReady) {
       // Cold start with a known node: TDLib is still booting but we were signed in last time.
       // Paint the cached feed behind a Syncing pill instead of flashing the sign-in screen (PRODUCT §4).
       const booting = !this.td.authState || this.td.authState['@type'] === 'authorizationStateWaitTdlibParameters';
@@ -615,6 +640,102 @@ class App {
     window.scrollTo(0, 0);
   }
 
+  // ── the demo (PRODUCT §2.22) ─────────────────────────────────────────────
+
+  /**
+   * §2.22.4's first guarantee, in order: the TDLib handle is CLOSED before the
+   * first fixture paints, and only then are the repo and the safety lists
+   * substituted. From here the app reaches its data through an object that
+   * holds no reference to a client — there is no branch to miss, because
+   * there is no code path to Telegram left to branch on.
+   */
+  async enterDemo() {
+    // The guard has to be armed BEFORE the await, because `close()` is the
+    // window a second tap arrives in: two calls would both pass a guard that
+    // only reads `demo`, and the slower one would park the first one's
+    // DemoRepo as `realRepo` — so `Leave Demo` would hand the app back the
+    // fixtures with none of §2.22's three indicators on them, which is the
+    // exact state those indicators exist to prevent.
+    if (this.demo || this.demoEntering || this.publicMode) return;
+    this.demoEntering = true;
+    try {
+      // §2.13's destination is parked rather than spent, and parked BEFORE the
+      // await: `close()` flushes the media cache, which repaints, and any
+      // render while the demo is opening would spend the link — either landing
+      // the demo on a real channel the fixture world has never heard of, or
+      // eating the destination on the way past. `Look Around First` enters at
+      // Feed (§2.1), and the link is waiting again after `Leave Demo`.
+      this.demoDest = this.pendingDest;
+      this.pendingDest = null;
+      await this.td.close();
+      this.realRepo = this.repo;
+      this.realSafety = this.safety;
+      // PROTOCOL §7.1 — a demo record, in memory, `userId: null`. The stored one
+      // is not loaded, and this one is never stored.
+      this.safety = demoSafetyLists(() => this.onSafetyChange());
+      this.repo = new DemoRepo(this.safety);
+      this.demo = true;
+      this.nodeLookupDone = true;
+      this.feedDirty = false;
+      this.lastError = null;
+      this.currentView = null;
+      document.body.setAttribute('data-demo', '');
+      if (!this.strip) {
+        this.strip = demoStrip();
+        this.els.head.append(this.strip);
+      }
+      this.navigate('#/feed', { replace: true });
+    } finally {
+      this.demoEntering = false;
+    }
+  }
+
+  /**
+   * §2.22 — leaving. The object is dropped, the lists go with it, and §2.1
+   * comes back with the phone field empty. There is no cleanup step to get
+   * wrong because there is nothing on disk to clean up (§2.22.5), and a fresh
+   * TDLib handle is started for the sign-in that follows.
+   */
+  leaveDemo(message = LEFT_TOAST, tone) {
+    if (!this.demo) return;
+    closeViewer();
+    for (const fn of this.leaveFns.splice(0)) {
+      try {
+        fn();
+      } catch (e) {
+        console.warn('[app] leave', e);
+      }
+    }
+    this.repo.destroy();
+    this.demo = false;
+    this.repo = this.realRepo;
+    this.safety = this.realSafety;
+    this.realRepo = null;
+    this.realSafety = null;
+    // the public link comes back with them: §2.1 names it again, and the
+    // sign-in that follows still lands where the visit was going (§2.13)
+    this.pendingDest = this.demoDest;
+    this.demoDest = null;
+    document.body.removeAttribute('data-demo');
+    this.strip?.remove();
+    this.strip = null;
+    this.currentView = null;
+    this.nodeLookupDone = false;
+    history.replaceState(null, '', location.pathname + location.search);
+    this.render();
+    if (message) this.toast(message, tone);
+    if (this.config && Td.available()) {
+      this.td.init(this.config).catch((e) => {
+        // re-entering the demo closes the handle this init is still building
+        // (§2.22.4); that failure is the demo working, and a fatal card over
+        // the fixtures is the one screen §2.22's indicators cannot explain
+        if (this.demo || this.demoEntering) return;
+        this.fatal = h('div.card', h('h2', "TDLib didn't start."), h('p.muted', e.message));
+        this.render();
+      });
+    }
+  }
+
   // ── sign out ─────────────────────────────────────────────────────────────
 
   async signOut() {
@@ -714,6 +835,9 @@ class App {
     try {
       await this.td.init(this.config);
     } catch (e) {
+      // §2.1 shows `Look Around First` while TDLib is still starting, and
+      // entering the demo closes the handle out from under this call (§2.22.4)
+      if (this.demo || this.demoEntering) return;
       this.fatal = h('div.card', h('h2', "TDLib didn't start."), h('p.muted', e.message));
       this.render();
     }
@@ -750,6 +874,8 @@ window.__tgsocial = {
   get repo() { return app.repo; },
   /** PRODUCT §2.15–§2.18's lists (test/flows.mjs asserts against them). */
   get safety() { return app.safety; },
+  /** PRODUCT §2.22 — whether the demo is open, and its world (test/flows.mjs). */
+  get demo() { return app.demo ? { world: app.repo.world, stats: app.repo.demoStats() } : null; },
   /** The public reader (PUBLIC.md), or null when this tab is the signed-in app. */
   get source() { return app.source; },
   currentAudio,

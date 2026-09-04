@@ -138,6 +138,11 @@ struct FeedsCard: View {
         let isOn = Binding<Bool>(
             get: { selected.contains(key) },
             set: { on in
+                // §2.22.3 names the feed toggles in the disabled list: the row stays, the control
+                // stays tappable, and it answers instead of moving. The refusal is here rather than
+                // in `saveFeeds` because the flip itself writes nothing — waiting for `Save Feeds`
+                // would let the demo look like it took the change.
+                if model.refuseDemoWrite() { return }
                 guard let username = c.username else { return }
                 if on {
                     selected.insert(key)

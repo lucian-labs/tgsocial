@@ -368,6 +368,14 @@ Per platform:
 | Android | The `tgsocial` Preferences DataStore, key `moderation`, holding the JSON. `LocalStore.clear()` clears every other key. |
 | Web | `localStorage["tgs.moderation"]`, excluded from the sign-out loop over `LS` and from the versioned-cache path. |
 
+**The demo has no user id, and no home.** `PRODUCT §2.22` runs the app on
+invented fixtures with no Telegram session behind it, and block, mute and
+report work there in full. That state is a record of this shape held **in
+memory**, with `userId: null`, and a `userId: null` record MUST NOT be written
+to any of the three homes above. The reverse holds too: a demo session MUST NOT
+load the stored record. A demo block is not the reader's judgement about a real
+person, and a real block list is not a demo's to show.
+
 **Nothing here is published.** The lists are never written to the card, never
 sent to Telegram (a tgsocial block is not a Telegram block), and never leave
 the device by any route. No other client can read them, and the blocked node

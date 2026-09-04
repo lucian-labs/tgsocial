@@ -41,18 +41,29 @@ function fullFile(slim) {
 }
 
 /**
- * A file that already has its bytes at a URL: everything on a public page
- * (PUBLIC.md §3 — Telegram serves the preview's media straight off its CDN),
- * where a signed-in file is a TDLib id we have to download first. The URL was
- * scheme-checked in the parser, so only http/https ever reaches here.
+ * A file whose bytes are already somewhere this page can read, as opposed to a
+ * TDLib id we have to download first:
+ *   - a public page's preview file (PUBLIC.md §3 — Telegram serves the
+ *     preview's media straight off its CDN), scheme-checked in the parser, so
+ *     only http/https ever reaches here;
+ *   - the demo's generated media (PRODUCT §2.22.1), produced in this page and
+ *     handed over as a data: or blob: URL.
  *
  * This is the single seam that lets §2.3's post card, §2.11's players and the
- * full-screen viewer render a preview post and a TDLib post with one set of
- * code: everything below asks for a URL, and this answers immediately when
- * there is nothing to download.
+ * full-screen viewer render a preview post, a demo post and a TDLib post with
+ * one set of code: everything below asks for a URL, and this answers without
+ * a download when there is nothing to download.
+ *
+ * It may answer a PROMISE of one. The demo's video and animation are
+ * procedural frame sources recorded off a canvas in real time (§2.22.1), so
+ * they are not a string yet when the card is built; every caller below already
+ * had to await a download, so awaiting this costs nothing.
  */
 function directUrl(slim) {
-  return typeof slim?.url === 'string' && slim.url ? slim.url : null;
+  const url = slim?.url;
+  if (typeof url === 'string' && url) return url;
+  if (url && typeof url.then === 'function') return url;
+  return null;
 }
 
 const DOWNLOAD_LABELS = {
@@ -262,8 +273,9 @@ export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto 
   // decode budget — paint it and we are done
   const direct = directUrl(slim);
   if (direct) {
-    onUrl(direct);
-    return { start: () => {}, reload: () => onUrl(direct) };
+    const paint = () => Promise.resolve(direct).then(onUrl).catch(() => null);
+    paint();
+    return { start: () => {}, reload: paint };
   }
   if (!slim?.id) return { start: () => {} };
   const file = fullFile(slim);
@@ -348,7 +360,7 @@ export function autoLoad(app, container, slim, { kind, mime = null, onUrl, auto 
  */
 function bytesFor(app, slim, kind, mime, priority) {
   const direct = directUrl(slim);
-  if (direct) return fetch(direct).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`Fetch ${r.status}`))));
+  if (direct) return Promise.resolve(direct).then((u) => fetch(u)).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`Fetch ${r.status}`))));
   if (!slim?.id) return Promise.reject(new Error('File is empty.'));
   return app.td
     .fileBlobOrThrow(fullFile(slim), { priority, label: labelFor(kind), mime })
@@ -1155,7 +1167,7 @@ function documentBlock(app, post, item) {
     const prog = ring({ onCancel: () => app.td.cancel(item.file?.id) });
     if (!direct) action.replaceWith(prog);
     try {
-      const url = direct || await app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime, onProgress: (f) => prog.set(f) });
+      const url = await (direct || app.td.fileUrlOrThrow(fullFile(item.file), { priority: 32, label: labelFor('document'), mime: item.mime, onProgress: (f) => prog.set(f) }));
       triggerDownload(url, item.fileName);
     } catch (err) {
       if (!err?.cancelled) app.toast("Couldn't download this file.", 'bad');

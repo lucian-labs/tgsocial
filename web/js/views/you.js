@@ -41,10 +41,18 @@ export function render(app) {
 
   // neutral in both states: Compose is the one gold action on this screen (PRODUCT §2.8)
   const listedPill = pill(card.public === false ? 'Unlisted' : 'Listed');
-  const announce = button('Announce in Directory', { size: 'sm', disabled: card.public === false });
+  /**
+   * §2.8 greys Announce out while the card is unlisted — there is nothing to
+   * announce. §2.22.3 overrides that in the demo, where the reader's card is
+   * `public: no` for good (§2.22.1): the gate would be permanently shut, and
+   * this would be the one write control that never says
+   * `The demo doesn't write to Telegram.` It stays tappable and answers.
+   */
+  const announceOff = (listed) => !listed && !app.demo;
+  const announce = button('Announce in Directory', { size: 'sm', disabled: announceOff(card.public !== false) });
   const paintListing = (on) => {
     listedPill.textContent = on ? 'Listed' : 'Unlisted';
-    announce.disabled = !on;
+    announce.disabled = announceOff(on);
   };
   const listingToggle = toggle(card.public !== false, async (next) => {
     paintListing(next);
@@ -65,7 +73,7 @@ export function render(app) {
     } catch (e) {
       app.toast(e.message, 'bad');
     } finally {
-      announce.disabled = app.repo.myCard?.public === false;
+      announce.disabled = announceOff(app.repo.myCard?.public !== false);
     }
   });
   const listing = h('div.card',

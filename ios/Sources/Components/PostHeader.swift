@@ -69,14 +69,20 @@ struct PostHeader<Avatar: View>: View {
     let channel: String?
     let date: Int
     let shareURL: URL?
+    /// PRODUCT §2.22.3: in the demo `Share` stays where it is, stays tappable, and answers rather
+    /// than presenting a share sheet — a system sheet would put an invented `t.me` link into
+    /// someone's messages. Non-nil replaces the `ShareLink` with a button that runs this.
+    let onShareRefused: (() -> Void)?
     let onOpenName: () -> Void
     let onOpenChannel: () -> Void
     let avatar: Avatar
 
     init(name: String, channel: String?, date: Int, shareURL: URL?,
+         onShareRefused: (() -> Void)? = nil,
          onOpenName: @escaping () -> Void, onOpenChannel: @escaping () -> Void,
          @ViewBuilder avatar: () -> Avatar) {
         self.name = name; self.channel = channel; self.date = date; self.shareURL = shareURL
+        self.onShareRefused = onShareRefused
         self.onOpenName = onOpenName; self.onOpenChannel = onOpenChannel; self.avatar = avatar()
     }
 
@@ -137,17 +143,25 @@ struct PostHeader<Avatar: View>: View {
     /// Share — ghost small button right of the time (§2.3): the system share sheet with the post's
     /// t.me link. Its own padding keeps it under the avatar's height, so it never sets the row.
     @ViewBuilder private var shareButton: some View {
-        if let shareURL {
-            ShareLink(item: shareURL) {
-                Text("Share")
-                    .hpStyle(HPType.buttonSm, color: HPTokens.Colors.muted)
-                    .lineLimit(1)
-                    .padding(.vertical, HPTokens.Space.buttonSmY)
-                    .padding(.horizontal, HPTokens.Space.buttonSmX)
-                    .hpTouchOverlay(label: PostCardRegion.share)
-            }
-            .buttonStyle(HPPressStyle())
-            .accessibilityLabel("Share")
+        // Same painted control and the same hit region either way, so `PostHeaderHitRegionTests`
+        // measures one shape and §2.22.3's "nothing greyed out, nothing hidden" holds literally.
+        if let onShareRefused {
+            Button(action: onShareRefused) { shareLabel }
+                .buttonStyle(HPPressStyle())
+                .accessibilityLabel("Share")
+        } else if let shareURL {
+            ShareLink(item: shareURL) { shareLabel }
+                .buttonStyle(HPPressStyle())
+                .accessibilityLabel("Share")
         }
+    }
+
+    private var shareLabel: some View {
+        Text("Share")
+            .hpStyle(HPType.buttonSm, color: HPTokens.Colors.muted)
+            .lineLimit(1)
+            .padding(.vertical, HPTokens.Space.buttonSmY)
+            .padding(.horizontal, HPTokens.Space.buttonSmX)
+            .hpTouchOverlay(label: PostCardRegion.share)
     }
 }

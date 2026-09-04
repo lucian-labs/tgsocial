@@ -30,7 +30,7 @@ struct YouScreen: View {
                 } else {
                     HPListCard {
                         ForEach(Array(feeds.enumerated()), id: \.element) { i, f in
-                            let info = model.nodes.cachedFeed(f)
+                            let info = model.feedInfo(f)
                             FeedRow(feed: info, username: f, verified: info?.isVerified(for: node.username) ?? false, isLast: i == feeds.count - 1) {
                                 model.modal = .compose(feed: f)
                             }

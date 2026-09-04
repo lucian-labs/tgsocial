@@ -2,14 +2,14 @@
 
 What tgsocial does not do yet. This is a roadmap, not a disclaimer — each item
 is work that has to land before a public release, and the order is roughly the
-order it will be built. The last section is the exception: two store
-declarations that were filed wrong and are now settled, kept here rather than
-dropped because a declaration that was wrong once is worth being able to find.
+order it will be built. The last two sections are the exception: things that
+were open and are now settled, kept rather than dropped because a gap that was
+real once is worth being able to find.
 
-## Moderation and safety
+## Moderation and safety — shipped
 
-Specified, not yet built. `PRODUCT §2.15`–`§2.20` and `PROTOCOL §7.1` settle the
-design; the three clients implement it:
+Built on all three clients. `PRODUCT §2.15`–`§2.20` and `PROTOCOL §7.1` are the
+design; this is what the reader has:
 
 - **Report** on every post and comment, opening an email to
   elijah@lucianlabs.ca with a 24-hour response commitment (`PRODUCT §2.15`).
@@ -22,16 +22,19 @@ design; the three clients implement it:
 The network has no server (`PROTOCOL §1`), so all of it is local state plus an
 email the reader's own mail client sends. The lists are never published.
 
-Until this ships, nothing the app displays is filtered, and the store listing
-says so: the age rating in `docs/STORE_LISTING.md` follows from this section
-being open.
+What this does **not** do is filter what arrives. Nothing is screened on the way
+in, and there is no editorial layer — these are the reader's own tools, applied
+after the fact, to a feed of channels they chose. That distinction is what the
+age rating in `docs/STORE_LISTING.md` turns on, and a tier below 16+ would need
+the first kind of filtering to exist, which is not planned.
 
-## Account deletion
+## Account deletion — shipped
 
-Specified in `PRODUCT §2.21` and `PROTOCOL §4.11`, not yet built: Settings →
-`Delete My Node` deletes the node channel and the comments channel through
-TDLib, behind a type-the-username confirm, and lands the app back at Setup,
-signed in and nodeless.
+Settings → `Delete My Node` deletes the comments channel and then the node
+channel through TDLib, behind a type-the-username confirm, and lands the app
+back at Setup, signed in and nodeless (`PRODUCT §2.21`, `PROTOCOL §4.11`). The
+comments channel goes first on purpose: the other order can strand a public
+comments channel backlinking to a node that no longer exists.
 
 ## iPad
 

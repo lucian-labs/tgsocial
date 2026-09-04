@@ -56,6 +56,7 @@ import ca.lucianlabs.tgsocial.ui.components.EmptyCard
 import ca.lucianlabs.tgsocial.ui.components.FeedRow
 import ca.lucianlabs.tgsocial.ui.components.FooterNote
 import ca.lucianlabs.tgsocial.ui.components.copyToClipboard
+import ca.lucianlabs.tgsocial.ui.components.openInTelegram
 import ca.lucianlabs.tgsocial.ui.components.openLink
 import ca.lucianlabs.tgsocial.ui.components.publicOrigin
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
@@ -107,12 +108,14 @@ fun LazyListScope.ProfileItems(vm: AppViewModel, p: ProfileUi, me: NodeSnapshot?
                         val blockable = !vm.isMe(snap.username)
                         HPMenuItem("Open in Telegram", {
                             menuOpen = false
-                            openLink(context, DeepLink.channel(snap.username))
+                            openInTelegram(context, DeepLink.channel(snap.username))
                         })
                         HPMenuItem("Copy Link", {
                             menuOpen = false
-                            copyToClipboard(context, PublicLink.node(snap.username, publicOrigin))
-                            vm.toast.show("Link copied.", HPToastTone.GOOD)
+                            // PRODUCT §2.22.3 — the demo refuses with its own line; only a real copy is confirmed.
+                            if (copyToClipboard(context, PublicLink.node(snap.username, publicOrigin))) {
+                                vm.toast.show("Link copied.", HPToastTone.GOOD)
+                            }
                         }, isLast = !blockable)
                         if (blockable) {
                             HPMenuItem("Block @${snap.username}", {

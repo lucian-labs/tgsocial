@@ -29,7 +29,7 @@ struct PostCard: View {
             // Media (PRODUCT §2.11): everything opens or plays inside the app.
             PostMediaList(ownerId: post.id, media: post.media, caption: post.text.plain,
                           post: post,
-                          onOpenExternal: { model.open(post.deepLink) })
+                          onOpenExternal: { model.openInTelegram(post.deepLink) })
 
             footer
         }
@@ -64,6 +64,7 @@ struct PostCard: View {
                    channel: post.authorUsername == nil ? nil : post.sourceTitle,
                    date: post.date,
                    shareURL: DeepLink.url(post.deepLink),
+                   onShareRefused: model.isDemo ? { model.refuseShareInDemo() } : nil,
                    onOpenName: { openHeader() },
                    onOpenChannel: { onOpenFeed(post.sourceUsername) }) {
             NodeAvatar(photo: headerPhoto, size: HPTokens.Space.avatarRow, initial: headerInitial)
@@ -199,7 +200,7 @@ struct PostSheetModal: View {
             row("Feed", "\(post.sourceTitle) \u{00B7} @\(post.sourceUsername)", isLast: true)
             HPButton("Open in Telegram", style: .neutral) {
                 model.modal = nil
-                model.open(post.deepLink)
+                model.openInTelegram(post.deepLink)
             }
             .padding(.top, HPTokens.Space.rowPad)
             SafetyBlock(primary: (subject.buttonLabel, true, { model.modal = .report(subject) }),

@@ -21,8 +21,15 @@ struct SettingsScreen: View {
             hidden
             contact
 
-            HPButton("Sign Out", style: .danger) { model.modal = .signOut }
-                .padding(.top, HPTokens.Space.rowGap)
+            // §2.22.3: `Sign Out` is not in the demo at all — there is no session to leave.
+            // `( Leave Demo )` is neutral and sits exactly where it sat, above the danger button.
+            if model.isDemo {
+                HPButton(DemoCopy.leaveButton, style: .neutral) { model.leaveDemo() }
+                    .padding(.top, HPTokens.Space.rowGap)
+            } else {
+                HPButton("Sign Out", style: .danger) { model.modal = .signOut }
+                    .padding(.top, HPTokens.Space.rowGap)
+            }
             if model.myNode != nil {
                 HPButton("Delete My Node", style: .danger) { model.modal = .deleteNode }
                     .padding(.top, HPTokens.Space.rowGap)
@@ -40,7 +47,7 @@ struct SettingsScreen: View {
         } else {
             HPListCard {
                 ForEach(Array(list.enumerated()), id: \.element) { i, username in
-                    let node = model.nodes.cachedNode(username)
+                    let node = model.node(username)
                     HPListItem(isLast: i == list.count - 1) {
                         Button { model.path.append(.profile(username: username)) } label: {
                             HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
@@ -74,7 +81,7 @@ struct SettingsScreen: View {
         } else {
             HPListCard {
                 ForEach(Array(list.enumerated()), id: \.element) { i, username in
-                    let feed = model.nodes.cachedFeed(username)
+                    let feed = model.feedInfo(username)
                     let title = feed?.title ?? "@" + username
                     HPListItem(isLast: i == list.count - 1) {
                         Button { model.path.append(.feedChannel(username: username)) } label: {
@@ -127,7 +134,7 @@ struct SettingsScreen: View {
         let parts = item.key.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
         let channel = String(parts.first ?? "")
         let id = parts.count > 1 ? String(parts[1]) : ""
-        let title = model.nodes.cachedFeed(channel)?.title ?? "@" + channel
+        let title = model.feedInfo(channel)?.title ?? "@" + channel
         return id.isEmpty ? title : "\(title) \u{00B7} \(id)"
     }
 
@@ -220,7 +227,7 @@ struct DeleteNodeModal: View {
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButton("Open in Telegram", style: .neutral) {
                 model.modal = nil
-                model.open(DeepLink.chat(username: name))
+                model.openInTelegram(DeepLink.chat(username: name))
             }
             HPButton("Close", style: .ghost) { model.modal = nil }
                 .padding(.top, HPTokens.Space.rowGap)

@@ -97,6 +97,14 @@ follow + rollback), feed channel, graph, you (edit card, listing, announce,
 compose), sign-out wipe, cold-start cache, the FLOOD_WAIT toast, and the
 Offline pill.
 
+It also covers the **demo** (§2.22): the entry on step 1 and its absence on
+step 2, the closed TDLib handle, the three persistent indicators (including the
+strip surviving into the full-screen viewer), the fifteen posts on every rung
+of §2.3's time ladder, the media matrix, the demo sheet's four rows, the three
+refusals in their own words, block and mute changing the counts §2.22.2 names,
+the report email's one added line, `Leave Demo` leaving nothing on disk, and
+`Delete My Node` running §2.21 to the end and then ending the demo.
+
 It also covers the **public pages** (§2.13) end to end against the saved
 previews in `test/fixtures/`: the parser (posts, ids, `<time datetime>`,
 views, media kinds, the card, the backlink, `?before=`), a signed-out visit
@@ -134,6 +142,10 @@ js/public/preview.js  PUBLIC §3: t.me/s/<channel> HTML → the same Post model,
 js/public/source.js   PUBLIC §1: the client for /tg/s/, with the proxy's own 60 s cache
 js/public/feed.js     PUBLIC §4: the public feed — FeedSession with the reader seams overridden
 js/public/resolve.js  PUBLIC §4: /u/<name> → node (directly or by backlink); public: no is refused
+js/demo/world.js      PRODUCT §2.22.1: the fixture world — 15 nodes, 6 feeds, 15 posts, 11 comments, times as offsets
+js/demo/media.js      §2.22.1: plates, the synthesised clip, the waveform bytes, the PDF and the procedural video — generated, never bundled
+js/demo/repo.js       §2.22.4: DemoRepo — the substituted data layer, and DemoFeedSession over the app's own merge
+js/demo/mode.js       §2.22: the copy (verbatim, shared with iOS and Android), the strip, the demo sheet, the in-memory safety record
 js/views/*.js         one module per screen + shared composites (views/public.js is the three public screens)
 nginx-public.conf     the /tg/s/ proxy for whoever hosts this — an include, applied by hand once
 scripts/dev-proxy.mjs the same proxy + SPA fallback for local runs (node built-ins only)
@@ -262,6 +274,51 @@ moves the three header links and leaves post links exactly where they are.
 Reading is not affected either way: `parsePublicPath` accepts a `/u/ /f/ /n/`
 path on any host, so links copied out of somebody else's deployment still open
 here.
+
+## The demo (PRODUCT §2.22)
+
+Sign-in needs a phone number and a code, so anyone who has neither — an App
+Store reviewer, or a person deciding whether to hand over their number — would
+see one screen and a form. `Look Around First`, on §2.1 **step 1 only**, is the
+rest of the app running on an invented network.
+
+**It is visible, not hidden**, and this repository is why: a review-only
+credential typed into the phone field would be a credential printed in the
+source. It is also the only route to `Delete My Node` (§2.21) that needs no
+account, which is what Guideline 5.1.1(v) asks for.
+
+**The demo is a different object, not a mode.** Entering it closes the TDLib
+handle (`Td.close()`) and substitutes `app.repo` with `DemoRepo` and
+`app.safety` with an in-memory record whose `userId` is `null` (PROTOCOL §7.1's
+demo paragraph — it is never written to `tgs.moderation` and never loaded from
+it). A boolean checked at each call site has branches that can be missed; a
+substituted object has no code path to Telegram to miss. `app.demo` exists, but
+only the shell reads it, for the pill, the strip and §2.22.3's three refusals.
+
+Two things are deliberately the app's own code rather than a second
+implementation: `DemoFeedSession` extends `FeedSession` and overrides only its
+four reader seams, exactly as `js/public/feed.js` does, so the k-way merge and
+§2.18's filter are the signed-in feed's; and the comment index, tree and count
+are `Repo`'s own methods, borrowed, so §2.12's depth-5 flattening and the
+`5 comments` footer come out of the code a real session runs.
+
+**Nothing is bundled and nothing is fetched.** Photos are seeded gradient
+plates carrying their own fixture key, drawn to a canvas and handed over as
+`data:` URIs; the 3:42 clip is synthesised as a WAV at the spectrogram strip's
+own decimated rate; the voice note ships Telegram-shaped waveform bytes; the
+document is a one-page PDF written out in `js/demo/media.js`. The video and the
+2 s loop are the one place the web needs a seam of its own: a browser will only
+seek a clip it has been given as a file, and the only way to turn drawn frames
+into one is MediaRecorder over a captured canvas, which records in real time.
+So those two answer a **promise** of a URL, `directUrl()` in `js/media.js`
+takes either, and they are started when the demo opens. A build with no
+MediaRecorder rejects and the blocks keep their posters.
+
+Two tests hold the guarantees. `test/protocol.test.mjs` walks the demo's whole
+import closure and fails the build if anything in it can reach `js/td.js`;
+`test/flows.mjs` enters the demo and asserts, among the rest, that the tab made
+no request to any origin but its own and that `window.__tgsocial.td.client` is
+null.
 
 ## vendor/tdweb provenance
 

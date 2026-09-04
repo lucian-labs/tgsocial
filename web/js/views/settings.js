@@ -11,7 +11,8 @@ import { h, button, confirm, field, modal, replace, sectionMark } from '../../ve
 import { CONTACT_ADDRESS } from '../moderation.js';
 import { channelLink } from '../protocol.js';
 import { userMessage } from '../repo.js';
-import { avatarFor, openExternal } from './shared.js';
+import { DELETED_TOAST, LEAVE_LABEL } from '../demo/mode.js';
+import { avatarFor, openTelegram } from './shared.js';
 import { unblock } from './safety.js';
 
 export function render(app) {
@@ -142,8 +143,15 @@ export function render(app) {
   return root;
 }
 
-/** §4 — Sign Out moved here from You (§2.8) and kept its confirm word for word. */
+/**
+ * §4 — Sign Out moved here from You (§2.8) and kept its confirm word for word.
+ *
+ * §2.22.3 — `Sign Out` is not in the demo at all: there is no session to end,
+ * and the thing a reader wants here is the way out of the demo. It takes the
+ * same slot, neutral, above the danger button.
+ */
 function signOutButton(app) {
+  if (app.demo) return button(LEAVE_LABEL, { onClick: () => app.leaveDemo() });
   return button('Sign Out', {
     style: 'danger',
     onClick: async () => {
@@ -215,6 +223,12 @@ export function openDelete(app) {
       }
       if (result.ok) {
         m.close();
+        // §2.22.2's one deviation from §2.21, because a demo has no session to
+        // survive: the demo ends and the app lands on §2.1.
+        if (app.demo) {
+          app.leaveDemo(DELETED_TOAST, 'good');
+          return;
+        }
         app.toast('Your node is gone.', 'good');
         app.nodeLookupDone = true;
         app.feedDirty = true;
@@ -230,7 +244,7 @@ export function openDelete(app) {
       replace(stage,
         sectionMark('Delete my node'),
         h('p.muted', `Telegram won't let you delete @${result.channel} — only the channel's owner can. Open it in Telegram to see who owns it.`),
-        button('Open in Telegram', { onClick: () => openExternal(channelLink(result.channel)) }),
+        button('Open in Telegram', { onClick: () => openTelegram(app, channelLink(result.channel)) }),
         button('Close', { style: 'ghost', onClick: () => m.close() }),
       );
       return;

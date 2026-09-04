@@ -219,12 +219,42 @@ final class ModerationStore {
     @ObservationIgnored private let store: LocalStore
     private(set) var lists: SafetyLists
 
+    /// PROTOCOL §7.1: "The demo has no user id, and no home."
+    ///
+    /// Block, mute and report are real in the demo (PRODUCT §2.22.2) and have to survive a screen
+    /// change, so the demo keeps a record of the same shape — in memory, with no user id — and a
+    /// record with no user id is never written to `moderation.json`. The reverse holds too: the
+    /// stored record is not loaded into a demo session. Both directions matter. A demo block of
+    /// `@tgs_demo_crate` must not turn up in a real account's list, and a real block list is not a
+    /// demo's to show.
+    private(set) var isDemo = false
+
+    /// `userId` is `Int64` on this platform, and `0` is already what the record means by "written
+    /// before there was an id" — `adopt` reads it that way. A demo record carries it and never
+    /// reaches disk, so the two can never be confused for one another.
+    static let noUserId: Int64 = 0
+
     init(store: LocalStore) {
         self.store = store
         lists = store.load(SafetyLists.self, LocalStore.moderation) ?? SafetyLists()
     }
 
-    private func save() { store.save(lists, LocalStore.moderation) }
+    /// Swaps the reader's record out for an empty one that has no home. The stored record is not
+    /// held anywhere here — `leaveDemo` re-reads it from disk, which it never stopped being.
+    func enterDemo() {
+        isDemo = true
+        lists = SafetyLists(userId: Self.noUserId)
+    }
+
+    func leaveDemo() {
+        isDemo = false
+        lists = store.load(SafetyLists.self, LocalStore.moderation) ?? SafetyLists()
+    }
+
+    private func save() {
+        guard !isDemo else { return }
+        store.save(lists, LocalStore.moderation)
+    }
 
     // Queries the views ask through the model.
     func isBlocked(_ username: String?) -> Bool { lists.isBlocked(username) }
@@ -235,7 +265,9 @@ final class ModerationStore {
     /// signed-in account. A mismatch replaces the lists with empty ones — the record survives sign
     /// out for the same account, not for the next person to sign in on this device.
     func adopt(userId: Int64) {
-        guard userId != 0 else { return }
+        // A demo has no Telegram session to reach `authorizationStateReady`, so this cannot fire
+        // from inside one; the guard says so rather than relying on that.
+        guard !isDemo, userId != 0 else { return }
         if lists.userId == userId { return }
         if lists.userId == 0, !lists.isEmpty {
             // Written before there was an id to write (or by a build that did not record one):

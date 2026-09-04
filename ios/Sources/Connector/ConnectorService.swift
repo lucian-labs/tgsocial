@@ -82,7 +82,25 @@ final class ConnectorService: ConnectorReader {
         await start()
     }
 
+    /// Every mutation below ends in `persist()`, `writeHandshake()` or the audit file, and all three
+    /// are homes a real session reads back — `connector.json` carries a grant that belongs to the
+    /// account that gave it (see `ConnectorSettings.signedOut`). §2.22.5 is absolute about that:
+    /// the demo "writes to none of the homes a real session uses … there is nothing on disk to clean
+    /// up." So the whole screen refuses, in the shape §2.22.3 asks for — nothing hidden, nothing
+    /// greyed out, every control still tappable and answering with the line that names the boundary.
+    /// `true` means the tap has been answered.
+    private func refuseInDemo() -> Bool {
+        guard model.isDemo else { return false }
+        model.showToast(DemoCopy.noWrite)
+        return true
+    }
+
     func setEnabled(_ enabled: Bool) async {
+        // PRODUCT §2.22.3: the bridge is off in the demo. A bridge serving fixtures over a real
+        // socket is an assistant being told invented things by a real port, and the token it would
+        // hand out belongs to an account that is not signed in. Off is refused too: the grant this
+        // toggle reads belongs to the real session the demo is standing in front of.
+        if refuseInDemo() { return }
         guard enabled != settings.enabled else { return }
         settings.enabled = enabled
         persist()
@@ -90,6 +108,7 @@ final class ConnectorService: ConnectorReader {
     }
 
     func setPort(_ port: Int) {
+        if refuseInDemo() { return }
         // §2.14: the port is editable only while the bridge is off, so there is no running
         // listener to move and no in-flight request to strand.
         guard !settings.enabled, port > 0, port <= 65535 else { return }
@@ -99,22 +118,29 @@ final class ConnectorService: ConnectorReader {
     }
 
     func setPreset(_ preset: ScopePreset) {
+        if refuseInDemo() { return }
         settings.preset = preset
         persist()
     }
 
     func setCustom(_ usernames: [String]) {
+        if refuseInDemo() { return }
         settings.custom = usernames.compactMap(Username.normalise)
         persist()
     }
 
     func setWrite(_ keyPath: WritableKeyPath<ConnectorWrites, Bool>, _ on: Bool) {
+        // The three write grants, refused for the same reason as the bridge itself (§2.22.3).
+        if refuseInDemo() { return }
         settings.writes[keyPath: keyPath] = on
         persist()
     }
 
     /// §2: "Rotating writes a new token and drops all in-flight requests."
     func rotateToken() async {
+        // Rotating mints a token into the handshake file and revokes the one a real assistant is
+        // using. Nothing the demo touches gets to do that.
+        if refuseInDemo() { return }
         token = ConnectorToken.generate()
         writeHandshake()
         guard settings.enabled else { return }
@@ -139,7 +165,12 @@ final class ConnectorService: ConnectorReader {
         audit.clear()
     }
 
-    func clearActivity() { audit.clear() }
+    /// The audit ring is the real session's record of what an assistant asked for, on disk next to
+    /// the handshake. A demo does not get to erase it.
+    func clearActivity() {
+        if refuseInDemo() { return }
+        audit.clear()
+    }
 
     /// App termination: stop listening, keep the grant. The handshake drops to `enabled: false`
     /// so a client dialling a dead port is told why rather than left guessing, and `restore()`

@@ -50,11 +50,11 @@ struct ExploreScreen: View {
         guard !searching, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         searching = true
         Task {
-            if let node = await model.discovery.lookup(query) {
+            if let node = await model.lookupNode(query) {
                 query = ""
                 model.path.append(.profile(username: node.username))
             } else {
-                model.showToast("Not a tgsocial node.", tone: .bad)
+                model.showToast(DemoCopy.notANode, tone: .bad)
             }
             searching = false
         }

@@ -17,6 +17,7 @@ import { avatar, button, confirm, h, modal, sectionMark } from '../../vendor/hou
 import { linkMessageId, sameUsername } from '../protocol.js';
 import { CONTACT_ADDRESS, REPORT_REASONS, mailtoUrl, reportBody, reportSubject } from '../moderation.js';
 import { APP_BUILD, APP_VERSION } from '../td.js';
+import { REPORT_PREFACE } from '../demo/mode.js';
 
 /** §2.15's `App:` line: the You footer's version string plus the platform. */
 export function appVersionLine() {
@@ -110,7 +111,7 @@ export function openReport(app, subject) {
 
   send.addEventListener('click', () => {
     if (!chosen) return;
-    const url = mailtoUrl(CONTACT_ADDRESS, reportSubject(chosen), reportBody({
+    const body = reportBody({
       reason: chosen,
       link: subject.link,
       channel: subject.channel,
@@ -118,7 +119,9 @@ export function openReport(app, subject) {
       node: subject.node,
       kind: subject.kind,
       app: appVersionLine(),
-    }));
+    });
+    // §2.22.2's one deviation from §2.15, and the only one
+    const url = mailtoUrl(CONTACT_ADDRESS, reportSubject(chosen), app.demo ? `${REPORT_PREFACE}\n${body}` : body);
     const mailed = openMailComposer(url);
     // §2.15: hidden either way, and the toast names the address when the
     // composer never opened — a reader who cannot send must still know where

@@ -36,6 +36,7 @@ import ca.lucianlabs.housepour.HPSectionMark
 import ca.lucianlabs.housepour.HPSmall
 import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTokens
+import ca.lucianlabs.tgsocial.demo.DemoCopy
 import ca.lucianlabs.tgsocial.model.MyNode
 import ca.lucianlabs.tgsocial.protocol.HiddenItem
 import ca.lucianlabs.tgsocial.protocol.ReportEmail
@@ -53,7 +54,7 @@ import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
  * order. Sign Out moved here from You (§2.8) so `Delete My Node` could sit under it rather than a mis-tap
  * away from `View as others see it` — the reversible destructive action first, the irreversible one second.
  */
-fun LazyListScope.SettingsItems(vm: AppViewModel, safety: SafetyLists, node: MyNode?) {
+fun LazyListScope.SettingsItems(vm: AppViewModel, safety: SafetyLists, node: MyNode?, inDemo: Boolean = false) {
     item(key = "settings-safety-mark") {
         Box(Modifier.columnItem().padding(bottom = HPTokens.Space.rowGap)) { HPSectionMark("Safety") }
     }
@@ -143,8 +144,13 @@ fun LazyListScope.SettingsItems(vm: AppViewModel, safety: SafetyLists, node: MyN
         }
     }
 
+    // PRODUCT §2.22.3 — `Sign Out` is not in the demo at all: `( Leave Demo )` (neutral) sits where it sits in
+    // a real session, above `( Delete My Node )` (danger). Leaving is not destructive, so it is not danger.
     item(key = "settings-signout") {
-        Box(Modifier.columnItem()) { HPButton("Sign Out", { vm.openSheet(Sheet.SignOut) }, style = HPButtonStyle.DANGER) }
+        Box(Modifier.columnItem()) {
+            if (inDemo) HPButton(DemoCopy.LEAVE, { vm.leaveDemo() }, style = HPButtonStyle.NEUTRAL)
+            else HPButton("Sign Out", { vm.openSheet(Sheet.SignOut) }, style = HPButtonStyle.DANGER)
+        }
     }
     if (node != null) {
         item(key = "settings-delete-node") {

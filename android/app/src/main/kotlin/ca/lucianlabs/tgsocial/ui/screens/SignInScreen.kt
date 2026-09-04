@@ -30,6 +30,7 @@ import ca.lucianlabs.housepour.HPMuted
 import ca.lucianlabs.housepour.HPTextField
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.housepour.HPWordmark
+import ca.lucianlabs.tgsocial.demo.DemoCopy
 import ca.lucianlabs.tgsocial.protocol.ReportEmail
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.AuthStep
@@ -94,6 +95,16 @@ fun SignInScreen(vm: AppViewModel) {
                     }
                     AuthStep.READY -> Unit
                 }
+            }
+            // PRODUCT §2.1 / §2.22 — `Look Around First`, on **step 1 only**. It is ghost and it sits outside
+            // the card, below the gold `Send Code`, so the primary action keeps the only fill on the screen.
+            // Once a number is in flight the button is gone: nobody mid-sign-in can fall into the demo.
+            if (auth.step == AuthStep.PHONE) {
+                Spacer(Modifier.height(HPTokens.Space.cardGap))
+                HPButton(DemoCopy.ENTER, vm::enterDemo, style = HPButtonStyle.GHOST, enabled = !auth.busy)
+                Spacer(Modifier.height(HPTokens.Space.rowGap))
+                HPMuted(DemoCopy.ENTER_NOTE)
+                Spacer(Modifier.height(HPTokens.Space.cardGap))
             }
             // PRODUCT §2.19 — the published address is reachable without signing in; this is the only screen
             // a signed-out reader sees, so it is the only place it can be.

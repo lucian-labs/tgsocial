@@ -1,7 +1,7 @@
 /* PRODUCT §2.5 Node profile. */
 import { h, button, kebabMenu, replace, sectionMark } from '../../vendor/house-pour.js';
 import { channelLink, hasBacklink, publicNodeUrl, usernameKey, isFollowing } from '../protocol.js';
-import { avatarFor, feedRow, nodeRow, emptyCard, openExternal } from './shared.js';
+import { avatarFor, copyLink, feedRow, nodeRow, emptyCard, openExternal, openTelegram } from './shared.js';
 import { blockedProfile, confirmBlock, isMyNode } from './safety.js';
 import { userMessage } from '../repo.js';
 
@@ -86,18 +86,8 @@ export function render(app, { username }) {
  */
 function nodeMenu(app, username) {
   const items = [
-    { label: 'Open in Telegram', onSelect: () => openExternal(channelLink(username)) },
-    {
-      label: 'Copy Link',
-      onSelect: async () => {
-        try {
-          await navigator.clipboard.writeText(publicNodeUrl(username));
-          app.toast('Link copied.', 'good');
-        } catch {
-          app.toast("Couldn't copy the link.", 'bad');
-        }
-      },
-    },
+    { label: 'Open in Telegram', onSelect: () => openTelegram(app, channelLink(username)) },
+    { label: 'Copy Link', onSelect: () => copyLink(app, publicNodeUrl(username)) },
   ];
   if (!isMyNode(app, username)) items.push({ label: `Block @${username}`, onSelect: () => confirmBlock(app, username) });
   return kebabMenu(items, { label: `More for @${username}` });

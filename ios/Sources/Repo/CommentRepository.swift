@@ -67,6 +67,13 @@ final class CommentRepository {
 
     /// Every comment in the thread rooted at `targets`: direct comments plus `re:` chains, deduped.
     func comments(forTargets targets: [String]) -> [Comment] {
+        Self.comments(forTargets: targets, in: index)
+    }
+
+    /// The walk itself, over any index. Static so the demo (PRODUCT §2.22) can hand it the fixture
+    /// index instead of this one: the `re:` chain, the dedupe and the ordering are then the app's
+    /// own code in both sessions rather than two implementations that can drift.
+    static func comments(forTargets targets: [String], in index: [String: [Comment]]) -> [Comment] {
         var keys = targets.compactMap(CommentCodec.targetKey)
         var seenKeys = Set(keys)
         var out: [Comment] = []

@@ -8,6 +8,11 @@ import ca.lucianlabs.housepour.HPToastState
 import ca.lucianlabs.housepour.HPToastTone
 import ca.lucianlabs.tgsocial.BuildConfig
 import ca.lucianlabs.tgsocial.TgApp
+import ca.lucianlabs.tgsocial.demo.DemoCopy
+import ca.lucianlabs.tgsocial.demo.DemoFiles
+import ca.lucianlabs.tgsocial.demo.DemoGate
+import ca.lucianlabs.tgsocial.demo.DemoRepo
+import ca.lucianlabs.tgsocial.demo.DemoWorld
 import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.CommentNode
 import ca.lucianlabs.tgsocial.model.FeedSource
@@ -109,6 +114,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _deleteNode = MutableStateFlow(DeleteNodeUi())
     val deleteNode: StateFlow<DeleteNodeUi> = _deleteNode.asStateFlow()
 
+    // ---- the demo (PRODUCT §2.22)
+    /**
+     * The demo session, or null. §2.22.4 — the demo is a **different object, not a mode**: `DemoRepo` holds the
+     * whole invented world and no reference to the TDLib client, and every entry point below that would have
+     * reached Telegram returns early into it. A boolean checked at each call site has branches that can be
+     * missed; the object has no code path to Telegram to miss in the first place, and what is left here is the
+     * short list of doors into it.
+     */
+    private val _demo = MutableStateFlow<DemoRepo?>(null)
+    val demo: StateFlow<DemoRepo?> = _demo.asStateFlow()
+
+    val inDemo: Boolean get() = _demo.value != null
+
+    /** True from the tap on `Look Around First` until the demo actually opens — see [enterDemo]. */
+    private var enteringDemo = false
+
+    /**
+     * PROTOCOL §7.1 — the reader's real record, held aside for the length of the demo. A demo session must not
+     * load it (a real block list is not a demo's to browse) and must not overwrite it on the way out.
+     */
+    private var storedSafety: SafetyLists? = null
+
+    /** The demo's comment index and card cache, which shadow the real ones for as long as it runs. */
+    private val _demoComments = MutableStateFlow<Map<String, List<Comment>>?>(null)
+    private val _demoCards = MutableStateFlow<Map<String, NodeSnapshot>?>(null)
+
     // ---- status (PRODUCT §2.10)
     /** The live list of in-flight operations; the Status sheet's `Pending` rows. */
     val pending: StateFlow<List<ActivityRegistry.Entry>> get() = app.activity.entries
@@ -178,7 +209,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _commentComposer = MutableStateFlow(CommentComposerUi())
     val commentComposer: StateFlow<CommentComposerUi> = _commentComposer.asStateFlow()
 
-    val cards get() = nodes.cards
+    /**
+     * Every surface that resolves a username to a name or a photo reads this. In the demo it is the fixture
+     * world's own map, so Settings rows, the graph radial and the blocked-node card name invented people
+     * without `NodeRepo` ever being asked — and without a demo card reaching the disk cache.
+     */
+    val cards: StateFlow<Map<String, NodeSnapshot>> = combine(nodes.cards, _demoCards) { real, demo ->
+        demo ?: real
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     // ---- the default filter (PRODUCT §2.18)
     //
@@ -214,8 +252,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * The comment index every surface reads — filtered (§2.18). Counts and trees derive from this map, so a
      * blocked commenter leaves no residue in `N comments` and takes the replies under them with them.
      */
-    val commentIndex: StateFlow<Map<String, List<Comment>>> = combine(commentRepo.index, _safety) { index, s ->
-        SafetyFilter.comments(index, s)
+    val commentIndex: StateFlow<Map<String, List<Comment>>> = combine(commentRepo.index, _demoComments, _safety) { index, demo, s ->
+        SafetyFilter.comments(demo ?: index, s)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     fun postTargetKey(post: Post): String = CommentFormat.postKey(post.sourceUsername, post.messageId)
@@ -319,6 +357,118 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** `Use another number`: TDLib accepts a new setAuthenticationPhoneNumber from the code step, so just show the phone step. */
     fun useAnotherNumber() { _auth.update { it.copy(step = AuthStep.PHONE, busy = false) } }
+
+    // ------------------------------------------------------------------ the demo (PRODUCT §2.22)
+
+    /**
+     * `Look Around First` (§2.1 step 1). The button is on the phone step, so nothing is in flight when it is
+     * tapped, and everything below is built from [DemoWorld].
+     *
+     * §2.22.4 — TDLib goes quiet **and says so** before any of it happens. The call is awaited rather than
+     * launched and forgotten, because the demo's first fixture painting over a live socket is exactly the
+     * window a reviewer's proxy is pointed at; it is answered locally, so the wait is not perceptible. The
+     * guard is a field rather than [inDemo] because [inDemo] is not true yet during that wait, and a second
+     * tap would otherwise start a second session.
+     */
+    fun enterDemo() {
+        if (inDemo || enteringDemo) return
+        enteringDemo = true
+        viewModelScope.launch {
+            tg.setNetworkAvailable(false)
+            enteringDemo = false
+            if (!inDemo) openDemo()
+        }
+    }
+
+    private fun openDemo() {
+        val session = DemoRepo()
+        DemoFiles.attach(app.applicationContext.cacheDir)
+        // §2.22.3 — `Open in Telegram`, `Copy Link`, `Share` and every link answer with their own line.
+        DemoGate.open { message -> toast.show(message, HPToastTone.NEUTRAL) }
+        // PROTOCOL §7.1 — the real record steps aside; the demo starts with empty lists of its own.
+        storedSafety = _safety.value
+        _safety.value = session.safety
+        _demo.value = session
+        _demoCards.value = session.cards
+        _demoComments.value = session.comments
+        _myNode.value = session.myNode
+        _me.value = session.me
+        _phone.value = ""
+        _setupNeeded.value = false
+        _nodeSearched.value = true
+        _tab.value = Tab.FEED
+        _stack.value = listOf(Screen.Home)
+        _sheet.value = null
+        _viewer.value = null
+        loadDemoFeed(session, reset = true)
+    }
+
+    /**
+     * `Leave Demo` — from the demo sheet, from Settings, and from the demo's own `Delete My Node`. §2.22.5:
+     * there is no cleanup step to get wrong, because nothing about the demo was written to disk; the object is
+     * dropped and the real record comes back exactly as it was written.
+     */
+    fun leaveDemo(toastText: String? = DemoCopy.LEFT) {
+        if (!inDemo) return
+        DemoGate.close()
+        DemoFiles.detach()
+        // Restoring it is not urgent the way silencing it was: nothing may go out until this lands, and
+        // everything after this point is local state.
+        viewModelScope.launch { tg.setNetworkAvailable(true) }
+        _demo.value = null
+        _demoCards.value = null
+        _demoComments.value = null
+        _safety.value = storedSafety ?: SafetyLists()
+        storedSafety = null
+        _myNode.value = null
+        _me.value = null
+        _phone.value = ""
+        _feed.value = FeedUi()
+        _explore.value = ExploreUi()
+        _graph.value = GraphUi()
+        _profile.value = ProfileUi()
+        _channel.value = ChannelUi()
+        _report.value = ReportUi()
+        _deleteNode.value = DeleteNodeUi()
+        _stack.value = listOf(Screen.Home)
+        _sheet.value = null
+        _viewer.value = null
+        _tab.value = Tab.FEED
+        app.playback.stopAudio()
+        // §2.22 — back to §2.1 step 1, with the phone field empty. The field is composable-local state on a
+        // screen that leaves the composition with the shell, so it comes back blank without being cleared.
+        _auth.update { it.copy(step = AuthStep.PHONE, busy = false, qrLink = null) }
+        toastText?.let { toast.show(it, HPToastTone.GOOD) }
+    }
+
+    /**
+     * PRODUCT §2.22.3 — every write answers with one toast and does nothing. Nothing is greyed out: a disabled
+     * button teaches nothing and reads as a broken app, so the control stays where it is, stays tappable, and
+     * names the boundary.
+     */
+    private fun demoRefusesWrite(): Boolean {
+        if (!inDemo) return false
+        toast.show(DemoCopy.NO_WRITE, HPToastTone.NEUTRAL)
+        return true
+    }
+
+    private fun loadDemoFeed(session: DemoRepo, reset: Boolean) {
+        if (reset) session.resetFeed()
+        val page = session.feedPage()
+        _feed.update {
+            val posts = if (reset) page else FeedOrder.append(it.posts, page)
+            it.copy(
+                posts = FeedOrder.sort(posts),
+                loading = false,
+                refreshing = false,
+                exhausted = session.feedExhausted,
+                sourceCount = session.sourceCount,
+                ready = true,
+                refreshedAt = System.currentTimeMillis(),
+                newerAvailable = false,
+            )
+        }
+    }
 
     // ------------------------------------------------------------------ bootstrap
 
@@ -490,7 +640,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             is Sheet.CommentComposer -> prepareCommentComposer(s.post, s.target)
             // PRODUCT §2.21 — the field opens empty every time; a typed username is not a standing permission.
             Sheet.DeleteNode -> _deleteNode.value = DeleteNodeUi()
-            Sheet.SignOut, Sheet.Status, Sheet.Report, is Sheet.Block,
+            Sheet.SignOut, Sheet.Status, Sheet.Demo, Sheet.Report, is Sheet.Block,
             is Sheet.DeleteComment, is Sheet.PostSheet, is Sheet.CommentSheet,
             -> Unit
         }
@@ -534,6 +684,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ feed
 
     fun refreshFeed(resetCursors: Boolean = true) {
+        _demo.value?.let { loadDemoFeed(it, reset = true); return }
         feedJob?.cancel()
         feedJob = viewModelScope.launch {
             _feed.update { it.copy(refreshing = true, loading = true) }
@@ -572,6 +723,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun loadMoreFeed() {
         val f = _feed.value
         if (f.loading || f.exhausted || !f.ready) return
+        // §2.22.1 pages eight at a time, so this runs for real: a second page, then `That's everything.`
+        _demo.value?.let { loadDemoFeed(it, reset = false); return }
         feedJob = viewModelScope.launch {
             _feed.update { it.copy(loading = true) }
             runCatching { feedRepo.loadMore(20) }
@@ -588,6 +741,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val commentsRefreshing: StateFlow<Boolean> = _commentsRefreshing.asStateFlow()
 
     fun refreshComments(force: Boolean = false) {
+        // The demo's index is the whole of its comments and never changes; there is nothing to re-scan.
+        if (inDemo) return
         viewModelScope.launch {
             _commentsRefreshing.value = true
             try {
@@ -661,6 +816,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setCommentPhoto(uri: Uri?) { _commentComposer.update { it.copy(photo = uri) } }
 
     fun setReplyChannelName(name: String) {
+        if (inDemo) return
         _commentComposer.update { it.copy(channelName = name.trim(), channelAvailability = Availability.UNKNOWN) }
         checkReplyChannelName()
     }
@@ -688,6 +844,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** PRODUCT §2.12 first run — `( Make Channel )`: §6.4, then the composer proceeds. */
     fun makeRepliesChannel() {
+        if (demoRefusesWrite()) return
         val node = _myNode.value ?: return
         val card = cardOrToast() ?: return
         val name = _commentComposer.value.channelName
@@ -711,6 +868,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** PRODUCT §2.12 — optimistic posting: the comment appears immediately, then settles or rolls back. */
     fun postComment() {
+        if (demoRefusesWrite()) return
         val c = _commentComposer.value
         val target = c.target ?: return
         val me = _me.value ?: run { toast.show("Make your node first.", HPToastTone.BAD); return }
@@ -771,6 +929,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** PRODUCT §2.12 — `Delete this comment?` confirmed: the message in my channel goes. */
     fun deleteComment(comment: Comment) {
+        if (demoRefusesWrite()) return
         _sheet.value = null
         viewModelScope.launch {
             runCatching { commentRepo.delete(comment) }
@@ -805,6 +964,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** One write path, so nothing can change a list in memory and forget to persist it. */
     private fun updateSafety(transform: (SafetyLists) -> SafetyLists) {
+        // PROTOCOL §7.1 — a demo's record is held in memory by the session and MUST NOT be written to any of
+        // the three homes. This is the only place a list changes, so it is the only place that has to know.
+        _demo.value?.let { session ->
+            _safety.value = session.updateSafety(transform)
+            return
+        }
         val next = transform(_safety.value)
         if (next == _safety.value) return
         _safety.value = next
@@ -855,7 +1020,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val r = _report.value
         val subject = r.subject ?: return null
         val reason = r.reason ?: return null
-        return ReportEmail.compose(subject, reason, APP_VERSION)
+        val mail = ReportEmail.compose(subject, reason, APP_VERSION)
+        // PRODUCT §2.22.2 — the one deviation from §2.15, and the only thing the demo ever sends: one line at
+        // the top of the body. Without it the operator opens their inbox and hunts for a channel that does not
+        // exist. Everything §2.15 specifies is still there, unchanged, underneath it.
+        return DemoCopy.report(mail, inDemo)
     }
 
     /**
@@ -890,6 +1059,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteMyNode() {
         val node = _myNode.value ?: return
         if (!deleteNodeConfirmed(_deleteNode.value.input) || _deleteNode.value.running) return
+        // PRODUCT §2.22.2 — the demo runs the whole §2.21 flow against the fixtures: the modal naming
+        // @tgs_demo_you and @tgs_demo_you_r, the type-to-confirm, the comments channel first. This is the
+        // point of the demo being visible — Guideline 5.1.1(v) asks for an in-app way to delete the account,
+        // and nobody who cannot make an account can reach it any other way. One deviation from §2.21's
+        // outcome, because a demo has no session to survive: the demo ends.
+        _demo.value?.let { session ->
+            session.deleteNode()
+            _sheet.value = null
+            _deleteNode.value = DeleteNodeUi()
+            leaveDemo(DemoCopy.NODE_GONE)
+            return
+        }
         if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
         _deleteNode.update { it.copy(running = true, message = null, openUsername = null) }
         viewModelScope.launch {
@@ -970,6 +1151,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun submitQuery() {
         val u = Username.normalise(_explore.value.query) ?: run { toast.show("Not a tgsocial node.", HPToastTone.BAD); return }
+        _demo.value?.let { session ->
+            // §2.4 in the demo: an exact `tgs_demo_*` username opens that profile, anything else says so.
+            val found = session.find(u) ?: run { toast.show("Not a tgsocial node.", HPToastTone.BAD); return }
+            _explore.update { it.copy(query = "") }
+            push(Screen.Profile(found))
+            return
+        }
         viewModelScope.launch {
             val snap = runCatching { nodes.fetch(u) }.getOrNull()
             if (snap?.card == null) { toast.show(if (snap?.newerVersion == true) "Newer card. Update the app." else "Not a tgsocial node.", HPToastTone.BAD); return@launch }
@@ -979,6 +1167,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadExplore() {
+        _demo.value?.let { session ->
+            _explore.update { it.copy(nearby = session.nearby(), directory = session.directory(), loading = false, loaded = true) }
+            return
+        }
         viewModelScope.launch {
             _explore.update { it.copy(loading = true) }
             val nearby = runCatching { discovery.nearby(_myNode.value?.username, myCard) }.getOrDefault(emptyList())
@@ -996,6 +1188,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ graph
 
     fun loadGraph() {
+        _demo.value?.let { session ->
+            _graph.update { it.copy(direct = session.direct(), plusOne = session.nearby(), loading = false, loaded = true) }
+            return
+        }
         viewModelScope.launch {
             _graph.update { it.copy(loading = true) }
             val direct = myCard?.follows.orEmpty().mapNotNull { f -> runCatching { nodes.node(f) }.getOrNull()?.let { discovery.entry(it) } }
@@ -1007,7 +1203,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Which node does a +1 entry hang off (for the radial layout)? The first of my follows that lists it. */
     fun parentOf(plusOne: String): String? {
         val k = Username.key(plusOne)
-        return myCard?.follows?.firstOrNull { f -> nodes.cached(f)?.card?.follows?.any { Username.key(it) == k } == true }
+        val snapshots = cards.value
+        return myCard?.follows?.firstOrNull { f -> snapshots[Username.key(f)]?.card?.follows?.any { Username.key(it) == k } == true }
     }
 
     // ------------------------------------------------------------------ profile / channel
@@ -1016,6 +1213,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun isFollowing(username: String): Boolean = myCard?.follows(username) == true
 
     private fun loadProfile(username: String) {
+        _demo.value?.let { session ->
+            val snap = session.snapshot(username)
+            _profile.value = ProfileUi(
+                username = username,
+                snapshot = snap,
+                loading = false,
+                notANode = snap == null,
+                feeds = session.feedsOf(username),
+                follows = session.followsOf(username),
+            )
+            return
+        }
         _profile.value = ProfileUi(username = username, snapshot = nodes.cached(username), loading = true)
         viewModelScope.launch {
             val snap = runCatching { nodes.fetch(username) }.getOrNull() ?: nodes.cached(username)
@@ -1037,6 +1246,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadChannel(username: String) {
+        _demo.value?.let { session ->
+            val src = session.feedSource(username)
+            _channel.value = ChannelUi(
+                username = username,
+                source = src,
+                posts = FeedOrder.sort(session.channelPosts(username)),
+                loading = false,
+                exhausted = true,
+                verified = src?.verifiedFor?.isNotEmpty() == true,
+            )
+            return
+        }
         val cached = nodes.cachedFeedSource(username)
         _channel.value = ChannelUi(username = username, source = cached, loading = true, verified = cached?.verifiedFor?.isNotEmpty() == true)
         viewModelScope.launch {
@@ -1054,6 +1275,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         nodes.cards.value.values.filter { s -> s.card?.feeds?.any { Username.same(it, feed) } == true }.map { it.username }
 
     fun loadMoreChannel() {
+        if (inDemo) return
         val c = _channel.value
         val src = c.source ?: return
         if (c.loading || c.exhausted) return
@@ -1068,6 +1290,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ card writes (optimistic)
 
     private fun writeCard(next: Card, onDone: (() -> Unit)? = null) {
+        // §2.22.3 — Follow / Unfollow, Edit Card, the feed toggles and the Public listing toggle all land here.
+        if (demoRefusesWrite()) return
         val node = _myNode.value ?: run { toast.show("Make your node first.", HPToastTone.BAD); return }
         val previous = _me.value ?: return
         if (previous.newerVersion) { toast.show("Newer card. Update the app.", HPToastTone.BAD); return }
@@ -1114,6 +1338,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun announce() {
+        if (demoRefusesWrite()) return
         val node = _myNode.value ?: return
         val card = myCard ?: return
         viewModelScope.launch {
@@ -1126,6 +1351,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ setup
 
     fun prepareSetup() {
+        // §2.22.3 — `Make Channel`, `Create Node` and the feed toggles are all disabled in the demo, and the
+        // candidate list behind them is a live TDLib query (`getCreatedPublicChats` plus the admin scan). The
+        // screen is still reachable from You → Manage; it simply has nothing to ask.
+        if (inDemo) return
         viewModelScope.launch {
             if (_me.value == null && _setup.value.nodeName.isEmpty()) {
                 val suggested = runCatching { myNodeRepo.suggestedUsername() }.getOrDefault("tgs_")
@@ -1137,6 +1366,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setNodeName(name: String) {
+        if (inDemo) return
         _setup.update { it.copy(nodeName = name.trim(), availability = Availability.UNKNOWN) }
         checkAvailability()
     }
@@ -1161,6 +1391,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createNode() {
+        if (demoRefusesWrite()) return
         val name = _setup.value.nodeName
         if (Username.normalise(name) != name) { toast.show("That name isn't allowed.", HPToastTone.BAD); return }
         if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
@@ -1183,6 +1414,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun findExistingNode() {
+        if (demoRefusesWrite()) return
         viewModelScope.launch {
             val ok = findMyNode(quiet = false)
             if (!ok) toast.show("No node found.", HPToastTone.BAD) else { nodes.persist(); loadCandidates(); refreshFeed() }
@@ -1236,6 +1468,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * visible nothing runs: opening it always re-queries anyway, so the cache is never served stale.
      */
     private fun scheduleCandidateRefresh() {
+        if (inDemo) return
         if (!bootstrapped || _auth.value.step != AuthStep.READY) return
         if (!setupSurfaceVisible()) return
         candidateRefreshJob?.cancel()
@@ -1247,6 +1480,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleFeed(username: String, on: Boolean) {
+        if (demoRefusesWrite()) return
         val k = Username.key(username)
         _setup.update {
             val sel = if (on) it.selected + k else it.selected - k
@@ -1255,6 +1489,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun answerVerify(verify: Boolean) {
+        if (demoRefusesWrite()) return
         val prompt = _setup.value.verifyPrompt ?: return
         _setup.update { it.copy(verifyPrompt = null) }
         if (!verify) return
@@ -1268,6 +1503,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveFeeds() {
+        if (demoRefusesWrite()) return
         val card = cardOrToast() ?: return
         val s = _setup.value
         val chosen = s.candidates.mapNotNull { c -> c.username?.takeIf { Username.key(it) in s.selected } }
@@ -1282,20 +1518,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { delay(600); _setup.update { it.copy(saving = false) } }
     }
 
-    fun cachedFeedSource(username: String): FeedSource? = nodes.cachedFeedSource(username)
+    fun cachedFeedSource(username: String): FeedSource? =
+        _demo.value?.feedSource(username) ?: nodes.cachedFeedSource(username)
 
     suspend fun resolveFeedSources(feeds: List<String>): List<FeedSource> =
-        feeds.mapNotNull { nodes.feedSource(it, listOfNotNull(_myNode.value?.username)) }
+        _demo.value?.let { session -> feeds.mapNotNull { session.feedSource(it) } }
+            ?: feeds.mapNotNull { nodes.feedSource(it, listOfNotNull(_myNode.value?.username)) }
 
     // ------------------------------------------------------------------ compose
 
+    /**
+     * §2.22.4 — both reads here go through the demo-aware helpers above, not through [nodes] directly.
+     * Reaching `NodeRepo` for an uncached feed means `searchPublicChat`, and the demo's `@demo_you_notes` is
+     * never in that cache: this was the one read path that would have asked Telegram to resolve an invented
+     * username, and the reviewer's Compose sheet would have opened with no feed to post to besides.
+     */
     private fun prepareCompose(feedUsername: String?) {
-        val feeds = myCard?.feeds.orEmpty().mapNotNull { nodes.cachedFeedSource(it) }
+        val wanted = myCard?.feeds.orEmpty()
+        val feeds = wanted.mapNotNull { cachedFeedSource(it) }
         val idx = feedUsername?.let { u -> feeds.indexOfFirst { Username.same(it.username, u) } }?.takeIf { it >= 0 } ?: 0
         _compose.value = ComposeUi(feeds = feeds, selected = idx)
-        if (feeds.size < myCard?.feeds.orEmpty().size) {
+        if (feeds.size < wanted.size) {
             viewModelScope.launch {
-                val all = myCard?.feeds.orEmpty().mapNotNull { nodes.feedSource(it, listOfNotNull(_myNode.value?.username)) }
+                val all = resolveFeedSources(wanted)
                 val i = feedUsername?.let { u -> all.indexOfFirst { Username.same(it.username, u) } }?.takeIf { it >= 0 } ?: 0
                 _compose.update { it.copy(feeds = all, selected = i) }
             }
@@ -1307,6 +1552,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun composePhoto(uri: Uri?) { _compose.update { it.copy(photo = uri) } }
 
     fun post() {
+        if (demoRefusesWrite()) return
         val c = _compose.value
         val feed: FeedSource = c.feeds.getOrNull(c.selected) ?: run { toast.show("Pick a feed first.", HPToastTone.BAD); return }
         if (c.text.isBlank() && c.photo == null) return
@@ -1334,6 +1580,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------------------------------------------ sign out
 
     fun signOut() {
+        // §2.22.3 — `Sign Out` is not in the demo at all; Settings carries `( Leave Demo )` in its place.
+        if (inDemo) { leaveDemo(); return }
         _sheet.value = null
         _auth.update { it.copy(busy = true) }
         viewModelScope.launch {

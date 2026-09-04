@@ -72,7 +72,15 @@ but Telegram and this device.
 PHONE NUMBER                                (field label)
 [ +1 604 555 0199            ]              (input, tel)
 ( Send Code )                               (btn primary)
+
+( Look Around First )                       (btn ghost, outside the card — §2.22)
+Invented people, invented posts. Nothing     (muted)
+is sent to Telegram.
 ```
+
+`Look Around First` is the demo (§2.22), and it is on **step 1 only**. It sits
+below the card and carries no fill, so the one gold button on the screen is
+still `Send Code`.
 
 Arrived on a public link (§2.13), the muted line names the destination
 instead: `Sign in to see @<name>.` Everything else is unchanged.
@@ -1167,6 +1175,384 @@ Outcomes:
 The safety lists (`PROTOCOL §7`) survive this, as they survive Sign Out: they
 protect the person holding the phone, not the node they just deleted.
 
+### 2.22 The demo
+
+Sign in needs a phone number and a code (§2.1). Anyone who has neither — an
+App Store reviewer, or a person deciding whether to hand over their number —
+sees one screen and a form. The demo is the rest of the app, running on an
+invented network, with no Telegram behind it.
+
+**It is visible, not hidden.** This repository is public, so a review-only
+credential typed into the phone field would be a credential printed in the
+source: it hides nothing, and a build with functionality a reviewer has to be
+told about in a message is the other kind of rejection. Everything below is on
+the sign-in screen where any reader can find it, which also makes it the one
+route to `Delete My Node` (§2.21) that needs no account — the account-deletion
+control cannot be demonstrated by someone who cannot make an account.
+
+**The entry point.** On §2.1 **step 1 only**, below the card that holds the
+phone field and above the contact line:
+
+```
+( Look Around First )                       (btn ghost, outside the card)
+Invented people, invented posts. Nothing     (muted)
+is sent to Telegram.
+```
+
+It is ghost, it is outside the card, and it sits below the gold `Send Code` —
+the card still begins at `PHONE NUMBER` and ends at the one gold button, so the
+primary action keeps the only fill on the screen. It is absent on step 2
+(code), step 3 (2FA) and the other-device and registration steps: once a number
+is in flight the screen has one job. Tapping it enters the demo at Feed (§2.3)
+— at Feed even when the visit arrived on a public link (§2.13): that
+destination is parked for the length of the demo, not spent by it, and it is
+named on §2.1 again when the demo is left.
+
+**Leaving.** The `Demo` pill (below) opens the demo sheet, whose first action is
+`( Leave Demo )`; Settings (§2.20) carries the same button where `Sign Out`
+sits in a real session. Either one returns to §2.1 step 1 with the phone field
+empty, toast `Left the demo.` Reloading the web page or relaunching the app
+also leaves it, because nothing about the demo is written to disk (below).
+
+**What is persistently obvious.** Three things, none of them dismissible:
+
+1. **The status pill reads `Demo`** on every screen that has a topbar, in the
+   neutral `HPPill` — `panel` fill, 1pt `line`, ink text — and **never gold**,
+   because gold on that pill means a live Telegram connection (§1). It is a
+   button like the status pill it replaces, and opens the demo sheet instead of
+   the status sheet (§2.10).
+2. **A strip under the topbar**, sticky with it, on every screen: full column
+   width, `bg2` fill, hairline `line` below, mono small in `muted`, reading
+
+   ```
+   Demo. Everyone here is invented. Nothing leaves this device.
+   ```
+
+   It persists into the full-screen media viewers and the carousel (§2.11) —
+   the one place the topbar hides — drawn over the dark surface in the same
+   mono small, because an unmarked full-screen photo is exactly the screenshot
+   that could be mistaken for someone's real Telegram.
+3. **The fixtures name themselves.** Every node username begins `tgs_demo_`,
+   every channel username begins `demo_`, and every generated image carries its
+   own key (`demo_kiln_log/224·1`) in mono `faint` in its bottom-left corner. A
+   single post card, cropped out of context, still says what it is.
+
+No fixture carries a photograph of a person. Node and channel avatars are the
+initial in the display serif over a seeded tint — §2.3's third fallback,
+reached honestly, since fixture channels have no photo — except
+`demo_tidewright` and `demo_slow_radio`, which carry a generated plate as their
+channel photo so §2.3's first branch paints too.
+
+#### 2.22.1 The fixture world
+
+Invented, fixed, and identical on all three builds. Nothing here is captured
+from a real channel, and the captures in `web/test/fixtures/` are not reused:
+those are real people's posts.
+
+**Nodes.** Fifteen. `@tgs_demo_you` is the reader.
+
+| Node | Name | Bio | Feeds |
+| --- | --- | --- | --- |
+| `@tgs_demo_you` | Demo Reader | Looking around. | `@demo_you_notes` |
+| `@tgs_demo_wren` | Wren Alderiss | Tide clocks and bad solder. | `@demo_tidewright`, `@demo_wren_bench` |
+| `@tgs_demo_mox` | Mox Petrakis | Field recordings. Mostly rain. | `@demo_slow_radio` |
+| `@tgs_demo_juno` | Juno Bell-Okafor | Ceramics, mostly failures. | `@demo_kiln_log` |
+| `@tgs_demo_pell` | Pell Nakagawa | Letterpress, one press. | `@demo_press_run` |
+| `@tgs_demo_arto` | Arto Vansi | Trail cameras on the creek. | `@demo_creek_cam` |
+| `@tgs_demo_orrin` | Orrin Baptiste | Bread, weather, complaints. | `@demo_proof_box` |
+| `@tgs_demo_sable` | Sable Quiring | Maps nobody asked for. | `@demo_paper_maps` |
+| `@tgs_demo_bly` | Bly Toussaint | Night sky, cheap lens. | `@demo_dark_sky` |
+| `@tgs_demo_hask` | Hask Oyelaran | Fixes the ferry radio. | `@demo_ferry_net` |
+| `@tgs_demo_ilka` | Ilka Ferreira | Bike frames. | `@demo_frame_jig` |
+| `@tgs_demo_crate` | Crate Mailer | Free crates. Ask me. | `@demo_free_crates` |
+| `@tgs_demo_lume` | Lume Adeyemi | Neon repair. | `@demo_neon_bench` |
+| `@tgs_demo_noor` | Noor Salk | Weather balloons. | `@demo_balloon_log` |
+| `@tgs_demo_veda` | Veda Marchetti | Sails. | `@demo_sail_loft` |
+
+The reader's card, serialised per `PROTOCOL §2`, is the shared vector the three
+builds parse:
+
+```
+tgsocial v1
+name: Demo Reader
+bio: Looking around.
+public: no
+feeds: @demo_you_notes
+follows: @tgs_demo_wren @tgs_demo_mox @tgs_demo_juno @tgs_demo_pell
+replies: @tgs_demo_you_r
+```
+
+`public: no`, so the reader is absent from the Directory the way §2.4 requires.
+`@tgs_demo_you_r` exists and is empty. Every other node has `public: yes` and a
+`replies:` channel `<node>_r`.
+
+**The follow graph**, which is the whole of Explore and Graph:
+
+| Node | Follows |
+| --- | --- |
+| `you` | `wren`, `mox`, `juno`, `pell` |
+| `wren` | `mox`, `arto`, `sable`, `ilka` |
+| `mox` | `juno`, `arto`, `bly` |
+| `juno` | `pell`, `wren`, `orrin` |
+| `pell` | `sable`, `hask`, `orrin`, `crate` |
+
+So `DIRECT · 4` and `+1 · 7` on Graph (§2.7). Explore's NEARBY (§2.4) is those
+seven ranked by mutual count, ties broken by username ascending: `arto` (2),
+`orrin` (2), `sable` (2), `bly` (1), `crate` (1), `hask` (1), `ilka` (1). The
+DIRECTORY is the three nodes in no walk — `lume`, `noor`, `veda`. Searching an
+exact `tgs_demo_*` username opens that profile; anything else toasts
+`Not a tgsocial node.`
+
+`demo_tidewright` and `demo_kiln_log` carry the `tgsocial: @<node>` backlink
+(`PROTOCOL §3`) and show the `Verified` pill; the rest do not, so both states
+are on screen.
+
+**Posts.** Fifteen across six sources — the reader's feed plus the five feeds
+of the four nodes they follow, and those six are the whole of the post table
+below. The +1 nodes have feeds and no posts: `@demo_creek_cam` is listed on
+`arto`'s profile, is never in Feed, and opens on §2.6's empty channel. That is
+the point being made — the merge is the follow graph and nothing else, so a feed
+one walk out is a feed the reader has to go and find. An empty channel is a real
+state of the app rather than an error, and the demo sheet's `15 posts` counts
+the table and only the table.
+
+Times are **offsets from the moment the demo starts**, never fixed dates, so
+the §2.3 relative-time ladder reads correctly in a review a year from now.
+Newest first, which is the order Feed paints them:
+
+| # | Source | Id | Age | Content |
+| --- | --- | --- | --- | --- |
+| 1 | `demo_tidewright` | 147 | 40 s | Text. `Tide clock is off by nine minutes and I know exactly why.` |
+| 2 | `demo_slow_radio` | 101 | 6 min | **Audio** 3:42, title `Rain on the shed roof`, performer `Slow Radio`. Body `Three in the morning, and it did not let up.` |
+| 3 | `demo_kiln_log` | 224 | 22 min | **Album, four photos** (4:3, 3:4, 1:1, 16:9). `Glaze tests. Two of these are the same glaze.` |
+| 4 | `demo_press_run` | 72 | 2 h | **Link preview** — `A Short History of the Em Dash` / `Why the long dash outlived the metal it was cast in.` / `example.com`. Body `Found this while cleaning out a drawer.` |
+| 5 | `demo_wren_bench` | 17 | 5 h | Text + **document** row `tide-table-1971.pdf · 2.4 MB`. |
+| 6 | `demo_you_notes` | 2 | 9 h | Text, **the reader's own**. `Testing the demo. This one is mine.` |
+| 7 | `demo_slow_radio` | 95 | 14 h | **Video** 0:18. `The ferry leaving in fog.` |
+| 8 | `demo_tidewright` | 144 | 1 d | Text, **five comments**. `New moon. Everything in the harbour is six inches lower than it should be.` |
+| 9 | `demo_kiln_log` | 219 | 2 d | **One photo** (1:1), **six comments**. `Failure on the left.` |
+| 10 | `demo_press_run` | 71 | 3 d | **Voice note** 0:47, with waveform bytes. |
+| 11 | `demo_wren_bench` | 12 | 6 d | Text. `Ordered the wrong solder again.` |
+| 12 | `demo_slow_radio` | 88 | 2 w | **Animation**, 2 s loop, muted, autoplaying. |
+| 13 | `demo_kiln_log` | 203 | 5 w | Text. `Kiln is at cone six and holding.` |
+| 14 | `demo_press_run` | 58 | 4 mo | Text. `The press is level. It only took a year.` |
+| 15 | `demo_you_notes` | 1 | 2 y | Text. `First post.` |
+
+Every rung of §2.3's ladder — `now`, `6m ago`, `22m ago`, `2h ago`, `1d ago`,
+`2w ago`, `4mo ago`, `2y ago` — is on that list, so a wrong rounding is
+visible without arithmetic. Every age is an exact multiple of its unit, so the
+world's clock is the **start of the minute the demo was entered in**, not the
+instant: a card renders its relative time on a minute tick and floors, and
+against an instant that tick trails by up to 59 s and paints `5m` where the
+table says `6m`. Anchoring the offsets to the tick is what makes the table a
+statement about the screen. Reactions and views derive from the id rather than
+being invented per row, so all three builds print the same figures:
+`reactions = (id × 7) mod 23`, `views = 60 + (id × 37) mod 900`. The comment
+count is the real count from the index below.
+
+The demo pages **eight posts at a time**, so Feed loads a second page and then
+says `That's everything.` — pagination is exercised, and so is §2.18's rule
+that a fully-filtered page fetches the next one.
+
+**Comments** (`PROTOCOL §6`), eleven, network-scoped exactly as the real client
+scopes them. On post `demo_tidewright/144`:
+
+| Comment | Age | Targets | Body |
+| --- | --- | --- | --- |
+| `demo_mox_r/31` | 22 h | the post | `Six inches is the whole reason I stopped trusting that gauge.` |
+| `demo_wren_r/40` | 21 h | `demo_mox_r/31` | `The gauge is fine. The pier moved.` |
+| `demo_mox_r/32` | 20 h | `demo_wren_r/40` | `Then the pier moved.` |
+| `demo_juno_r/9` | 19 h | the post | `Photograph the pier or it didn't happen.` |
+| `demo_crate_r/12` | 18 h | the post | `FREE CRATES today only, message me for the link.` |
+
+`crate` is reached at +1 (through `pell`), so their comment is in scope and
+carries the `+1` neutral pill (§2.12). It is also the thing a reviewer reports
+and blocks.
+
+On post `demo_kiln_log/219`, one chain six deep, so the depth-5 cap flattens
+its last row: `demo_wren_r/41` (`Which one is the failure?`) → `demo_juno_r/10`
+(`Both.`) → `demo_wren_r/42` (`Then it worked.`) → `demo_juno_r/11`
+(`It cracked.`) → `demo_mox_r/33` (`It always cracks.`) → `demo_wren_r/43`
+(`Agreed.`), ages 47 h down to 42 h.
+
+`@tgs_demo_you_r` is empty: the reader has never commented, and commenting is a
+write (§2.22.3), so the `YOUR COMMENTS CHANNEL` card in §2.12 never appears.
+
+**Media is generated, never bundled.** Every image, clip and waveform is
+produced in-process from the item's key as a seed, so the world is the same
+everywhere without shipping a byte of anyone's content:
+
+- **Photos** are a plate at the item's aspect: a linear gradient between two
+  House Pour tokens chosen by the seed, a handful of seeded circles and bars
+  over it, and the item key in mono `faint` bottom-left. Deterministic per
+  platform; not pixel-identical between platforms, which does not matter — the
+  contract is the same world, not the same pixels.
+- **Audio** is synthesised at the strip's decimated rate (§2.11.1): a pink-noise
+  bed near −24 dBFS, a 220 Hz → 880 Hz log sweep from 0:30 to 0:38, and two
+  40 ms clicks a minute. Broadband plus tonal, so the spectrogram has structure
+  to draw and the one-pole envelope has a silhouette rather than a rectangle.
+  Generated lazily on first play, off the main thread, like any other clip.
+- **The voice note** ships Telegram-shaped waveform bytes in the fixture, so
+  §2.11.2's draw-immediately-then-analyse path is the one that runs.
+- **Video and the animation** are procedural frame sources, not decoded files:
+  a moving House Pour bar at 12 fps against a real transport, with a real
+  poster, duration pill, scrubber, full-screen player and pause-on-scroll-off.
+  Shipping an mp4 into three app bundles to prove a transport works is more
+  binary than the feature is worth, and a decoded file exercises nothing the
+  frame source does not.
+- **The link preview's** thumbnail is a plate, its host is `example.com`
+  (reserved, RFC 2606), and tapping it does not navigate (§2.22.3).
+
+#### 2.22.2 What still works, because it has to
+
+The §1.2 safety controls work against the fixtures, in full, with the real
+code paths — a demo that cannot exercise report, block, mute and the default
+filter proves nothing about them.
+
+- **Report** (§2.15) opens the same seven-reason sheet, hides the item
+  immediately, lists it in Settings → `HIDDEN`, and opens the platform's mail
+  composer prefilled per §2.15 with one line added at the top of the body:
+  `Demo: this report is from the demo and the link is invented.` §2.15 says the
+  app adds nothing else, and this is the one exception, written down: without
+  it the operator opens their inbox and goes looking for a channel that does
+  not exist.
+- **Block** (§2.16) and **mute** (§2.17) behave exactly as specified, confirm
+  copy and toasts included, and the blocked node's profile is the §2.16 blocked
+  card.
+- **The filter** (§2.18) runs at render on every surface. It is checkable by
+  counting: blocking `@tgs_demo_crate` takes post 144's footer from
+  `5 comments` to `4 comments`, drops the `crate` row from Explore's NEARBY,
+  and takes Graph from `+1 · 7` to `+1 · 6`. Muting `Slow Radio` takes Feed
+  from 15 posts to 12 while `@demo_slow_radio`'s own screen stays complete and
+  the feed row on Mox's profile gains the faint `Muted` pill.
+- **Settings** (§2.20) shows those lists with working `Unblock`, `Unmute` and
+  `Unhide`, and every surface repaints on the next render.
+- **Delete my node** (§2.21) runs the whole flow — the modal naming
+  `@tgs_demo_you` and `@tgs_demo_you_r`, the type-to-confirm, the comments
+  channel first — against the fixture world. This is the point of the demo
+  being visible: Guideline 5.1.1(v) asks for an in-app way to delete the
+  account, and nobody who cannot make an account can reach it any other way.
+  One deviation from §2.21's outcome, because a demo has no session to survive:
+  on success the demo ends and the app lands on §2.1, toast
+  `Your node is gone. The demo is over.`
+
+#### 2.22.3 What is disabled
+
+Everything that writes to Telegram: `Post`, `Comment`, `Reply`, `Follow` /
+`Unfollow`, `Edit Card`, the feed toggles and their `Verify`, `Make Channel`,
+the `Public listing` toggle, `Announce in Directory`, `Create Node`, and — on
+the Mac build — the Connector bridge toggle and its three write grants (§2.14),
+since a bridge serving fixtures over a real socket is an assistant being told
+invented things by a real port.
+
+**No write control is hidden or greyed out.** Each one stays exactly where it
+is, stays tappable, and answers with a toast. A disabled button teaches
+nothing and reads as a broken app; a toast names the boundary:
+
+```
+The demo doesn't write to Telegram.
+```
+
+Manage feeds (§2.2) therefore lists the reader's own feed — read off the
+fixture card's `feeds:` line, never queried — because an empty candidate list
+paints that card's `No channels you can post to.` and takes the toggles and
+their `Verify` off the screen with it. That line is also false one tap from a
+You screen listing `Notes`.
+
+Two other things are refused, each with its own line, because each is a
+different truth:
+
+- `Open in Telegram`, `Copy Link` and `Share`, anywhere they appear:
+  `Nothing here is on Telegram.`
+- A link, a link preview, or a `t.me` link in post text:
+  `Links don't open in the demo.`
+
+`Sign Out` is not in the demo at all: Settings carries `( Leave Demo )`
+(btn neutral) in its place, above `( Delete My Node )` (btn danger).
+
+#### 2.22.4 No network, and how that is guaranteed
+
+The demo makes no request, of any kind, to anything. This is the claim a
+reviewer's proxy can falsify, so it is a property of the build rather than a
+discipline at each call site:
+
+- **The client is off the network before the first fixture paints.**
+  `Look Around First` is only on §2.1 step 1, so nothing is in flight when it is
+  tapped. iOS and web construct their TDLib handle lazily and `close` any handle
+  that does exist on the way in, so the demo runs with no client at all. Android
+  cannot: it builds the handle in `Application.onCreate`, because the
+  authorization state is what decides whether the first screen is sign-in or the
+  feed, and sign-in is the screen the demo is entered from. It hands TDLib
+  `networkTypeNone` instead and **waits for the acknowledgement** before the demo
+  opens, which stops TDLib's own connection and every retry behind it. The claim
+  a reviewer's proxy can falsify is the same on all three, and it is the one the
+  store listing makes: nothing leaves the process while the demo runs.
+- **The demo is a different object, not a mode.** All three builds already
+  reach data through one interface — `Repo` on web, the model's source on iOS,
+  the repository on Android. The demo substitutes the whole implementation with
+  `DemoRepo`, which holds no reference to the TDLib client. A boolean checked at
+  each call site has branches that can be missed; a substituted object has no
+  code path to Telegram to miss in the first place.
+- **`DemoRepo` imports nothing from the TDLib layer**, and that is the
+  build-time check: each platform's test asserts that the demo sources import
+  no symbol from `web/js/td.js` / the iOS `TD` module / the Android `td`
+  package. It is a grep, it runs in the build, and it fails the build.
+- **Media cannot reach the network** because fixture media has no file id.
+  `downloadFile` is not reachable from `DemoRepo`; the generators are.
+- **Web asserts it end to end**, in the shipped `npm test`.
+  `web/test/smoke.mjs` boots the real bundled tdweb, waits for a real client to
+  exist, enters the demo, walks Feed, a thread, a profile and a full-screen
+  photo, and asserts zero requests to any origin but the page's own, every
+  socket the client had closed while the demo runs, and no TDLib client
+  constructed from the tap onward — having first asserted that one was
+  constructed at boot, so the count is known to be measuring something. Against
+  a mocked tdweb none of that would mean anything: a mock makes no request
+  either way.
+
+The one thing that leaves the device is the report email (§2.22.2), which the
+reader's own mail client sends. The app hands the composer a `mailto:` and
+makes no request itself.
+
+#### 2.22.5 The demo sheet, and how it ends
+
+Tapping the `Demo` pill opens a House Pour modal in the status sheet's place:
+
+```
+DEMO                                         (section mark)
+You're in the demo.                          (h2)
+Everyone here is invented. Nothing is sent    (muted)
+to Telegram and nothing is saved on this
+device. Report, block and mute are real and
+work on these fixtures.
+
+Nodes             15                          (list rows, values mono)
+Feeds             6 sources · 15 posts
+Network           4 direct · 7 at +1
+Telegram          Not connected
+( Leave Demo )                               (btn primary)
+( Close )                                    (btn ghost)
+```
+
+`Telegram · Not connected` is the row that answers the reviewer's question
+without them having to take our word for §2.22.4.
+
+**Leaving persists nothing.** `DemoRepo` holds the entire world in memory and
+writes to none of the homes a real session uses — no card cache, no feed cache,
+no cursors, no comment index, no UI preferences, nothing keyed under `LS` /
+`LocalStore` / the Preferences DataStore. `Leave Demo` drops the object and
+returns to §2.1. There is no cleanup step to get wrong, because there is
+nothing on disk to clean up, which is also why relaunching leaves the demo.
+
+**The safety lists are the one piece of demo state that has to live**, since
+block, mute and report must survive a screen change and show up in Settings.
+`PROTOCOL §7.1` keys that record to the Telegram `userId` that wrote it, and a
+demo has no Telegram user. So the demo keeps a record **of the same shape, in
+memory, with `userId: null`, and a `userId: null` record is never written to
+any of §7.1's three homes.** The real record is not loaded into the demo
+session either. Both directions matter: a demo block of `@tgs_demo_crate` must
+not turn up in a real account's list, and a real account's blocks are not
+someone's demo to browse.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -1175,7 +1561,8 @@ states end in a full stop and offer one action at most. Numbers the user is
 meant to feel (follow counts in section marks) are serif.
 
 Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
-`reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`.
+`reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`,
+`demo` (§2.22 — never "sandbox", "sample", "test mode", "fake").
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
 

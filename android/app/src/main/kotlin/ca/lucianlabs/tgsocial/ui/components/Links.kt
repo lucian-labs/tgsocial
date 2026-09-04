@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import ca.lucianlabs.tgsocial.BuildConfig
+import ca.lucianlabs.tgsocial.demo.DemoCopy
+import ca.lucianlabs.tgsocial.demo.DemoGate
 import ca.lucianlabs.tgsocial.protocol.PublicLink
 
 /**
@@ -26,8 +28,33 @@ val publicOrigin: String? = PublicLink.origin(BuildConfig.PUBLIC_ORIGIN).also {
     }
 }
 
-/** PRODUCT §4 — links open in the system browser; t.me / tg:// land in Telegram when installed (Android app links). */
+/**
+ * PRODUCT §4 — links open in the system browser; t.me / tg:// land in Telegram when installed (Android app links).
+ *
+ * PRODUCT §2.22.3 — in the demo a link opens nothing and says why: a link in fixture text points at
+ * `example.com`, and a link preview's target is invented, so both are `Links don't open in the demo.`
+ * `Open in Telegram` takes the same road out of the app but is a different sentence — see [openInTelegram].
+ */
 fun openLink(context: Context, url: String) {
+    if (DemoGate.refused(DemoCopy.NO_LINKS)) return
+    view(context, url)
+}
+
+/**
+ * PRODUCT §2.6 / §2.13 — `Open in Telegram`: the same system intent, from the six controls that offer it.
+ *
+ * PRODUCT §2.22.3 refuses this one with its own line. The refusals are split deliberately — "three strings,
+ * because each names a different truth" — and the truth about `Open in Telegram` in the demo is not that
+ * links are off, it is that the post, the channel or the comment being opened is not on Telegram at all. It
+ * is a separate function rather than an argument to [openLink] so the call site cannot pick the wrong one by
+ * omission: a control that opens a t.me link calls this, a control that opens someone's link calls that.
+ */
+fun openInTelegram(context: Context, url: String) {
+    if (DemoGate.refused(DemoCopy.NOT_ON_TELEGRAM)) return
+    view(context, url)
+}
+
+private fun view(context: Context, url: String) {
     val uri = runCatching { Uri.parse(if (url.startsWith("http") || url.startsWith("tg:")) url else "https://$url") }.getOrNull() ?: return
     val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     runCatching { context.startActivity(intent) }
@@ -35,6 +62,9 @@ fun openLink(context: Context, url: String) {
 
 /** PRODUCT §2.3 — Share: the system share sheet (the one sanctioned system chrome) with the post's t.me link. */
 fun shareLink(context: Context, url: String) {
+    // PRODUCT §2.22.3 — sharing a t.me link for a post that is not on Telegram is the one thing this control
+    // must not do, so the demo answers with the sentence that says why.
+    if (DemoGate.refused(DemoCopy.NOT_ON_TELEGRAM)) return
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, url)
@@ -60,7 +90,8 @@ fun openMail(context: Context, to: String, subject: String = "", body: String = 
 }
 
 /** PRODUCT §2.6 / §2.13 — `Copy Link` puts the public URL on the clipboard (the t.me one when no origin is set). */
-fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    runCatching { clipboard.setPrimaryClip(ClipData.newPlainText(text, text)) }
+fun copyToClipboard(context: Context, text: String): Boolean {
+    if (DemoGate.refused(DemoCopy.NOT_ON_TELEGRAM)) return false
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
+    return runCatching { clipboard.setPrimaryClip(ClipData.newPlainText(text, text)) }.isSuccess
 }

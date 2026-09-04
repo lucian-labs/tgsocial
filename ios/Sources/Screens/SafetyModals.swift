@@ -45,7 +45,7 @@ struct CommentSheetModal: View {
             row("Channel", "@" + comment.channelUsername, isLast: true)
             HPButton("Open in Telegram", style: .neutral) {
                 model.modal = nil
-                model.open(comment.link)
+                model.openInTelegram(comment.link)
             }
             .padding(.top, HPTokens.Space.rowPad)
             SafetyBlock(primary: primary, block: blockRow, mute: nil)

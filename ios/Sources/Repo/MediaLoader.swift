@@ -37,6 +37,18 @@ final class MediaLoader {
 
     @ObservationIgnored private let td: TDClient
     @ObservationIgnored private let activity: ActivityRegistry
+    /// PRODUCT §2.22.4: "Media cannot reach the network because fixture media has no file id."
+    ///
+    /// Non-nil is the demo, and every route out of this type to TDLib is gated on it *here* rather
+    /// than at the thirty call sites in `MediaViews`. That is the whole of the substitution: the
+    /// generators answer `download`, and `downloadFile` is not reachable from a fixture — every
+    /// fixture id is negative (`DemoMedia.isDemoFileId`) and TDLib's are positive, so a demo id
+    /// cannot be mistaken for a real file even by accident.
+    ///
+    /// Setting it — either direction — ends the previous session's files (`endSession`).
+    @ObservationIgnored var demo: DemoMedia? {
+        didSet { endSession() }
+    }
     /// Byte-bounded (ImageCache.swift). The old `countLimit = 300` with no cost was not a memory
     /// bound at all — 300 full-resolution decodes is multiple gigabytes.
     @ObservationIgnored private let images: ImageMemoryCache
@@ -53,6 +65,27 @@ final class MediaLoader {
 
     /// Bytes of decoded pixels the cache is allowed to hold — surfaced for the Status sheet.
     var imageCacheByteLimit: Int { images.byteLimit }
+
+    /// Everything cached here is one session's files, and no session's paths outlive it: leaving the
+    /// demo deletes the world's temp directory (`DemoMedia.discard`), and TDLib's own directory goes
+    /// on sign-out. Keeping the completed `FileState`s across that boundary is what breaks the
+    /// second demo — `DemoMedia.nextFileId` restarts at `firstFileId` for every `DemoWorld` and
+    /// registration is deterministic, so session two asks for the very ids session one completed,
+    /// `download` and `streamableURL` both return the deleted path, and the generator never runs
+    /// again. §2.22.5 says the demo is droppable and re-enterable; this is what makes that true for
+    /// audio, video, the animation and the document, which — unlike images, cached by `uniqueId` —
+    /// have nothing but this table to answer from.
+    private func endSession() {
+        states = [:]
+        for list in waiters.values { for waiter in list { waiter.resume(returning: nil) } }
+        waiters = [:]
+        for task in inflight.values { task.cancel() }
+        inflight = [:]
+        // Not `purgeImages()`: that counter is the memory-warning one the Status sheet reads, and a
+        // session change is not memory pressure. The pixels still go — a real account's photos are
+        // not the demo's to hold, and vice versa.
+        images.removeAll()
+    }
 
     func state(_ fileId: Int) -> FileState { states[fileId] ?? FileState() }
 
@@ -87,6 +120,10 @@ final class MediaLoader {
     /// Starts (or re-prioritises) a download without waiting. Safe to call repeatedly.
     func prefetch(_ fileId: Int, priority: Int = MediaLoader.visiblePriority) {
         if let s = states[fileId], s.complete { return }
+        if demo != nil {
+            Task { [weak self] in _ = await self?.download(fileId, priority: priority, label: "") }
+            return
+        }
         let api = td.api
         Task { [weak self] in
             if let f = try? await api.downloadFile(fileId: fileId, limit: 0, offset: 0, priority: priority, synchronous: false) {
@@ -98,6 +135,7 @@ final class MediaLoader {
     /// Downloads to completion. nil when the download is cancelled or fails.
     func download(_ fileId: Int, priority: Int, label: String) async -> String? {
         if let s = states[fileId], s.complete, !s.path.isEmpty { return s.path }
+        if let demo { return await generate(fileId, with: demo) }
         let api = td.api
         let token = activity.begin(label)
         defer { activity.end(token) }
@@ -123,8 +161,36 @@ final class MediaLoader {
     }
 
     func cancel(_ fileId: Int) {
+        // Nothing to cancel in the demo: generation is local and finishes in milliseconds, and a
+        // cancel that reached TDLib would be the one request the demo makes.
+        guard demo == nil else { return }
         let api = td.api
         Task { _ = try? await api.cancelDownloadFile(fileId: fileId, onlyIfPending: false) }
+    }
+
+    /// The demo's stand-in for a download: generate the file, then publish the same `FileState` a
+    /// completed download would have, so every progress ring, poster and player downstream reads
+    /// exactly what it reads in a real session.
+    private func generate(_ fileId: Int, with demo: DemoMedia) async -> String? {
+        var pending = FileState()
+        pending.active = true
+        pending.expected = 1
+        states[fileId] = pending
+        let generated = await demo.path(fileId: fileId)
+        // The session can end mid-generation — a tap on play, then `Leave Demo`. Those bytes are
+        // already deleted and `endSession` has cleared the table, so putting a row back here would
+        // hand the *next* demo a completed state for a file that no longer exists.
+        guard self.demo === demo else { return nil }
+        guard let path = generated else {
+            states[fileId] = FileState()
+            resolve(fileId: fileId, path: nil)
+            return nil
+        }
+        let size = demo.size(fileId: fileId)
+        states[fileId] = FileState(path: path, downloaded: size, prefixSize: size,
+                                   expected: size, active: false, complete: true)
+        resolve(fileId: fileId, path: path)
+        return path
     }
 
     // MARK: Playback URLs
@@ -148,6 +214,11 @@ final class MediaLoader {
     /// (streamable prefix or complete). nil when the download stops without completing.
     func readyToPlayURL(_ file: FileRef, label: String) async -> URL? {
         if let url = streamableURL(file) { return url }
+        if demo != nil {
+            // A generated clip is complete or it does not exist; there is no prefix to stream.
+            guard let path = await download(file.fileId, priority: Self.tappedPriority, label: label) else { return nil }
+            return URL(fileURLWithPath: path)
+        }
         let api = td.api
         let token = activity.begin(label)
         defer { activity.end(token) }

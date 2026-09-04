@@ -21,13 +21,24 @@ struct RootView: View {
         .overlay {
             // Full-screen media viewer (PRODUCT §2.11): covers the topbar and the tab bar.
             if let request = model.viewer {
-                ViewerOverlay(request: request)
-                    // A new opening is a new view: the page, the drag and the comments toggle live in
-                    // ViewerOverlay's @State, which survives a request → request change otherwise. That
-                    // change is a real path (§2.12 puts a comment's own media inside the open viewer),
-                    // and without this the second viewer keeps the first one's page.
-                    .id(request.openingID)
-                    .transition(.opacity)
+                ZStack(alignment: .top) {
+                    ViewerOverlay(request: request)
+                        // A new opening is a new view: the page, the drag and the comments toggle live in
+                        // ViewerOverlay's @State, which survives a request → request change otherwise. That
+                        // change is a real path (§2.12 puts a comment's own media inside the open viewer),
+                        // and without this the second viewer keeps the first one's page.
+                        .id(request.openingID)
+                    // §2.22: the strip persists into the viewer and the carousel — the one place
+                    // the topbar hides, and the one screenshot that could be mistaken for someone's
+                    // real Telegram. Under the chrome row, and hit-testing nothing: the pager owns
+                    // every touch it did before.
+                    if model.isDemo {
+                        DemoViewerStrip()
+                            .padding(.top, HPViewerChrome.height)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .transition(.opacity)
             }
         }
         .animation(HPMotion.toast, value: model.viewer != nil)
@@ -46,6 +57,7 @@ struct RootView: View {
             case .report(let subject): ReportModal(subject: subject)
             case .block(let username): BlockModal(username: username)
             case .deleteNode: DeleteNodeModal()
+            case .demo: DemoSheetModal()
             case nil: EmptyView()
             }
         }
@@ -61,12 +73,23 @@ struct RootView: View {
         @Bindable var model = model
         if model.secretsMissing {
             SecretsMissingScreen()
+        } else if model.isDemo {
+            // PRODUCT §2.22: the demo IS the app, on an invented network. It routes ahead of the
+            // auth check because there is no auth state behind it to be ready — that is the point,
+            // and it is the same stack, not a second one built for the demo.
+            stack
         } else if model.auth != .ready {
             SignInScreen()
         } else if model.needsSetup {
             SetupScreen()
         } else {
-            NavigationStack(path: $model.path) {
+            stack
+        }
+    }
+
+    @ViewBuilder private var stack: some View {
+        @Bindable var model = model
+        NavigationStack(path: $model.path) {
                 TabRoot()
                     .navigationDestination(for: Route.self) { route in
                         Group {
@@ -84,9 +107,8 @@ struct RootView: View {
                         }
                         .background(HPBackdrop())
                     }
-            }
-            .toolbar(.hidden, for: .navigationBar)
         }
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
@@ -107,7 +129,11 @@ struct BottomChromeHeightKey: PreferenceKey {
 struct BottomChrome: View {
     @Environment(AppModel.self) private var model
 
-    private var showsTabs: Bool { !model.secretsMissing && model.auth == .ready && !model.needsSetup }
+    private var showsTabs: Bool {
+        guard !model.secretsMissing else { return false }
+        // The demo has no Setup and no auth to be ready; it is always the tabbed stack.
+        return model.isDemo || (model.auth == .ready && !model.needsSetup)
+    }
     private var showsDock: Bool { model.audio.current != nil }
 
     var body: some View {

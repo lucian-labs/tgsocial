@@ -54,7 +54,7 @@ final class DiscoveryRepository {
             }
         }
         edges = nextEdges
-        let ranked = counts.keys.sorted { (counts[$0]!, $0) > (counts[$1]!, $1) }
+        let ranked = NearbyOrder.ranked(counts)
         let infos = try await nodes.readNodes(Array(ranked.prefix(60)))
         var byKey: [String: NodeInfo] = [:]
         for i in infos where i.state == .ok { byKey[i.key] = i }

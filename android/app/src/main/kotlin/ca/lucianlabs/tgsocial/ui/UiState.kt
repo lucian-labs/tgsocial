@@ -42,6 +42,8 @@ sealed class Sheet {
     data object SignOut : Sheet()
     /** PRODUCT §2.10 — the Status sheet, opened by tapping the status pill. */
     data object Status : Sheet()
+    /** PRODUCT §2.22.5 — the demo sheet, which takes the status sheet's place for as long as the demo runs. */
+    data object Demo : Sheet()
     /**
      * PRODUCT §2.12 — the comment composer. It carries the **post** as well as the target because clearing
      * the reply target (the quote's `×`) does not close the composer — it re-aims it at the post, and the

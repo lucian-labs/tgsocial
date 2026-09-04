@@ -101,6 +101,58 @@ button.status::after {
 body[data-viewer] .head,
 body[data-viewer] .dock { display: none; }
 
+/* ── the demo strip (PRODUCT §2.22) ──────────────────────────────────────── */
+
+/* §2.22 item 2: full column width, bg2 fill, hairline `line` below (the head's
+   own border-bottom is that hairline), mono small in `muted`. It is a child of
+   `.head`, which is the sticky container the topbar lives in, so it is sticky
+   WITH the topbar rather than merely under it. Not dismissible, and on every
+   screen that has a topbar. */
+.demo-strip {
+  margin: 0;
+  padding: calc(var(--hp-space-pill-y) + 2px) var(--hp-space-column-side);
+  background: var(--bg-2);
+  border-top: var(--hp-border-width) solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--hp-type-mono-size);
+  line-height: var(--hp-type-mono-line);
+  color: var(--muted);
+}
+
+/* §2.22 item 2 again — "it persists into the full-screen media viewers and the
+   carousel, the one place the topbar hides", drawn over the dark surface in
+   the same mono small. The head comes back as a bare fixed bar carrying only
+   the strip: an unmarked full-screen photo is exactly the screenshot that
+   could be mistaken for someone's real Telegram. `pointer-events: none` keeps
+   the viewer's own swipe and pinch gestures whole, and the z-index sits at the
+   modal's so a composer opened over the viewer still paints above it. */
+body[data-demo][data-viewer] .head {
+  display: block;
+  position: fixed;
+  inset: 0 0 auto;
+  margin: 0;
+  z-index: var(--app-z-over-viewer);
+  background: transparent;
+  border-bottom: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+}
+body[data-demo][data-viewer] .head .topbar { display: none; }
+body[data-demo][data-viewer] .demo-strip {
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--hp-space-pill-y));
+  background: transparent;
+  border-top: none;
+  color: var(--viewer-text);
+  text-align: center;
+}
+
+/* §2.1 — the demo entry sits OUTSIDE the card and carries no fill, so the one
+   gold button on the screen is still `Send Code` (PRODUCT §2.22). */
+.signin-demo { margin-top: var(--hp-space-card-gap); }
+.signin-demo .btn { margin-bottom: var(--hp-space-label-bottom); }
+.signin-demo:empty { margin-top: 0; }
+
 /* rows of small controls under the tabs (Refresh) */
 .toolbar {
   display: flex;

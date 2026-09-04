@@ -21,7 +21,7 @@ struct ComposeModal: View {
                 HPMuted("No feeds to post to. Manage your feeds first.")
                     .padding(.bottom, HPTokens.Space.rowPad)
             } else {
-                HPTabs(items: feeds, selected: $feed) { name in model.nodes.cachedFeed(name)?.title ?? name }
+                HPTabs(items: feeds, selected: $feed) { name in model.feedInfo(name)?.title ?? name }
             }
             HPTextField(nil, text: $text, placeholder: "Say it.", kind: .multiline(rows: HPMetric.composeRows))
             HStack(spacing: HPTokens.Space.rowGap) {

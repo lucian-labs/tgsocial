@@ -46,6 +46,8 @@ import ca.lucianlabs.housepour.HPViewerButton
 import ca.lucianlabs.housepour.HPViewerDismissState
 import ca.lucianlabs.housepour.HPZoomable
 import ca.lucianlabs.housepour.hpViewerDismiss
+import ca.lucianlabs.tgsocial.demo.DemoCopy
+import ca.lucianlabs.tgsocial.demo.DemoGate
 import ca.lucianlabs.tgsocial.model.FileRef
 import ca.lucianlabs.tgsocial.model.PostMedia
 import ca.lucianlabs.tgsocial.repo.MediaRepo
@@ -180,6 +182,8 @@ private fun SaveActions(vm: AppViewModel, media: PostMedia) {
     }
     if (target.shareable) {
         HPViewerButton("Share", {
+            // PRODUCT §2.22.3 — `Share`, anywhere it appears, answers with the line that says why.
+            if (DemoGate.refused(DemoCopy.NOT_ON_TELEGRAM)) return@HPViewerButton
             scope.launch {
                 val path = app.media.download(target.file, MediaRepo.PRIORITY_TAPPED, "Downloading file")
                 if (path != null) app.media.share(context, path, target.mimeType)

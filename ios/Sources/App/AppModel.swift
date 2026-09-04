@@ -76,6 +76,8 @@ enum Modal: Equatable {
     case block(username: String)
     /// PRODUCT §2.21: type-the-username confirm, then the two deletes in order.
     case deleteNode
+    /// PRODUCT §2.22.5: the demo sheet, in the status sheet's place.
+    case demo
 }
 
 /// How `deleteMyNode` ended (PRODUCT §2.21, PROTOCOL §4.11). Every case but `.deleted` names what
@@ -272,9 +274,13 @@ final class AppModel {
         #endif
     }
 
-    /// Called once from the scene. The bridge restores itself here rather than in `init` because
-    /// binding a socket is work, and `init` runs before there is a window to report a failure in.
+    /// Called once from the scene. TDLib comes up here rather than in `init` — `TDClient` builds
+    /// its handle lazily now (PRODUCT §2.22.4), and `init` runs before there is a window to report
+    /// a failure in. The bridge restores itself here for the same reason: binding a socket is work.
     func startServices() async {
+        // A demo entered before this ran must not be handed a client behind its back.
+        guard !isDemo else { return }
+        td.start()
         #if targetEnvironment(macCatalyst)
         await connector.restore()
         #endif
@@ -284,7 +290,9 @@ final class AppModel {
         #if targetEnvironment(macCatalyst)
         connector.shutdown()
         #endif
-        td.closeClients()
+        // `closeClients` reaches the manager, and reaching the manager is what starts its receive
+        // thread. Nothing to close when nothing was ever opened — a demo-only session, say.
+        if td.isStarted { td.closeClients() }
     }
 
     var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0" }
@@ -298,6 +306,7 @@ final class AppModel {
     /// themselves on success, failure, cancellation, and after 30 s regardless
     /// (ActivityRegistry), so the pill cannot stick.
     var status: StatusKind {
+        if isDemo { return .demo }
         if auth != .ready { return .signedOut }
         switch connection {
         case .connectionStateWaitingForNetwork: return .offline
@@ -317,6 +326,9 @@ final class AppModel {
     }
 
     var telegramLabel: String {
+        // §2.22.5: the row that answers the reviewer's question without them having to take our
+        // word for §2.22.4.
+        if isDemo { return DemoCopy.telegramRow }
         guard auth == .ready else { return "Signed out" }
         let phone = PhoneMask.format(me?.phoneNumber ?? "")
         return phone.isEmpty ? "Signed in" : "Signed in \u{00B7} " + phone
@@ -329,6 +341,7 @@ final class AppModel {
     }
 
     var feedLabel: String {
+        if let world = demo { return world.feedsRow }
         let s = feed.sources.count
         var parts = ["\(s) source\(s == 1 ? "" : "s")", "\(posts.count) post\(posts.count == 1 ? "" : "s")"]
         if let at = lastFeedRefresh { parts.append("refreshed " + PostTime.format(at)) }
@@ -354,6 +367,7 @@ final class AppModel {
 
     /// Status sheet: re-runs the feed refresh and re-reads my card (PRODUCT §2.10).
     func refreshNow() async {
+        guard !isDemo else { return }
         await refreshMyCard()
         await refreshFeed()
     }
@@ -361,7 +375,131 @@ final class AppModel {
     var isOffline: Bool { if case .connectionStateWaitingForNetwork = connection { return true } else { return false } }
 
     /// Setup screen shows when signed in, no node, and the user has not skipped it — or while a setup is in progress.
-    var needsSetup: Bool { auth == .ready && (inSetup || (myNode == nil && !setupSkipped && nodeLookupDone)) }
+    /// Never in the demo: the reader already has `@tgs_demo_you`, and `Create Node` is a write.
+    var needsSetup: Bool { !isDemo && auth == .ready && (inSetup || (myNode == nil && !setupSkipped && nodeLookupDone)) }
+
+    // MARK: The demo (PRODUCT §2.22)
+
+    /// Non-nil is the demo. Not a flag threaded through the repositories: it is the object every
+    /// demo read comes from, and it holds no TDLib reference (PRODUCT §2.22.4).
+    private(set) var demo: DemoWorld?
+
+    var isDemo: Bool { demo != nil }
+
+    /// Whether a TDLib client was up when the demo was entered, so leaving can put back exactly
+    /// what entering took away and no more.
+    ///
+    /// In the app this is always true: `Look Around First` only appears on §2.1 step 1, and the
+    /// screen only reaches step 1 because TDLib emitted `authorizationStateWaitPhoneNumber`. It is
+    /// false when the demo is driven with no client behind it — which is what a test does, and
+    /// building one there would start TDLib's receive thread in a process that then calls `exit()`.
+    @ObservationIgnored private var hadClientBeforeDemo = false
+
+    /// §2.1's `Look Around First`. Reachable from step 1 only, so nothing is in flight when it is
+    /// tapped: the client the launch made is closed here, before the first fixture paints, and the
+    /// demo's own reads have no route to Telegram to close.
+    func enterDemo() {
+        guard demo == nil else { return }
+        let world = DemoWorld()
+        demo = world
+        hadClientBeforeDemo = td.isStarted
+        // Ordered: `isDemo` is true before the close lands, so `authorizationStateClosed` does not
+        // recreate the client out from under us.
+        Task { await td.close() }
+        moderation.enterDemo()
+        #if targetEnvironment(macCatalyst)
+        // §2.22.3: a bridge serving fixtures over a real socket is an assistant being told invented
+        // things by a real port. The grant is kept — only the listener stops, and `leaveDemo` puts
+        // it back. The handshake file the stop rewrites says `enabled: false`, which is not a demo
+        // write but the truth about the port: a client dialling it would find nothing there.
+        connector.shutdown()
+        #endif
+        media.demo = world.media
+        audio.stop()
+        video.pauseActive()
+
+        myNode = world.myNode
+        myCard = world.myCard
+        myCardState = .ok
+        myTitle = world.myTitle
+        myPhoto = nil
+        myCardFetchedAt = world.startedAt
+        nodeLookupDone = true
+        setupSkipped = false
+        inSetup = false
+
+        let page = world.page(upTo: DemoFixtures.pageSize)
+        posts = page.posts
+        feedExhausted = page.exhausted
+        feedReady = true
+        feedLoading = false
+        feedLoadingMore = false
+        feedStale = false
+        lastFeedRefresh = world.startedAt
+
+        direct = world.direct
+        nearby = world.nearby
+        directory = world.directory
+        edges = world.edges
+        exploreLoading = false
+        // Manage feeds is reachable in the demo, and §2.22.3 keeps every write control on screen:
+        // the reader's own feed is the row the toggles and `Verify` hang off, and it refuses.
+        candidates = world.feedCandidates
+
+        tab = .feed
+        path = []
+        modal = nil
+        viewer = nil
+        lastError = nil
+    }
+
+    /// Both exits (§2.22): the demo sheet's `( Leave Demo )` and Settings'. Returns to §2.1 step 1
+    /// with the phone field empty. There is no cleanup step to get wrong, because nothing about the
+    /// demo was on disk — only the generated bytes, which go with the world.
+    func leaveDemo(toast: String = DemoCopy.leftToast) {
+        guard let world = demo else { return }
+        demo = nil
+        media.demo = nil
+        world.discard()
+        moderation.leaveDemo()
+        #if targetEnvironment(macCatalyst)
+        // The counterpart to `enterDemo`'s `shutdown()`: entering kept the grant and only stopped
+        // the listener, so leaving puts the listener back. Without this the Settings toggle reads
+        // enabled with nothing on the port until the next relaunch.
+        Task { await connector.restore() }
+        #endif
+        audio.stop()
+        video.pauseActive()
+
+        myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        myCardFetchedAt = nil; nodeLookupDone = false; setupSkipped = false; inSetup = false
+        posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
+        feedReady = false; feedStale = false; feedExhausted = false; lastFeedRefresh = nil
+        path = []; tab = .feed; modal = nil; viewer = nil; replySelection = nil
+        lastError = nil
+
+        // Back to §2.1 step 1. The client was closed on the way in, so this is where one comes
+        // back; TDLib restarts its own auth flow and lands on `authorizationStateWaitPhoneNumber`.
+        auth = .loading
+        if hadClientBeforeDemo { td.recreate() }
+        hadClientBeforeDemo = false
+        showToast(toast)
+    }
+
+    /// §2.22.3: "No write control is hidden or greyed out." Each one stays exactly where it is,
+    /// stays tappable, and answers with a toast — a disabled button teaches nothing and reads as a
+    /// broken app, and a toast names the boundary. `true` means the caller has been answered and
+    /// should do nothing else.
+    ///
+    /// Not private: a control whose write is deferred — the feeds card's per-feed toggle only
+    /// changes a local selection, and `Save Feeds` is what writes — has to refuse at the tap, in the
+    /// view, or the boundary is named one control too late.
+    @discardableResult
+    func refuseDemoWrite() -> Bool {
+        guard isDemo else { return false }
+        showToast(DemoCopy.noWrite)
+        return true
+    }
 
     // MARK: Toast
 
@@ -506,7 +644,10 @@ final class AppModel {
         case .authorizationStateClosed:
             auth = .loading
             resetCandidacyMemory()
-            td.recreate()
+            // In the demo this update is the answer to `enterDemo`'s own `close()`. Recreating here
+            // would put a live client back behind the fixtures a moment after it was taken away
+            // (PRODUCT §2.22.4); `leaveDemo` is what brings one back.
+            if !isDemo { td.recreate() }
         default:
             auth = .unsupported(state: Self.stateName(authState))
         }
@@ -646,6 +787,15 @@ final class AppModel {
     // MARK: Feed
 
     func refreshFeed() async {
+        // Pull-to-refresh in the demo re-reads the same fixed world; the ages move because they are
+        // offsets from the demo's start, and nothing else does.
+        if let world = demo {
+            let page = world.page(upTo: max(DemoFixtures.pageSize, posts.count))
+            posts = page.posts
+            feedExhausted = page.exhausted
+            feedReady = true
+            return
+        }
         guard auth == .ready else { return }
         // Offline, reads serve cache: the cached posts are already on screen; refresh again when the network returns.
         if isOffline { feedStale = true; feedReady = true; posts = feed.posts; return }
@@ -670,6 +820,14 @@ final class AppModel {
     }
 
     func loadMoreFeed() async {
+        // Eight at a time (§2.22.1), so the demo runs a second page and then `That's everything.`
+        if let world = demo {
+            guard !feedExhausted else { return }
+            let page = world.page(upTo: posts.count + DemoFixtures.pageSize)
+            posts = page.posts
+            feedExhausted = page.exhausted
+            return
+        }
         guard !feedLoadingMore, !feedExhausted, feedReady, !isOffline else { return }
         feedLoadingMore = true; defer { feedLoadingMore = false }
         do { try await perform { try await self.feed.loadMore() } } catch {}
@@ -682,6 +840,12 @@ final class AppModel {
     /// Graph walk + directory, through the flood-wait wrapper: a FLOOD_WAIT inside the per-chat burst toasts
     /// and backs off like every other call (PRODUCT §4); any other failure keeps the last results.
     func refreshDiscovery(force: Bool = false) async {
+        if let world = demo {
+            // The demo's graph is fixed, so there is nothing to walk — the ranking §2.22.1 writes
+            // down was computed once, when the world was built.
+            direct = world.direct; nearby = world.nearby; directory = world.directory; edges = world.edges
+            return
+        }
         guard auth == .ready, !exploreLoading else { return }
         exploreLoading = true
         defer { exploreLoading = false }
@@ -697,6 +861,75 @@ final class AppModel {
         directory = discovery.directory
     }
 
+    // MARK: Reads the screens go through (PRODUCT §2.22.4)
+    //
+    // Node profile, feed channel and Explore's search are the three surfaces that read past the
+    // caches. They ask the model rather than the repository so the demo can answer from `DemoWorld`
+    // — the substituted object — instead of the repositories growing a demo branch each.
+
+    /// A cached node, or the fixture. Settings, You and the feed-channel header all read this.
+    func node(_ username: String) -> NodeInfo? {
+        demo?.node(username) ?? nodes.cachedNode(username)
+    }
+
+    /// A cached feed channel, or the fixture.
+    func feedInfo(_ username: String) -> FeedInfo? {
+        demo?.feed(username) ?? nodes.cachedFeed(username)
+    }
+
+    /// Every node the app has resolved — the feed-channel header's "who is this verified for".
+    var knownNodes: [NodeInfo] {
+        demo.map { Array($0.nodes.values) } ?? Array(nodes.nodes.values)
+    }
+
+    /// PRODUCT §2.5. Returns the node, its feeds and the nodes it follows; nil when there is no
+    /// such node and nothing cached to fall back on.
+    func loadProfile(username: String, force: Bool) async -> (node: NodeInfo, feeds: [FeedInfo], follows: [NodeInfo])? {
+        if let world = demo {
+            guard let info = world.node(username) else { return nil }
+            let card = info.card
+            return (info,
+                    (card?.feeds ?? []).compactMap { world.feed($0) },
+                    (card?.follows ?? []).compactMap { world.node($0) })
+        }
+        do {
+            let info = try await perform { try await self.nodes.readNode(username: username, force: force) }
+            guard let card = info.card else { return (info, [], []) }
+            async let f = nodes.readFeeds(card.feeds)
+            async let n = nodes.readNodes(card.follows)
+            return (info, (try? await f) ?? [], (try? await n) ?? [])
+        } catch {
+            return nil
+        }
+    }
+
+    /// PRODUCT §2.6. `loaded` is how many posts the screen already shows; a real session pages by
+    /// message id, and the demo by count, because a fixture channel has no history to page.
+    func loadChannel(username: String, loaded: Int, cursor: Int64, reset: Bool) async
+        -> (feed: FeedInfo, posts: [Post], exhausted: Bool, cursor: Int64)? {
+        if let world = demo {
+            guard let info = world.feed(username) else { return nil }
+            let page = world.channelPage(username, after: reset ? 0 : loaded)
+            return (info, page.posts, page.exhausted, 0)
+        }
+        do {
+            let info = try await nodes.readFeed(username: username, force: reset)
+            let from = reset ? 0 : cursor
+            let page = try await perform { try await self.feed.channelPosts(info, fromMessageId: from) }
+            let exhausted = page.exhausted || (from != 0 && page.oldestId >= from)
+            return (info, page.posts, exhausted, page.oldestId)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Explore's input (§2.4). In the demo an exact `tgs_demo_*` username opens that profile and
+    /// anything else misses, which is the same two outcomes a real search has.
+    func lookupNode(_ query: String) async -> NodeInfo? {
+        if let world = demo { return world.lookup(query) }
+        return await discovery.lookup(query)
+    }
+
     // MARK: Card writes (optimistic, rolled back with a toast)
 
     func isFollowing(_ username: String) -> Bool { myCard?.follows(username) ?? false }
@@ -704,6 +937,9 @@ final class AppModel {
 
     @discardableResult
     private func writeCard(_ next: Card) async -> Bool {
+        // §2.22.3: Follow / Unfollow, Edit Card, the feed toggles and the Public listing toggle all
+        // arrive here, and all of them are writes to Telegram. One refusal covers the five.
+        if refuseDemoWrite() { return false }
         guard let node = myNode else { showToast("Make your node first.", tone: .bad); return false }
         // PROTOCOL §8: a v1 client must not overwrite a newer card.
         guard myCardState == .ok else { showToast(Self.newerCardText, tone: .bad); return false }
@@ -765,6 +1001,7 @@ final class AppModel {
     }
 
     func announce() async {
+        if refuseDemoWrite() { return }
         guard let node = myNode, myCardState == .ok, myCard?.isPublic ?? true else { return }
         if isOffline { showToast("You're offline.", tone: .bad); return }
         do {
@@ -791,6 +1028,7 @@ final class AppModel {
     }
 
     func createNode(username: String) async -> Bool {
+        if refuseDemoWrite() { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         let card = Card(name: suggestedTitle, isPublic: true)
         do {
@@ -808,6 +1046,7 @@ final class AppModel {
     }
 
     func findExistingNode() async {
+        if refuseDemoWrite() { return }
         if isOffline { showToast("You're offline.", tone: .bad); return }
         do {
             if let (node, info) = try await perform({ try await self.nodes.findMyNode() }) {
@@ -825,7 +1064,8 @@ final class AppModel {
 
     /// You → pull-to-refresh: re-read my card when I have a node; otherwise look for one.
     func refreshYou() async {
-        guard auth == .ready else { return }
+        // The demo's own card is the fixture; pull-to-refresh on You re-reads nothing.
+        guard !isDemo, auth == .ready else { return }
         if myNode == nil { await findExistingNode(); return }
         await refreshMyCard()
         if myCardState == .ok {
@@ -856,7 +1096,9 @@ final class AppModel {
     /// Offline it does not query at all — reads serve cache (PRODUCT §4), same guard as createNode /
     /// findExistingNode / verifyFeed. Silent, because this is a read: no `You're offline.` toast.
     func loadCandidates() async {
-        guard auth == .ready, !isOffline else { return }
+        // Manage feeds is reachable in the demo and its rows refuse there (§2.22.3): the list is
+        // `world.feedCandidates`, set on entry, so this queries nothing and must not blank it.
+        guard !isDemo, auth == .ready, !isOffline else { return }
         // Never two live queries at once: a second caller joins the one in flight rather than
         // firing another loadChats burst at Telegram.
         if let running = candidatesQuery { await running.value; return }
@@ -905,6 +1147,7 @@ final class AppModel {
     }
 
     func verifyFeed(_ candidate: FeedCandidate) async -> Bool {
+        if refuseDemoWrite() { return false }
         guard let node = myNode else { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         do {
@@ -922,6 +1165,7 @@ final class AppModel {
     // MARK: Compose (§4.9)
 
     func post(text: String, photoPath: String?, to feedUsername: String) async -> Bool {
+        if refuseDemoWrite() { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         var resolved = feed.sources[Username.key(feedUsername)] ?? nodes.cachedFeed(feedUsername)
         if resolved == nil { resolved = try? await nodes.readFeed(username: feedUsername) }
@@ -972,7 +1216,9 @@ final class AppModel {
 
     /// Best-effort: a channel that cannot be read is skipped; a FLOOD_WAIT backs off like every other call.
     func refreshComments() async {
-        guard auth == .ready, !isOffline else { return }
+        // The demo's comment index is complete the moment the world is built; there is no channel
+        // to rescan and no deepening pass to run.
+        guard !isDemo, auth == .ready, !isOffline else { return }
         let refs = commentChannels
         guard !refs.isEmpty else { return }
         do { try await perform { try await self.comments.refresh(channels: refs) } } catch {}
@@ -982,7 +1228,7 @@ final class AppModel {
     /// has not reached the post's date, so comments older than the refresh window are reachable.
     func refreshComments(for post: Post) async {
         await refreshComments()
-        guard auth == .ready, !isOffline else { return }
+        guard !isDemo, auth == .ready, !isOffline else { return }
         do { try await perform { try await self.comments.deepen(untilDate: post.date) } } catch {}
     }
 
@@ -1009,7 +1255,11 @@ final class AppModel {
     /// carousel passes just the one it is showing, which is what "paging … re-targets the thread to
     /// that item's post" means (PRODUCT §2.12).
     func threadComments(targets: [String]) -> [Comment] {
-        moderation.lists.filtered(comments: comments.comments(forTargets: targets))
+        // Same walk either way — `CommentRepository` owns it and the demo hands it a different
+        // index, so the `re:` chain, the dedupe and §2.12's ordering cannot drift between the two.
+        let found = demo.map { CommentRepository.comments(forTargets: targets, in: $0.commentIndex) }
+            ?? comments.comments(forTargets: targets)
+        return moderation.lists.filtered(comments: found)
     }
 
     // MARK: The reply target (PRODUCT §2.12)
@@ -1039,6 +1289,7 @@ final class AppModel {
     /// The card's Comment button, the thread's gold action and the carousel's composer all land
     /// here: the composer opens against whatever is selected right now.
     func startComment(on post: Post, itemLink: String? = nil) {
+        if refuseDemoWrite() { return }
         guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
         modal = .comment(targeting: targeting(for: post, itemLink: itemLink))
     }
@@ -1046,6 +1297,7 @@ final class AppModel {
     /// `Reply` on a comment targets that comment's t.me link (PRODUCT §2.12) — the same target a
     /// tap on the comment selects, so the button and the tap cannot disagree.
     func startReply(to comment: Comment, on post: Post) {
+        if refuseDemoWrite() { return }
         guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
         replySelection = comment
         modal = .comment(targeting: targeting(for: post))
@@ -1065,6 +1317,7 @@ final class AppModel {
 
     /// First comment ever: create the channel, then add `replies:` to the card (PROTOCOL §6.4).
     func makeCommentsChannel(username: String) async -> Bool {
+        if refuseDemoWrite() { return false }
         guard let node = myNode, myCardState == .ok else { showToast(Self.newerCardText, tone: .bad); return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         let title = ((myCard?.name?.isEmpty == false ? myCard?.name : nil) ?? myTitle) + " comments"
@@ -1090,6 +1343,7 @@ final class AppModel {
     /// Optimistic (PRODUCT §2.12): the repository shows the pending comment immediately and rolls
     /// it back on failure; only the failure toasts.
     func postComment(text: String, photoPath: String?, target: CommentTarget) async -> Bool {
+        if refuseDemoWrite() { return false }
         guard let node = myNode, let replies = myCard?.replies else { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         do {
@@ -1111,6 +1365,7 @@ final class AppModel {
 
     func deleteComment(_ comment: Comment) async {
         modal = nil
+        if refuseDemoWrite() { return }
         if isOffline { showToast("You're offline.", tone: .bad); return }
         do {
             try await activity.run("Deleting your comment") {
@@ -1189,9 +1444,14 @@ final class AppModel {
     func sendReport(_ subject: ReportSubject, reason: String) {
         modal = nil
         moderation.hide(key: subject.hiddenKey, reason: reason)
+        // §2.22.2's one exception to §2.15's "the app adds nothing else": in the demo the body
+        // gains a line at the top saying so, because otherwise the operator opens their inbox and
+        // goes looking for a channel that does not exist.
+        let body = ReportMail.body(subject: subject, reason: reason, app: reportAppLine,
+                                   prefix: isDemo ? DemoCopy.reportPrefix : nil)
         MailLauncher.shared.send(to: ReportMail.to,
                                  subject: ReportMail.subject(reason: reason),
-                                 body: ReportMail.body(subject: subject, reason: reason, app: reportAppLine)) { [weak self] opened in
+                                 body: body) { [weak self] opened in
             self?.showToast(opened ? "Reported. It's hidden here now."
                                    : "No mail app. Write to \(Moderation.contactAddress).")
         }
@@ -1223,6 +1483,14 @@ final class AppModel {
     /// inline, a node I do not own would be discovered only after its comments channel was already
     /// gone. Checking both first is what makes that promise true.
     func deleteMyNode() async -> DeleteNodeResult {
+        // §2.22.2: this is the point of the demo being visible. Guideline 5.1.1(v) asks for an
+        // in-app way to delete the account, and nobody who cannot make an account can reach it any
+        // other way — so the whole §2.21 flow runs here, against the fixtures. One deviation,
+        // because a demo has no session to survive: on success the demo ends.
+        if isDemo {
+            leaveDemo(toast: DemoCopy.deletedToast)
+            return .deleted
+        }
         guard let node = myNode else { return .deleted }
         if isOffline { showToast("You're offline.", tone: .bad); return .offline }
         let repliesUsername = myCard?.replies
@@ -1306,16 +1574,33 @@ final class AppModel {
 
     // MARK: Links
 
+    /// A link in post text, a card's `link:`, or a link preview. §2.22.3 gives this its own line,
+    /// separate from `Nothing here is on Telegram.`, because they are different truths: a demo link
+    /// points at a page that exists (`example.com`), it just is not the reader's to be sent to.
     func open(_ string: String) {
+        if isDemo { showToast(DemoCopy.noLinks); return }
+        guard let url = DeepLink.url(string) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// `Open in Telegram`, wherever it appears (§2.3, §2.5, §2.6, §2.12). Its own entry point
+    /// rather than `open`, so the demo can answer it with the line that is true of it.
+    func openInTelegram(_ string: String) {
+        if isDemo { showToast(DemoCopy.notOnTelegram); return }
         guard let url = DeepLink.url(string) else { return }
         UIApplication.shared.open(url)
     }
 
     /// PRODUCT §2.6: `Copy Link` puts the public URL on the clipboard and says so.
     func copyLink(_ string: String) {
+        if isDemo { showToast(DemoCopy.notOnTelegram); return }
         UIPasteboard.general.string = string
         showToast("Link copied.")
     }
+
+    /// `Share` (§2.3). The system share sheet would put an invented t.me link on someone's
+    /// clipboard or into a message, so the demo answers instead of presenting one.
+    func refuseShareInDemo() { showToast(DemoCopy.notOnTelegram) }
 
     #if targetEnvironment(macCatalyst)
     /// PRODUCT §2.14: `Copy` puts the token on the clipboard, toast `Token copied.`

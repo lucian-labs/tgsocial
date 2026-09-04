@@ -39,7 +39,7 @@ import ca.lucianlabs.tgsocial.ui.components.EmptyCard
 import ca.lucianlabs.tgsocial.ui.components.FooterNote
 import ca.lucianlabs.tgsocial.ui.components.PostCard
 import ca.lucianlabs.tgsocial.ui.components.copyToClipboard
-import ca.lucianlabs.tgsocial.ui.components.openLink
+import ca.lucianlabs.tgsocial.ui.components.openInTelegram
 import ca.lucianlabs.tgsocial.ui.components.publicOrigin
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
 
@@ -69,12 +69,13 @@ fun LazyListScope.FeedChannelItems(vm: AppViewModel, c: ChannelUi) {
                             HPMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                                 HPMenuItem("Open in Telegram", {
                                     menuOpen = false
-                                    openLink(context, DeepLink.channel(src.username))
+                                    openInTelegram(context, DeepLink.channel(src.username))
                                 })
                                 HPMenuItem("Copy Link", {
                                     menuOpen = false
-                                    copyToClipboard(context, PublicLink.feed(src.username, publicOrigin))
-                                    vm.toast.show("Link copied.", HPToastTone.GOOD)
+                                    if (copyToClipboard(context, PublicLink.feed(src.username, publicOrigin))) {
+                                        vm.toast.show("Link copied.", HPToastTone.GOOD)
+                                    }
                                 })
                                 // PRODUCT §2.17 — no confirm: it is one tap to undo, right here.
                                 HPMenuItem(if (c.muted) "Unmute Feed" else "Mute Feed", {

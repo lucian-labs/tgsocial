@@ -21,6 +21,18 @@ struct SignInScreen: View {
                         .padding(.top, HPTokens.Space.rowGap)
                         .padding(.bottom, HPTokens.Space.cardPad)
                     HPCard { step }
+                    // §2.22's entry point: ghost, OUTSIDE the card, below the gold `Send Code`, so
+                    // the card still runs from `PHONE NUMBER` to the one filled button and the
+                    // primary action keeps the only fill on the screen.
+                    //
+                    // Step 1 only. Once a number is in flight the screen has one job, and nobody
+                    // mid-sign-in can fall into the demo by reaching for the wrong control.
+                    if case .phone = model.auth {
+                        HPButton(DemoCopy.enterButton, style: .ghost) { model.enterDemo() }
+                            .padding(.top, HPTokens.Space.cardGap)
+                        HPMuted(DemoCopy.enterMuted)
+                            .padding(.top, HPTokens.Space.rowGap)
+                    }
                     // §2.19: the only screen a signed-out reader sees, so the address is on it.
                     Button { model.contactByMail() } label: {
                         HPMuted(Moderation.contactAddress)

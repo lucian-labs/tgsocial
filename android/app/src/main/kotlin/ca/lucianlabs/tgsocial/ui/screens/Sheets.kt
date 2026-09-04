@@ -38,16 +38,18 @@ import ca.lucianlabs.housepour.HPTabs
 import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTextField
 import ca.lucianlabs.housepour.HPTokens
+import ca.lucianlabs.tgsocial.demo.DemoCopy
 import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.protocol.ReplyTarget
 import ca.lucianlabs.tgsocial.protocol.ReportSubject
+import ca.lucianlabs.tgsocial.protocol.SafetyFilter
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Availability
 import ca.lucianlabs.tgsocial.ui.Sheet
-import ca.lucianlabs.tgsocial.ui.components.openLink
+import ca.lucianlabs.tgsocial.ui.components.openInTelegram
 
 /**
  * Sheet bodies. The modal itself (scrim, card, fade) is one `HPModal` host in the shell; these are its contents.
@@ -163,6 +165,39 @@ fun ColumnScope.StatusSheet(vm: AppViewModel) {
 }
 
 /**
+ * PRODUCT §2.22.5 — the demo sheet, in the status sheet's place. The four rows are the demo's own numbers, and
+ * `Telegram · Not connected` is the row that answers the reviewer's question without them having to take our
+ * word for §2.22.4.
+ */
+@Composable
+fun ColumnScope.DemoSheet(vm: AppViewModel) {
+    val demo by vm.demo.collectAsStateWithLifecycle()
+    val session = demo ?: return
+    // Derived through the filter (§2.18), not off the fixture, so blocking @tgs_demo_crate takes `+1 · 7` to
+    // `+1 · 6` here as well as on Graph — the sheet is checkable by counting, like everything else (§2.22.2).
+    val safety by vm.safety.collectAsStateWithLifecycle()
+    val feed by vm.visibleFeed.collectAsStateWithLifecycle()
+    HPSectionMark(DemoCopy.SHEET_MARK)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPH2(DemoCopy.SHEET_TITLE)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPMuted(DemoCopy.SHEET_BODY)
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    StatusRow("Nodes", "${vm.cards.collectAsStateWithLifecycle().value.size}")
+    val sources = if (feed.sourceCount == 1) "1 source" else "${feed.sourceCount} sources"
+    val posts = if (session.postCount == 1) "1 post" else "${session.postCount} posts"
+    StatusRow("Feeds", "$sources · $posts")
+    val direct = SafetyFilter.nodes(session.direct(), safety).size
+    val plusOne = SafetyFilter.nodes(session.nearby(), safety).size
+    StatusRow("Network", "$direct direct · $plusOne at +1")
+    StatusRow(DemoCopy.ROW_TELEGRAM, DemoCopy.ROW_TELEGRAM_VALUE, isLast = true)
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    HPButton(DemoCopy.LEAVE, { vm.leaveDemo() }, style = HPButtonStyle.PRIMARY)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPButton(DemoCopy.CLOSE, vm::closeSheet, style = HPButtonStyle.GHOST)
+}
+
+/**
  * PRODUCT §2.3 — the long-press post sheet: `POST` mark, then Posted (exact date), Views (compact), and
  * Feed (title · @username) rows, `( Open in Telegram )` neutral, `( Close )` ghost. `Open in Telegram`
  * lives here now — nowhere else on the card; Views moved here from the footer.
@@ -177,7 +212,7 @@ fun ColumnScope.PostSheet(vm: AppViewModel, post: Post) {
     StatusRow("Views", Format.compact(post.views))
     StatusRow("Feed", "${post.sourceTitle} · @${post.sourceUsername}", isLast = true)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
-    HPButton("Open in Telegram", { openLink(context, DeepLink.post(post.sourceUsername, post.messageId)) }, style = HPButtonStyle.NEUTRAL)
+    HPButton("Open in Telegram", { openInTelegram(context, DeepLink.post(post.sourceUsername, post.messageId)) }, style = HPButtonStyle.NEUTRAL)
     Spacer(Modifier.height(HPTokens.Space.cardGap))
     // PRODUCT §2.15 — the SAFETY block. Report always; Block only where §2.3 attributed the post to a node,
     // and never against yourself; Mute names the source channel and toggles like the §2.6 kebab does.

@@ -18,7 +18,7 @@ struct FeedChannelScreen: View {
     private var verifiedFor: String? {
         guard let feed else { return nil }
         if let mine = model.myNode?.username, feed.isVerified(for: mine) { return mine }
-        return model.nodes.nodes.values.first { n in n.card?.lists(feed: username) == true && feed.isVerified(for: n.username) }?.username
+        return model.knownNodes.first { n in n.card?.lists(feed: username) == true && feed.isVerified(for: n.username) }?.username
     }
 
     var body: some View {
@@ -32,7 +32,7 @@ struct FeedChannelScreen: View {
                         HStack(spacing: HPTokens.Space.rowGap) {
                             if verifiedFor != nil { HPPill("Verified", tone: .gold) }
                             HPMenu(items: [
-                                HPMenuItem("Open in Telegram") { model.open(DeepLink.chat(username: feed.username)) },
+                                HPMenuItem("Open in Telegram") { model.openInTelegram(DeepLink.chat(username: feed.username)) },
                                 HPMenuItem("Copy Link") { model.copyLink(PublicLink.feed(username: feed.username)) },
                                 // §2.17: one tap, no confirm — it is one tap to undo in the same place.
                                 model.isMuted(feed: feed.username)
@@ -71,8 +71,9 @@ struct FeedChannelScreen: View {
             }
         }
         .task(id: username) {
-            feed = model.nodes.cachedFeed(username)
-            // Live posts insert at the top while the screen is up (PRODUCT §2.3).
+            feed = model.feedInfo(username)
+            // Live posts insert at the top while the screen is up (PRODUCT §2.3). The demo has no
+            // update stream, so nothing arrives — which is the same as a quiet channel.
             model.observeMessages(observerId) { apply(live: $0) }
             await load(reset: true)
         }
@@ -98,19 +99,17 @@ struct FeedChannelScreen: View {
         guard !loading else { return }
         if !reset, exhausted { return }
         loading = true; defer { loading = false }
-        do {
-            let info = try await model.nodes.readFeed(username: username, force: reset)
-            feed = info
-            let from = reset ? 0 : cursor
-            let page = try await model.perform { try await model.feed.channelPosts(info, fromMessageId: from) }
-            if reset { posts = page.posts } else {
-                let known = Set(posts.map(\.id))
-                posts += page.posts.filter { !known.contains($0.id) }
-            }
-            exhausted = page.exhausted || (from != 0 && page.oldestId >= from)
-            cursor = page.oldestId
-        } catch {
+        guard let page = await model.loadChannel(username: username, loaded: posts.count,
+                                                 cursor: cursor, reset: reset) else {
             if feed == nil { failed = true }
+            return
         }
+        feed = page.feed
+        if reset { posts = page.posts } else {
+            let known = Set(posts.map(\.id))
+            posts += page.posts.filter { !known.contains($0.id) }
+        }
+        exhausted = page.exhausted
+        cursor = page.cursor
     }
 }

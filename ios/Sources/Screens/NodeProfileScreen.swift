@@ -111,7 +111,7 @@ struct NodeProfileScreen: View {
 
     private func kebabItems(_ node: NodeInfo) -> [HPMenuItem] {
         var items = [
-            HPMenuItem("Open in Telegram") { model.open(DeepLink.chat(username: node.username)) },
+            HPMenuItem("Open in Telegram") { model.openInTelegram(DeepLink.chat(username: node.username)) },
             HPMenuItem("Copy Link") { model.copyLink(PublicLink.node(username: node.username)) },
         ]
         if !model.isMe(node.username) {
@@ -120,19 +120,16 @@ struct NodeProfileScreen: View {
         return items
     }
 
+    /// Through the model, not the repository: the demo substitutes the whole source (PRODUCT
+    /// §2.22.4) and this screen asks the same question either way.
     private func load(force: Bool) async {
-        node = model.nodes.cachedNode(username)
-        do {
-            let info = try await model.perform { try await model.nodes.readNode(username: username, force: force) }
-            node = info
-            if let card = info.card {
-                async let f = model.nodes.readFeeds(card.feeds)
-                async let n = model.nodes.readNodes(card.follows)
-                feeds = (try? await f) ?? []
-                follows = (try? await n) ?? []
-            }
-        } catch {
+        node = model.node(username)
+        guard let loaded = await model.loadProfile(username: username, force: force) else {
             if node == nil { failed = true }
+            return
         }
+        node = loaded.node
+        feeds = loaded.feeds
+        follows = loaded.follows
     }
 }

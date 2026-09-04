@@ -80,6 +80,7 @@ import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTime
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.tgsocial.TgApp
+import ca.lucianlabs.tgsocial.demo.DemoMedia
 import ca.lucianlabs.tgsocial.model.FileRef
 import ca.lucianlabs.tgsocial.model.LinkPreviewInfo
 import ca.lucianlabs.tgsocial.model.Post
@@ -89,6 +90,7 @@ import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.protocol.Waveform
 import ca.lucianlabs.tgsocial.repo.FileState
 import ca.lucianlabs.tgsocial.repo.MediaRepo
+import ca.lucianlabs.tgsocial.ui.components.openInTelegram
 import ca.lucianlabs.tgsocial.ui.components.openLink
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImagePx
@@ -193,7 +195,7 @@ private fun SummaryRow(text: String, post: Post) {
             .fillMaxWidth()
             .heightIn(min = HPTokens.Space.touchMin)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
-                openLink(context, DeepLink.post(post.sourceUsername, post.messageId))
+                openInTelegram(context, DeepLink.post(post.sourceUsername, post.messageId))
             }
             .semantics { contentDescription = "Open in Telegram" },
         contentAlignment = Alignment.CenterStart,
@@ -336,6 +338,11 @@ private fun rememberOwnedPlayer(key: String, build: () -> androidx.media3.exopla
 private fun InlineVideo(key: String, media: PostMedia.Video, onOpenFull: () -> Unit) {
     val app = rememberTgApp()
     var playing by remember(key) { mutableStateOf(false) }
+    // PRODUCT §2.22.4 — a demo clip is generated, not downloaded, and the encode takes a second or two. It is
+    // warmed here, off the main thread, the moment the poster is on screen; until it lands the play control is
+    // the same not-yet state a file still downloading puts it in.
+    var ready by remember(key) { mutableStateOf(!DemoMedia.isDemo(media.file)) }
+    LaunchedEffect(key) { if (!ready) ready = app.media.localPath(media.file) != null }
     val shape = RoundedCornerShape(HPTokens.Radius.media)
     Box(
         modifier = Modifier
@@ -347,8 +354,10 @@ private fun InlineVideo(key: String, media: PostMedia.Video, onOpenFull: () -> U
                 // The whole poster plays inline (PRODUCT §2.3 "tap plays inline"), not just the 40pt circle.
                 if (!playing) Modifier
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) {
-                        app.playback.claimVideo(key)
-                        playing = true
+                        if (ready) {
+                            app.playback.claimVideo(key)
+                            playing = true
+                        }
                     }
                     .semantics { contentDescription = "Play video" }
                 else Modifier,
@@ -367,8 +376,10 @@ private fun InlineVideo(key: String, media: PostMedia.Video, onOpenFull: () -> U
                 playing = false,
                 raised = true,
                 onToggle = {
-                    app.playback.claimVideo(key)
-                    playing = true
+                    if (ready) {
+                        app.playback.claimVideo(key)
+                        playing = true
+                    }
                 },
                 label = "Play video",
             )

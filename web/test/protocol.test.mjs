@@ -1410,3 +1410,102 @@ test('the report email is §2.15’s, to the byte', () => {
   assert.equal(parsed.searchParams.get('subject'), subject, 'subject survives percent-encoding');
   assert.equal(parsed.searchParams.get('body'), body, 'and so does every newline in the body');
 });
+
+// ── PRODUCT §2.22 the demo ──────────────────────────────────────────────────
+
+/**
+ * §2.22.4's build-time check, and the reason it is a check rather than a
+ * discipline: "the demo is a different object, not a mode… `DemoRepo` imports
+ * nothing from the TDLib layer". A boolean checked at each call site has
+ * branches that can be missed; an import graph that cannot reach js/td.js has
+ * nothing to miss. This walks the whole closure rather than grepping the four
+ * files, because one hop through a module that DOES import td.js would put a
+ * client back within reach.
+ */
+test('§2.22.4: nothing the demo imports can reach js/td.js', async () => {
+  const root = join(here, '..', 'js');
+  const seen = new Set();
+  const trail = new Map();
+  const visit = async (file, via) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    trail.set(file, via);
+    const src = await readFile(file, 'utf8');
+    for (const m of src.matchAll(/^\s*import\s[^'"]*['"]([^'"]+)['"]/gm)) {
+      const spec = m[1];
+      if (!spec.startsWith('.')) continue;
+      await visit(join(dirname(file), spec), file);
+    }
+  };
+  for (const entry of ['demo/repo.js', 'demo/world.js', 'demo/media.js', 'demo/mode.js']) {
+    await visit(join(root, entry), null);
+  }
+  const td = join(root, 'td.js');
+  const path = [];
+  for (let at = td; at; at = trail.get(at)) path.push(at.slice(root.length + 1));
+  assert.ok(!seen.has(td), `the demo must not reach td.js — ${path.reverse().join(' → ')}`);
+  assert.ok(seen.has(join(root, 'demo', 'world.js')) && seen.has(join(root, 'repo.js')),
+    'and the walk really did follow imports (js/repo.js is in the closure, for FeedSession)');
+});
+
+/**
+ * §2.22.1's reader card is given in PROTOCOL §2's wire format on purpose: three
+ * builds parse the same seven lines, so the graph they draw is the same graph.
+ * If this ever stops parsing, the demo opens on a reader with no follows and
+ * every count in §2.22.5's sheet is wrong.
+ */
+test('§2.22.1: the reader card is a PROTOCOL §2 vector the parser agrees with', async () => {
+  const src = await readFile(join(here, '..', 'js', 'demo', 'world.js'), 'utf8');
+  const m = /export const READER_CARD_TEXT = \[([\s\S]*?)\]\.join\('\\n'\);/.exec(src);
+  assert.ok(m, 'READER_CARD_TEXT is a literal in js/demo/world.js');
+  const text = [...m[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((q) => q[1].replace(/\\'/g, "'")).join('\n');
+  const card = parseCard(text);
+  assert.ok(card, 'it is a v1 card');
+  assert.equal(card.name, 'Demo Reader');
+  assert.equal(card.bio, 'Looking around.');
+  assert.equal(card.public, false, 'public: no — so the reader is absent from the Directory (§2.4)');
+  assert.deepEqual(card.feeds, ['demo_you_notes']);
+  assert.deepEqual(card.follows, ['tgs_demo_wren', 'tgs_demo_mox', 'tgs_demo_juno', 'tgs_demo_pell']);
+  assert.equal(card.replies, 'tgs_demo_you_r');
+});
+
+/**
+ * §2.22.1's follow graph, run through the app's own ranking rather than
+ * re-listed here: `DIRECT · 4`, `+1 · 7`, and the order Explore's NEARBY paints
+ * — arto, orrin, sable (2 mutuals each, username ascending), then bly, crate,
+ * hask, ilka. Specified because otherwise three platforms produce three orders.
+ */
+test('§2.22.1: the follow graph ranks to §2.4’s NEARBY, in that order', () => {
+  const follows = {
+    tgs_demo_wren: ['tgs_demo_mox', 'tgs_demo_arto', 'tgs_demo_sable', 'tgs_demo_ilka'],
+    tgs_demo_mox: ['tgs_demo_juno', 'tgs_demo_arto', 'tgs_demo_bly'],
+    tgs_demo_juno: ['tgs_demo_pell', 'tgs_demo_wren', 'tgs_demo_orrin'],
+    tgs_demo_pell: ['tgs_demo_sable', 'tgs_demo_hask', 'tgs_demo_orrin', 'tgs_demo_crate'],
+  };
+  const mine = Object.keys(follows);
+  const cards = new Map(Object.entries(follows).map(([u, f]) => [u, { follows: f }]));
+  const ranked = rankPlusOne('tgs_demo_you', mine, cards);
+  assert.equal(mine.length, 4, 'DIRECT · 4');
+  assert.equal(ranked.length, 7, '+1 · 7');
+  assert.deepEqual(ranked.map((r) => r.username),
+    ['tgs_demo_arto', 'tgs_demo_orrin', 'tgs_demo_sable', 'tgs_demo_bly', 'tgs_demo_crate', 'tgs_demo_hask', 'tgs_demo_ilka']);
+  assert.deepEqual(ranked.slice(0, 3).map((r) => r.mutual), [2, 2, 2]);
+});
+
+/**
+ * §2.22.1: reactions and views derive from the message id so all three builds
+ * print the same figures. Held against the fifteen ids in the post table,
+ * because the property that matters is that none of them lands on zero — a
+ * post with no reactions would silently drop the footer's first half.
+ */
+test('§2.22.1: reactions and views derive from the id, and none of them is zero', () => {
+  const ids = [147, 101, 224, 72, 17, 2, 95, 144, 219, 71, 12, 88, 203, 58, 1];
+  for (const id of ids) {
+    const reactions = (id * 7) % 23;
+    const views = 60 + ((id * 37) % 900);
+    assert.ok(reactions > 0, `id ${id} would print no reactions`);
+    assert.ok(views >= 60 && views < 960, `id ${id} views out of range`);
+  }
+  assert.equal((144 * 7) % 23, 19, 'post 144 carries 19 reactions on every platform');
+  assert.equal(60 + ((144 * 37) % 900), 888, 'and 888 views');
+});

@@ -228,18 +228,19 @@ try {
    * because real fingers do and the slop has to tolerate it. Used for the post
    * sheet and, since §2.12, for the comment sheet.
    */
-  const longPress = async (locator) => {
+  const longPressOn = async (p, locator) => {
     // hover() scrolls it in and picks a point nothing else covers; the press
     // then jitters inside the slop, because real fingers do (§2.3)
     await locator.hover();
-    await page.mouse.down();
-    await page.waitForTimeout(150);
+    await p.mouse.down();
+    await p.waitForTimeout(150);
     const bb = await locator.boundingBox();
-    await page.mouse.move(bb.x + bb.width / 2 + 3, bb.y + bb.height / 2 + 2);
-    await page.waitForTimeout(450);
-    await page.mouse.up();
-    await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    await p.mouse.move(bb.x + bb.width / 2 + 3, bb.y + bb.height / 2 + 2);
+    await p.waitForTimeout(450);
+    await p.mouse.up();
+    await p.waitForSelector('#modal .modal-card', { timeout: 5000 });
   };
+  const longPress = (locator) => longPressOn(page, locator);
   /**
    * The same §2.3 press, aimed at a point that is actually words.
    *
@@ -252,7 +253,7 @@ try {
    * guessed from the box — which is what made this press depend on how a
    * particular post happened to wrap.
    */
-  const longPressText = async (locator) => {
+  const longPressTextOn = async (page, locator) => {
     // to the middle of the viewport, not merely into it: the topbar and the
     // floating dock are fixed, and a body parked under either has no point
     // that elementFromPoint will hand back
@@ -284,6 +285,7 @@ try {
     await page.mouse.up();
     await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
   };
+  const longPressText = (locator) => longPressTextOn(page, locator);
   const closeSheet = async () => {
     await page.click('#modal button.btn.ghost:has-text("Close")');
     await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
@@ -3362,6 +3364,340 @@ try {
       'signed in: Copy Link copies the t.me link with no origin configured');
 
     await newCtx.close();
+  }
+
+
+  // ── §2.22 the demo ────────────────────────────────────────────────────────
+  // The last of the four App Store blockers: a reviewer has no phone number
+  // and no code, so `Look Around First` on §2.1 step 1 is the rest of the app
+  // on an invented network. Everything below is measured rather than assumed —
+  // the counts a block changes, the rung a wrong rounding would land on, the
+  // requests the page did NOT make, and the three refusals, each with its own
+  // words (§2.22.3).
+  {
+    const demoCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ['clipboard-read', 'clipboard-write'] });
+    await demoCtx.route('**/vendor/tdweb/tdweb.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: mock }));
+    const d = await demoCtx.newPage();
+    d.on('console', (m) => {
+      if (m.type() === 'error') errors.push(`demo: ${m.text()}`);
+    });
+    d.on('pageerror', (e) => errors.push(`demo pageerror: ${e.message}`));
+    /** Every request this tab makes from the moment the demo opens (§2.22.4). */
+    let offsite = [];
+    let watching = false;
+    d.on('request', (r) => {
+      if (!watching) return;
+      const url = r.url();
+      if (url.startsWith(base) || url.startsWith('data:') || url.startsWith('blob:')) return;
+      offsite.push(url);
+    });
+    const dText = () => d.evaluate(() => document.getElementById('view').innerText);
+    const dToast = (re, ms = 6000) => d.waitForFunction(
+      ([src, flags]) => new RegExp(src, flags).test(document.getElementById('toast').textContent) && document.getElementById('toast').classList.contains('show'),
+      [re.source, re.flags], { timeout: ms },
+    );
+    const dWait = (re, ms = 15000) => d.waitForFunction(
+      ([src, flags]) => new RegExp(src, flags).test(document.getElementById('view').innerText), [re.source, re.flags], { timeout: ms },
+    );
+    const enter = async () => {
+      await d.waitForSelector('#view button.btn.ghost:has-text("Look Around First")', { timeout: 20000 });
+      await d.click('#view button.btn.ghost:has-text("Look Around First")');
+      await d.waitForSelector('#view article.post', { timeout: 25000 });
+    };
+
+    await d.goto(`${base}/?mock=fresh`, { waitUntil: 'load' });
+    await d.waitForSelector('input[type="tel"]', { timeout: 20000 });
+
+    // §2.1 — the entry point, on step 1 only
+    const entry = await d.evaluate(() => {
+      const btn = [...document.querySelectorAll('#view .signin-demo button.btn')].find((b) => b.textContent === 'Look Around First');
+      const card = document.querySelector('#view .card');
+      return {
+        label: btn?.textContent ?? null,
+        ghost: !!btn?.classList.contains('ghost'),
+        outsideCard: !!btn && !card.contains(btn),
+        belowCard: !!btn && card.compareDocumentPosition(btn) === Node.DOCUMENT_POSITION_FOLLOWING,
+        note: document.querySelector('#view .signin-demo p.muted')?.textContent ?? null,
+        golds: [...document.querySelectorAll('#view button.btn.primary')].map((b) => b.textContent),
+      };
+    });
+    ok(entry.label === 'Look Around First' && entry.note === 'Invented people, invented posts. Nothing is sent to Telegram.',
+      '§2.1: the demo entry and its muted line, verbatim');
+    ok(entry.ghost && entry.outsideCard && entry.belowCard && entry.golds.join() === 'Send Code',
+      '§2.1: ghost, outside the card, below it — Send Code keeps the only fill on the screen');
+
+    // step-1-only: once a number is in flight there is nothing to fall into
+    await d.fill('input[type="tel"]', '+16045550199');
+    await d.click('#view button.btn.primary');
+    await d.waitForSelector('input[inputmode="numeric"]', { timeout: 10000 });
+    ok(await d.evaluate(() => !document.querySelector('#view .signin-demo button')),
+      '§2.1: the entry is gone on the code step — nobody mid-sign-in can fall into the demo');
+    await d.goto(`${base}/?mock=fresh`, { waitUntil: 'load' });
+    await d.waitForSelector('input[type="tel"]', { timeout: 20000 });
+
+    watching = true;
+    await enter();
+
+    // §2.22.4 — TDLib is not merely unused, it is gone
+    ok(await d.evaluate(() => window.__tgsocial.td.client === null && window.__tgsocial.app.repo.constructor.name === 'DemoRepo'),
+      '§2.22.4: the TDLib handle is closed and the repo is a different object, not a mode');
+
+    // §2.22 — the three persistent indicators
+    const marks = await d.evaluate(() => ({
+      pill: document.getElementById('status').textContent,
+      gold: document.getElementById('status').classList.contains('gold'),
+      strip: document.querySelector('#head .demo-strip')?.textContent ?? null,
+      sticky: getComputedStyle(document.getElementById('head')).position,
+      handles: [...document.querySelectorAll('#view .post-sub, #view .post-title')].map((e) => e.textContent),
+    }));
+    ok(marks.pill === 'Demo' && !marks.gold, '§2.22: the status pill reads Demo, in the neutral pill and never gold');
+    ok(marks.strip === 'Demo. Everyone here is invented. Nothing leaves this device.' && marks.sticky === 'sticky',
+      '§2.22: the strip is docked under the topbar and sticky with it');
+    await snapPage(d, 'demo-feed');
+
+    // §2.22.1 — the world, and the ladder a wrong rounding would fall off
+    await d.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await dWait(/That's everything\./, 20000);
+    const world = await d.evaluate(() => {
+      const t = document.getElementById('view').innerText;
+      return {
+        posts: document.querySelectorAll('#view article.post').length,
+        ages: [...t.matchAll(/\n(now|\d+[mhdw] ago|\d+mo ago|\d+y ago)\n/g)].map((m) => m[1]),
+        counts: [...t.matchAll(/(\d+) comments?/g)].map((m) => Number(m[1])),
+        demoHandles: [...document.querySelectorAll('#view article.post')].every((p) => /^Demo|^[A-Z]/.test(p.textContent)),
+        stats: window.__tgsocial.demo.stats,
+      };
+    });
+    ok(world.posts === 15, `§2.22.1: fifteen posts across six sources (${world.posts})`);
+    ok(world.ages.join(' ') === 'now 6m ago 22m ago 2h ago 5h ago 9h ago 14h ago 1d ago 2d ago 3d ago 6d ago 2w ago 5w ago 4mo ago 2y ago',
+      `§2.22.1: every rung of §2.3's ladder is on screen (${world.ages.join(' ')})`);
+    ok(world.counts.filter((n) => n === 5).length === 1 && world.counts.filter((n) => n === 6).length === 1,
+      '§2.22.1: the two threads carry five and six comments');
+
+    // §2.22 item 3 — the fixtures name themselves, so a card cropped out of
+    // context still says what it is
+    const naming = await d.evaluate(() => {
+      const w = window.__tgsocial.demo.world;
+      return {
+        nodes: Object.values(w.cards).map((c) => c.username),
+        feeds: [...w.feeds.values()].map((f) => f.username),
+        channels: [...new Set(w.comments.map((c) => c.channel))],
+      };
+    });
+    ok(naming.nodes.length === 15 && naming.nodes.every((u) => u.startsWith('tgs_demo_')),
+      `§2.22.1: fifteen nodes, every handle prefixed tgs_demo_ (${naming.nodes.length})`);
+    ok(naming.feeds.every((u) => u.startsWith('demo_')) && naming.channels.every((u) => u.startsWith('demo_')),
+      '§2.22: every channel — feeds and comments channels alike — begins demo_');
+
+    // §2.22.1 — the media matrix, generated in-process and never bundled
+    await d.evaluate(() => window.scrollTo(0, 0));
+    await d.waitForSelector('#view .post-mosaic-tile.loaded', { timeout: 15000 });
+    const media = await d.evaluate(() => ({
+      mosaic: document.querySelectorAll('#view .post-mosaic .post-mosaic-tile').length,
+      tags: [...document.querySelectorAll('#view .post-media-tag')].map((e) => e.textContent),
+      players: [...document.querySelectorAll('#view .post-player .player-title, #view .post-player .player-total')].map((e) => e.textContent),
+      doc: document.querySelector('#view .post-file-name')?.textContent ?? null,
+      docMeta: document.querySelector('#view .post-file-meta')?.textContent ?? null,
+      srcs: [...document.querySelectorAll('#view img')].map((i) => i.getAttribute('src')).filter(Boolean),
+    }));
+    ok(media.mosaic === 4, `§2.11.3: the four-photo album is one mosaic of four tiles (${media.mosaic})`);
+    ok(media.tags.includes('0:18') && media.tags.includes('GIF'),
+      `§2.22.1: the 0:18 video keeps its duration pill and the 2 s loop its GIF pill (${media.tags.join(', ')})`);
+    ok(media.players.includes('3:42') && media.players.includes('0:47'),
+      `§2.22.1: the 3:42 clip and the 0:47 voice note are player rows (${media.players.join(', ')})`);
+    ok(media.doc === 'tide-table-1971.pdf' && /2\.4 MB/.test(media.docMeta ?? ''),
+      `§2.22.1: the document row is the fixture's own name and size (${media.doc} · ${media.docMeta})`);
+    ok(media.srcs.length >= 5 && media.srcs.every((u) => u.startsWith('data:')),
+      `§2.22.1: every picture on the screen is generated in this page — a data: URI, never a fetch (${media.srcs.length} of them${media.srcs.filter((u) => !u.startsWith('data:')).slice(0, 2).join(', ')})`);
+
+    // §2.22 item 2 — "it persists into the full-screen media viewers, the one
+    // place the topbar hides", because an unmarked full-screen photo is exactly
+    // the screenshot that could be mistaken for someone's real Telegram
+    await d.locator('#view .post-mosaic-tile').first().click();
+    await d.waitForSelector('.viewer', { timeout: 10000 });
+    const inViewer = await d.evaluate(() => {
+      const strip = document.querySelector('.demo-strip');
+      const box = strip?.getBoundingClientRect();
+      const viewer = document.querySelector('.viewer');
+      return {
+        topbar: !!document.querySelector('.topbar')?.getClientRects().length,
+        text: strip?.textContent ?? null,
+        painted: !!box && box.height > 0 && box.width > 0,
+        above: !!strip && !!viewer && document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) !== null,
+      };
+    });
+    ok(!inViewer.topbar && inViewer.painted && inViewer.text === 'Demo. Everyone here is invented. Nothing leaves this device.',
+      '§2.22: the topbar hides in the viewer and the strip stays, drawn over the dark surface');
+    await snapPage(d, 'demo-viewer');
+    await d.click('.viewer button.btn.ghost');
+    await d.waitForFunction(() => !document.querySelector('.viewer'), null, { timeout: 5000 });
+
+    // §2.22.5 — the demo sheet, in the status sheet's place
+    await d.click('#status');
+    await d.waitForSelector('#modal .modal-card[aria-label="Demo"]', { timeout: 5000 });
+    const sheet = await d.evaluate(() => document.getElementById('modal').innerText.replace(/\n+/g, '\n'));
+    ok(/DEMO\nYou're in the demo\./.test(sheet), '§2.22.5: the sheet is DEMO / You’re in the demo.');
+    ok(/Nodes\n15\n/.test(sheet) && /Feeds\n6 sources · 15 posts\n/.test(sheet) && /Network\n4 direct · 7 at \+1\n/.test(sheet),
+      `§2.22.5: the sheet's rows are the world it is describing (${sheet.replace(/\n/g, ' · ').slice(0, 200)})`);
+    ok(/Telegram\nNot connected/.test(sheet),
+      "§2.22.5: `Telegram · Not connected` — the row that answers the reviewer without them taking our word for it");
+    await snapPage(d, 'demo-sheet');
+    await d.click('#modal button.btn.ghost:has-text("Close")');
+    await d.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+
+    // §2.22.3 — writes. Nothing is greyed out; every one answers.
+    await d.evaluate(() => { location.hash = '#/explore'; });
+    await dWait(/NEARBY/);
+    await d.locator('#view .node-row:has-text("Arto Vansi") button.btn:has-text("Follow")').first().click();
+    await dToast(/The demo doesn't write to Telegram\./);
+    ok(await d.evaluate(() => !window.__tgsocial.app.repo.myCard.follows.includes('tgs_demo_arto')),
+      "§2.22.3: Follow stays where it is, stays tappable, and answers `The demo doesn't write to Telegram.`");
+
+    await d.evaluate(() => { location.hash = '#/you'; });
+    await dWait(/YOUR FEEDS/);
+    await d.click('#view button.btn.primary:has-text("Compose")');
+    await d.waitForSelector('#modal textarea', { timeout: 5000 });
+    await d.fill('#modal textarea', 'Can I post from the demo?');
+    await d.click('#modal button.btn.primary:has-text("Post")');
+    await dToast(/The demo doesn't write to Telegram\./);
+    ok(true, '§2.22.3: Post answers with the same words');
+    await d.click('#modal button.btn.ghost:has-text("Cancel")');
+    await d.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+
+    // §2.22.3 — Share, Copy Link and Open in Telegram: one string between them,
+    // because they are one truth — there is no message on Telegram to hand over
+    await d.evaluate(() => { location.hash = '#/feed'; });
+    await d.waitForSelector('#view article.post', { timeout: 20000 });
+    await d.locator('#view article.post .btn:has-text("Share")').first().click();
+    await dToast(/Nothing here is on Telegram\./);
+    ok(true, '§2.22.3: Share answers `Nothing here is on Telegram.`');
+
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_wren'; });
+    await dWait(/Wren Alderiss/);
+    await d.click('#view .head-actions button.kebab');
+    await d.waitForSelector('.menu[role="menu"]', { timeout: 5000 });
+    await d.locator('.menu[role="menu"] button.list-item:has-text("Copy Link")').click();
+    await dToast(/Nothing here is on Telegram\./);
+    ok((await d.evaluate(() => navigator.clipboard.readText())) !== 'https://t.me/tgs_demo_wren',
+      '§2.22.3: Copy Link answers `Nothing here is on Telegram.` and copies nothing');
+
+    // §2.22.3 — a link preview, which is a third
+    await d.evaluate(() => { location.hash = '#/feed/demo_press_run'; });
+    await dWait(/A Short History of the Em Dash/, 20000);
+    await d.click('#view button.post-preview');
+    await dToast(/Links don't open in the demo\./);
+    ok(await d.evaluate(() => document.querySelectorAll('#view .post-preview-site')[0]?.textContent === 'example.com'),
+      "§2.22.3: the link preview answers `Links don't open in the demo.` (and its host is example.com, RFC 2606)");
+
+    // §2.22.2 — the filter, checkable by counting (§2.18)
+    await d.evaluate(() => { location.hash = '#/thread/demo_tidewright/144'; });
+    await dWait(/COMMENTS · 5/, 20000);
+    const thread = await d.evaluate(() => ({
+      plusOne: [...document.querySelectorAll('#view .comment')].some((c) => /Crate Mailer/.test(c.textContent) && !!c.querySelector('.pill')),
+      crate: [...document.querySelectorAll('#view .comment')].some((c) => /FREE CRATES/.test(c.textContent)),
+    }));
+    ok(thread.crate && thread.plusOne,
+      "§2.22.1: crate is reached at +1 through pell, so their comment is in scope and carries the `+1` pill");
+    await snapPage(d, 'demo-thread');
+    await d.evaluate(() => window.__tgsocial.safety.block('tgs_demo_crate'));
+    await dWait(/COMMENTS · 4/, 10000);
+    ok(true, '§2.22.2: blocking @tgs_demo_crate takes post 144 from 5 comments to 4');
+    await d.evaluate(() => { location.hash = '#/graph'; });
+    await dWait(/\+1 · 6/, 20000);
+    ok(!/Crate Mailer/.test(await dText()), '§2.22.2: and Graph from `+1 · 7` to `+1 · 6`, with no row left behind');
+
+    // §2.17/§2.18 — mute is the main feed only
+    await d.evaluate(() => window.__tgsocial.safety.muteFeed('demo_slow_radio'));
+    await d.evaluate(() => { location.hash = '#/feed'; });
+    await d.waitForSelector('#view article.post', { timeout: 20000 });
+    await d.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await dWait(/That's everything\./, 20000);
+    const muted = await d.evaluate(() => document.querySelectorAll('#view article.post').length);
+    ok(muted === 12, `§2.22.2: muting Slow Radio takes Feed from 15 posts to 12 (${muted})`);
+    await d.evaluate(() => { location.hash = '#/feed/demo_slow_radio'; });
+    await d.waitForSelector('#view article.post', { timeout: 20000 });
+    const onChannel = await d.evaluate(() => document.querySelectorAll('#view article.post').length);
+    ok(onChannel === 3, `§2.22.2: while @demo_slow_radio's own screen stays complete (${onChannel})`);
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_mox'; });
+    await dWait(/Mox Petrakis/, 20000);
+    ok(await d.evaluate(() => [...document.querySelectorAll('#view .feed-row')].some((r) => /Slow Radio/.test(r.textContent) && !!r.querySelector('.pill.faint'))),
+      "§2.22.2: and the feed row on Mox's profile gains the faint `Muted` pill");
+    await d.evaluate(() => window.__tgsocial.safety.unmuteFeed('demo_slow_radio'));
+
+    // §2.22.2 — report, with §2.15's one written-down deviation
+    await d.evaluate(() => { location.hash = '#/thread/demo_kiln_log/219'; });
+    await dWait(/Failure on the left\./, 20000);
+    await d.evaluate(() => {
+      const orig = HTMLAnchorElement.prototype.click;
+      window.__mailto = null;
+      HTMLAnchorElement.prototype.click = function click(...args) {
+        if (String(this.href).startsWith('mailto:')) {
+          window.__mailto = this.href;
+          return undefined;
+        }
+        return orig.apply(this, args);
+      };
+    });
+    await longPressTextOn(d, d.locator('#view article.post .post-body').first());
+    await d.click('#modal button.btn.danger:has-text("Report Post")');
+    await d.waitForSelector('#modal .reason-row', { timeout: 5000 });
+    await d.click('#modal .reason-row:has-text("Spam")');
+    await d.click('#modal button.btn.danger:has-text("Send Report")');
+    await dToast(/Reported\. It's hidden here now\./);
+    const demoBody = new URL(await d.evaluate(() => window.__mailto)).searchParams.get('body');
+    ok(demoBody.startsWith('Demo: this report is from the demo and the link is invented.\nReason: Spam\n'),
+      '§2.22.2: the demo report prepends one line, and §2.15 still adds nothing else');
+    await d.evaluate(() => { location.hash = '#/settings'; });
+    await dWait(/HIDDEN · 1/, 20000);
+    ok(/(Kiln log|@demo_kiln_log) · 219/.test(await dText()), '§2.22.2: and it is listed in Settings → HIDDEN, by channel and message id');
+
+    // §2.22.3 — Sign Out is not in the demo at all
+    const settings = await d.evaluate(() => [...document.querySelectorAll('#view > div > button.btn')].map((b) => `${b.textContent}:${b.className}`));
+    ok(!settings.some((b) => /^Sign Out/.test(b)) && /^Leave Demo:.*btn/.test(settings[settings.length - 2] ?? '') && /^Delete My Node:.*danger/.test(settings[settings.length - 1] ?? ''),
+      `§2.22.3: Settings carries ( Leave Demo ) where Sign Out sits, above ( Delete My Node ) (${settings.join(' | ')})`);
+    await snapPage(d, 'demo-settings');
+
+    // §2.22.4 — the claim a reviewer's proxy can falsify
+    ok(offsite.length === 0, `§2.22.4: the demo made no request to any origin but this page's own${offsite.length ? `: ${offsite.join(' | ')}` : ''}`);
+
+    // §2.22 — leaving, and §2.22.5's "leaving persists nothing"
+    await d.click('#status');
+    await d.waitForSelector('#modal .modal-card[aria-label="Demo"]', { timeout: 5000 });
+    await d.click('#modal button.btn.primary:has-text("Leave Demo")');
+    await dToast(/Left the demo\./);
+    await d.waitForSelector('input[type="tel"]', { timeout: 20000 });
+    const left = await d.evaluate(() => ({
+      phone: document.querySelector('input[type="tel"]').value,
+      demo: window.__tgsocial.demo,
+      pill: document.getElementById('status').textContent,
+      strip: !!document.querySelector('.demo-strip'),
+      keys: Object.keys(localStorage).filter((k) => k.startsWith('tgs.')),
+      blocked: window.__tgsocial.safety.blocked,
+    }));
+    ok(left.phone === '' && left.demo === null && !left.strip && left.pill !== 'Demo',
+      '§2.22: Leave Demo returns to §2.1 step 1 with the phone field empty, and the marks go with it');
+    ok(left.keys.length === 0 && left.blocked.length === 0,
+      `§2.22.5 / PROTOCOL §7.1: nothing was written to disk, and the demo's block of @tgs_demo_crate is not in the reader's list (${left.keys.join(',')})`);
+
+    // §2.22.2 — the whole reason the demo is visible: 5.1.1(v) with no account
+    await enter();
+    await d.evaluate(() => { location.hash = '#/settings'; });
+    await dWait(/DELETE MY NODE/, 20000);
+    await d.click('#view button.btn.danger:has-text("Delete My Node")');
+    await d.waitForSelector('#modal .modal-card[aria-label="Delete My Node"]', { timeout: 5000 });
+    const modalCopy = await d.evaluate(() => document.getElementById('modal').innerText);
+    ok(/@tgs_demo_you/.test(modalCopy) && /@tgs_demo_you_r/.test(modalCopy) && /This cannot be undone\./.test(modalCopy),
+      '§2.21 in the demo: the modal names both channels and asks for the username');
+    ok(await d.evaluate(() => document.querySelector('#modal button.btn.danger').disabled),
+      '§2.21 in the demo: Delete My Node is armed only by typing the username');
+    await d.fill('#modal input', '@tgs_demo_you');
+    await d.click('#modal button.btn.danger:has-text("Delete My Node")');
+    await dToast(/Your node is gone\. The demo is over\./);
+    await d.waitForSelector('input[type="tel"]', { timeout: 20000 });
+    ok(await d.evaluate(() => window.__tgsocial.demo === null && !document.querySelector('.demo-strip')),
+      '§2.22.2: the demo runs §2.21 to the end and then ends, because a demo has no session to survive');
+
+    await demoCtx.close();
   }
 
   ok(errors.length === 0, `zero console errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);

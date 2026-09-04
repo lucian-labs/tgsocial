@@ -6,6 +6,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.FileDataSource
+import androidx.media3.datasource.TransferListener
 import ca.lucianlabs.tgsocial.model.FileRef
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import kotlinx.coroutines.runBlocking
@@ -26,8 +28,40 @@ class TdDataSource(private val tg: TelegramClient, private val priority: Int) : 
         private const val CHUNK = 512 * 1024L
     }
 
+    /**
+     * PRODUCT §2.22.4 — the demo's clips are generated files on disk, and they play through the same player
+     * this factory feeds. A `file://` spec is handed to media3's own `FileDataSource` instead of being parsed
+     * as a TDLib file id: the scheme decides, so nothing had to be told which world it is in.
+     */
     class Factory(private val tg: TelegramClient, private val priority: Int) : DataSource.Factory {
-        override fun createDataSource(): DataSource = TdDataSource(tg, priority)
+        override fun createDataSource(): DataSource = SchemeDataSource(tg, priority)
+    }
+
+    /** Delegates by scheme, because the URI is only known at `open` and the factory has to answer before that. */
+    private class SchemeDataSource(private val tg: TelegramClient, private val priority: Int) : DataSource {
+        private var delegate: DataSource? = null
+        private val transfers = ArrayList<TransferListener>()
+
+        private fun pick(dataSpec: DataSpec): DataSource {
+            val source = if (dataSpec.uri.scheme == SCHEME) TdDataSource(tg, priority) else FileDataSource()
+            transfers.forEach { source.addTransferListener(it) }
+            delegate = source
+            return source
+        }
+
+        override fun addTransferListener(transferListener: TransferListener) {
+            transfers += transferListener
+            delegate?.addTransferListener(transferListener)
+        }
+
+        override fun open(dataSpec: DataSpec): Long = pick(dataSpec).open(dataSpec)
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = delegate?.read(buffer, offset, length) ?: C.RESULT_END_OF_INPUT
+        override fun getUri(): Uri? = delegate?.uri
+        override fun getResponseHeaders(): Map<String, List<String>> = delegate?.responseHeaders ?: emptyMap()
+        override fun close() {
+            delegate?.close()
+            delegate = null
+        }
     }
 
     private var spec: DataSpec? = null
