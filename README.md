@@ -1,25 +1,66 @@
 # tgsocial
 
-A social network that lives entirely on Telegram. No server, no database,
-no account — sign in with the Telegram you already have, pick which of your
-channels post as you, follow people, and read everyone's feeds in one
-chronological column.
+A social network with no server: the graph lives on Telegram, and tgsocial is
+the protocol for reading and writing it. Sign in with the Telegram you already
+have, pick which of your channels post as you, follow people, and read
+everyone's feeds in one chronological column.
 
-The graph is stored in Telegram objects anyone can read: your **node** is a
-public channel, its pinned message is your **card** (name, feeds, follows),
-and following someone is a line on that card. Open a node in plain Telegram
-and the usernames are tappable — the network is navigable without this app.
+Your **node** is a public channel, its pinned message is your **card** (name,
+feeds, follows), and following someone is a line on that card. Every one of
+those objects is readable by anyone: open a node in plain Telegram and the
+usernames are tappable — the network is navigable without this app.
+
+Which is also why a client you write yourself is a full member of it. Nobody
+approves a client: there is nothing of ours to register with, no key, no
+review, no federation handshake — a program that parses a card correctly is on
+the same network as the iOS build from its first read. The one registration in
+the picture is Telegram's own. Every client needs its own `api_id` / `api_hash`
+from https://my.telegram.org/apps, ours included, because Telegram rate-limits
+and audits per application ([`docs/CLIENTS.md`](./docs/CLIENTS.md) §5). It is a
+form on Telegram's site and a pair of values you keep out of git
+([`docs/BUILDING.md`](./docs/BUILDING.md)).
+
+No client is privileged here. The reference builds get nothing from the
+protocol that yours does not; the three in this repo share the protocol and a
+design kit, and they interoperate because of the protocol.
+
+[`docs/FORKING.md`](./docs/FORKING.md) names the four things a client keeps to
+stay on the shared graph — the card format, the comment format, the feed
+backlink, ownership semantics — and
+[`docs/card-vectors.json`](./docs/card-vectors.json) is the executable form of
+the first two: wire your parser tests to it and you are compatible. Everything
+above that line is yours. Chronological or ranked, a column or a wall, whether
+counts are shown at all, what is hidden by default, whether it renders on
+e-ink — none of that is in the protocol. The product decisions live in the
+client, which means they are yours to make.
+
+The limits, because overselling this is the easy failure. Telegram is the
+substrate and no client escapes it; Telegram enforces its own rules and can
+delete a channel, which deletes what that channel held. The contract is a real
+constraint — break the card format and you have your own network rather than
+this one. And it is the *client* you design: the card's keys are fixed, on
+purpose, since that fixity is what lets anyone else's client read yours.
 
 - Protocol: [`PROTOCOL.md`](./PROTOCOL.md)
+- Write your own client: [`docs/CLIENTS.md`](./docs/CLIENTS.md) — the contract,
+  and what it leaves you
 - Product (screens, flows, copy): [`PRODUCT.md`](./PRODUCT.md)
 - Design kit (House Pour, shared across platforms): [`design/`](./design/)
 - Build it on your own phone: [`docs/BUILDING.md`](./docs/BUILDING.md)
 - Ideas not yet built: [`BACKLOG.md`](./BACKLOG.md)
 - Fork it: [`docs/FORKING.md`](./docs/FORKING.md) — keep the card + comment
-- Run your own instance: [`docs/HOSTING.md`](./docs/HOSTING.md)
   format and your fork stays on the same network
+- Run your own instance: [`docs/HOSTING.md`](./docs/HOSTING.md)
 - Host the web client: [`web/README.md`](./web/README.md), and
   [`PUBLIC.md`](./PUBLIC.md) for the one nginx location it needs
+
+The three reference clients. The design kit is the only source they share —
+`design/swift/HousePour` compiles into the iOS target, `design/kotlin` into the
+Android module, `design/web/house-pour.css` is vendored into `web/`. No
+application code crosses between them: each implements `PROTOCOL.md` itself,
+and they interoperate because every parser runs against the same
+`docs/card-vectors.json` (`ios/Tests/CardVectorTests.swift`,
+`android/app/src/test/.../CardVectorsTest.kt`, `web/test/protocol.test.mjs`).
 
 | Build | Stack | Where |
 | --- | --- | --- |
@@ -83,8 +124,9 @@ The look is Lucian Labs' [House Pour](https://lucianlabs.ca/branding/house-pour.
 
 ## Status
 
-v1 — chronological only, no ranking. See `PROTOCOL.md §7` for what is
-deliberately left out.
+v1 — chronological only, no ranking. See `PROTOCOL.md §8` for what is
+deliberately left out, and which of it is a client decision rather than a rule
+of the format.
 
 ## License
 

@@ -4,6 +4,14 @@ Fork it. Reskin it, rearrange it, strip it down, build it into something
 else — that's the point of MIT and of a network with no server: the network
 can't tell which client wrote a card, and nobody has to approve yours.
 
+Forking this repo and starting from an empty file are the same move at two
+distances. A fork inherits the clients, the design kit and the tests and changes
+what it wants; a client written from scratch inherits only the contract below.
+Both land on the same graph on the same terms.
+[`docs/CLIENTS.md`](./CLIENTS.md) argues the far end of that range — why you might
+want a reader nobody else would ship. This page is where the rules live for
+either end of it.
+
 The one thing that keeps every fork part of the *same* network is the
 protocol. The graph lives in Telegram objects, so interop is nothing more
 than reading and writing them the same way.
@@ -24,16 +32,25 @@ A fork that wants its users on the shared graph MUST keep, byte for byte:
 4. **Ownership semantics** — one node per user, comments only in channels
    the commenter owns, `public: no` respected in every directory surface.
 
-Everything else — look, ranking OFF is our choice not a law, screens,
-platforms, extra features — is yours. `docs/card-vectors.json` is the
-executable form of rules 1–2: wire your fork's parser tests to it and
-you're compatible.
+Everything else is yours, including every product decision the protocol
+declines to make: ordering, what a feed even looks like, whether you show
+counts, what you hide by default, one column or three. Chronological-only is
+our choice, not a law (`PROTOCOL.md §8`). `docs/card-vectors.json` is the
+executable form of rules 1–2: wire your parser tests to it and you're
+compatible.
+
+Break rule 1 and nothing stops you — you are simply on your own network then,
+with your own users, which is a fine thing to build and a different thing from
+this one. The four rules are the price of the shared graph and the only price
+of it. The rest of this page — your own `api_id`, your own identifiers,
+Telegram's own rules — is the price of shipping a client at all, and it holds
+whether you forked this repo or started from an empty file.
 
 ## Running an instance
 
-Putting up a public instance is `docs/HOSTING.md` — what a host holds (nothing),
-what it becomes responsible for (more than you would guess), and why it needs
-its own api_id.
+Putting up a public instance is [`docs/HOSTING.md`](./HOSTING.md) — a client you host
+for other people. What it holds (nothing), what it makes you responsible for
+(more than you would guess), and why it needs its own api_id.
 
 ## What you must change
 

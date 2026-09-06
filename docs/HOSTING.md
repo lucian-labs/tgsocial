@@ -4,6 +4,12 @@ An instance of tgsocial holds nothing. Not "holds little" — a host has no
 database, no object store, no accounts and no moderation queue, because there is
 nowhere in the design for user content to land on it.
 
+An instance is a client you host for other people — the same reader, running in
+a visitor's browser instead of on their phone. Everything true of a client you
+write for yourself ([`docs/CLIENTS.md`](./CLIENTS.md)) is true of one you put a
+domain on: you decide what it looks like and how it orders things, nobody
+approves it, and it reads the same graph. Hosting adds §2, not data.
+
 This is the document for putting one up, and for understanding exactly what you
 become responsible for when you do. Short version: a static bundle and one nginx
 location block.

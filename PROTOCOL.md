@@ -2,8 +2,26 @@
 
 tgsocial is a social network with no server. Everything it knows lives on
 Telegram, in objects every Telegram client can already read: public channels,
-pinned messages, descriptions. This document is the contract. Every client
-(iOS, Android, web) implements exactly this; nothing here is platform-specific.
+pinned messages, descriptions.
+
+This document is the contract clients implement, and implementing it is the
+whole of joining the network. There is no registration with us, no API key of
+ours, no review: a client that reads and writes a card correctly is on the same
+graph as every other one from its first run, because the graph is Telegram's
+objects and this is how they are read. The one registration in the picture is
+Telegram's own — every client, ours included, ships its own `api_id` /
+`api_hash` from https://my.telegram.org/apps (§4). The three clients in this
+repo (iOS, Android, web) share the protocol and a design kit, and they
+interoperate because of the first, not the second. Nothing here is
+platform-specific.
+
+What the contract leaves out is as deliberate as what it fixes. Ordering, what a
+feed looks like, whether counts are shown, what is hidden by default — none of
+that is below, so two clients can disagree about all of it and still show the
+same graph. [`docs/CLIENTS.md`](./docs/CLIENTS.md) is the case for writing your
+own; [`docs/FORKING.md`](./docs/FORKING.md) states the four things a client must
+keep to stay on the network, and [`docs/card-vectors.json`](./docs/card-vectors.json)
+is the executable form of the first two.
 
 The design goal is that a person with plain Telegram and no tgsocial app can
 still read the graph by hand — open a node channel, read its card, tap the
@@ -385,6 +403,16 @@ reader's own mail client sends and which carries a link, a reason, and
 nothing about any list.
 
 ## 8. What v1 deliberately does not do
+
+Most of this is a decision the clients in this repo made rather than a rule the
+format imposes. What is normative is the compatibility contract in
+[`docs/FORKING.md`](./docs/FORKING.md) — the card, the comment format, the
+backlink, ownership semantics — and a client that keeps those four can order a
+feed however it likes and still be on this network. Two of the items below are
+the substrate rather than the choice: private feeds, because §1 defines a feed
+as a public channel, and the followers count, because nothing in Telegram
+indexes an edge in reverse — its bullet says what would have to exist before a
+client could show one. The rest is listed so a fork disagrees on purpose.
 
 - No ranking, no recommendations. The main feed is strictly chronological.
 - No likes or reposts in-app. Telegram reactions and native channel
