@@ -16,6 +16,7 @@ and the usernames are tappable — the network is navigable without this app.
 - Build it on your own phone: [`docs/BUILDING.md`](./docs/BUILDING.md)
 - Ideas not yet built: [`BACKLOG.md`](./BACKLOG.md)
 - Fork it: [`docs/FORKING.md`](./docs/FORKING.md) — keep the card + comment
+- Run your own instance: [`docs/HOSTING.md`](./docs/HOSTING.md)
   format and your fork stays on the same network
 - Host the web client: [`web/README.md`](./web/README.md), and
   [`PUBLIC.md`](./PUBLIC.md) for the one nginx location it needs

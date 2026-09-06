@@ -29,6 +29,12 @@ platforms, extra features — is yours. `docs/card-vectors.json` is the
 executable form of rules 1–2: wire your fork's parser tests to it and
 you're compatible.
 
+## Running an instance
+
+Putting up a public instance is `docs/HOSTING.md` — what a host holds (nothing),
+what it becomes responsible for (more than you would guess), and why it needs
+its own api_id.
+
 ## What you must change
 
 - **API credentials.** Get your own `api_id`/`api_hash`
