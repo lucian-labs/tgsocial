@@ -47,6 +47,8 @@ enum Route: Hashable {
     case settings
     /// PRODUCT §2.12: the post with its comment tree.
     case thread(post: Post)
+    /// PRODUCT §2.25: one capability's vouches for one node.
+    case vouches(node: String, tag: String)
     #if targetEnvironment(macCatalyst)
     /// PRODUCT §2.14: "the answer to 'what can it see' is always one tap away".
     case connectorSources
@@ -78,6 +80,12 @@ enum Modal: Equatable {
     case deleteNode
     /// PRODUCT §2.22.5: the demo sheet, in the status sheet's place.
     case demo
+    /// PRODUCT §2.25: the vouch composer — one capability, one message.
+    case vouch(node: String)
+    /// PRODUCT §2.25: the vouch sheet — §2.12's comment sheet with two strings changed.
+    case vouchSheet(Vouch)
+    /// PRODUCT §2.25: `Delete this vouch?`, on my own.
+    case deleteVouch(Vouch)
 }
 
 /// How `deleteMyNode` ended (PRODUCT §2.21, PROTOCOL §4.11). Every case but `.deleted` names what
@@ -134,6 +142,10 @@ final class AppModel {
     /// outlives the row that asked for it and is shared between the feed and a thread.
     @ObservationIgnored private(set) var spectrograms: SpectrogramStore!
     @ObservationIgnored private(set) var nodes: NodeRepository!
+    /// Where `writeCard` sends the pinned message — `nodes` in the app. It is a seam because
+    /// PROTOCOL §10.6 is a claim about what the writer is HANDED on an ordinary follow, and the
+    /// only place that can be observed is where TDLib stands (`WorkLivePathTests`).
+    @ObservationIgnored var cardWriter: CardWriting!
     @ObservationIgnored private(set) var feed: FeedRepository!
     @ObservationIgnored private(set) var discovery: DiscoveryRepository!
     private(set) var comments: CommentRepository!
@@ -172,6 +184,10 @@ final class AppModel {
     // My node
     var myNode: MyNode?
     var myCard: Card?
+    /// My own work card (PROTOCOL §10.2), read by the second pass over my pinned message and
+    /// written back with EVERY card write — see `writeCard`. Nil is the state of every card written
+    /// before §10 existed, and the whole work surface is absent rather than empty in it.
+    var myWork: Work?
     /// `.newerVersion` when my pinned card carries a later protocol version (PROTOCOL §8): reads show the notice, writes refuse.
     var myCardState: CardState = .ok
     var myTitle = ""
@@ -184,6 +200,11 @@ final class AppModel {
 
     // Feed state mirrored for views
     var posts: [Post] = []
+    /// Feed's All / Work mode (PRODUCT §2.24). A UI preference under PROTOCOL §7 — it lives on this
+    /// device, never on the card, and it is remembered so the mode is not a place you fall out of.
+    var feedMode: FeedMode = .all {
+        didSet { if feedMode != oldValue { store.save(feedMode, LocalStore.feedMode) } }
+    }
     var feedExhausted = false
     var feedLoading = false
     var feedLoadingMore = false
@@ -253,11 +274,14 @@ final class AppModel {
                             images: ImageMemoryCache(byteLimit: pixelBudget - stripBudget))
         spectrograms = SpectrogramStore(byteLimit: stripBudget)
         nodes = NodeRepository(td: td, store: store, sends: sends, activity: activity)
+        cardWriter = nodes
         feed = FeedRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         discovery = DiscoveryRepository(td: td, nodes: nodes)
         comments = CommentRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         myNode = store.load(MyNode.self, LocalStore.myNode)
         myCard = store.load(Card.self, LocalStore.myCard)
+        myWork = store.load(Work.self, LocalStore.myWork)
+        feedMode = store.load(FeedMode.self, LocalStore.feedMode) ?? .all
         myTitle = store.load(String.self, LocalStore.myTitle) ?? ""
         setupSkipped = store.load(Bool.self, LocalStore.setupSkipped) ?? false
         candidates = store.load([FeedCandidate].self, LocalStore.feedCandidates) ?? []
@@ -420,6 +444,7 @@ final class AppModel {
 
         myNode = world.myNode
         myCard = world.myCard
+        myWork = world.myWork
         myCardState = .ok
         myTitle = world.myTitle
         myPhoto = nil
@@ -471,8 +496,9 @@ final class AppModel {
         audio.stop()
         video.pauseActive()
 
-        myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        myNode = nil; myCard = nil; myWork = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
         myCardFetchedAt = nil; nodeLookupDone = false; setupSkipped = false; inSetup = false
+        feedMode = .all
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
         feedReady = false; feedStale = false; feedExhausted = false; lastFeedRefresh = nil
         path = []; tab = .feed; modal = nil; viewer = nil; replySelection = nil
@@ -738,16 +764,20 @@ final class AppModel {
         myCardFetchedAt = info.fetchedAt
         myNode = node
         myCardState = info.state == .newerVersion ? .newerVersion : .ok
-        if myCardState == .ok { myCard = info.card } else { myCard = nil }
+        if myCardState == .ok { myCard = info.card; myWork = info.work } else { myCard = nil; myWork = nil }
         myTitle = info.title
         myPhoto = info.photo
         store.save(node, LocalStore.myNode)
         store.save(myCard, LocalStore.myCard)
+        store.save(myWork, LocalStore.myWork)
         store.save(info.title, LocalStore.myTitle)
         if myCardState == .newerVersion, !wasNewer { showToast(Self.newerCardText, tone: .bad) }
     }
 
     static let newerCardText = "Newer card. Update the app."
+    /// PRODUCT §2.23's two-line refusal, verbatim. §2's cap is unmoved; the second line names the
+    /// two dials the writer can actually turn.
+    static let cardFullText = "Card is full.\nShorten your bio or drop a tag \u{2014} your card is one Telegram message."
 
     func skipSetup() {
         inSetup = false
@@ -935,8 +965,11 @@ final class AppModel {
     func isFollowing(_ username: String) -> Bool { myCard?.follows(username) ?? false }
     func isMe(_ username: String) -> Bool { myNode.map { Username.key($0.username) == Username.key(username) } ?? false }
 
+    /// Every card write in the app lands here, and every one of them carries `myWork` (PROTOCOL
+    /// §10.6): a follow rewrites the whole pinned message, so a serialiser handed only the §2 keys
+    /// would delete the writer's own work card on their next follow.
     @discardableResult
-    private func writeCard(_ next: Card) async -> Bool {
+    func writeCard(_ next: Card) async -> Bool {
         // §2.22.3: Follow / Unfollow, Edit Card, the feed toggles and the Public listing toggle all
         // arrive here, and all of them are writes to Telegram. One refusal covers the five.
         if refuseDemoWrite() { return false }
@@ -948,7 +981,7 @@ final class AppModel {
         myCard = next
         store.save(next, LocalStore.myCard)
         do {
-            let updated = try await perform { try await self.nodes.writeCard(next, node: node) }
+            let updated = try await perform { try await self.cardWriter.writeCard(next, work: self.myWork, node: node) }
             myNode = updated
             store.save(updated, LocalStore.myNode)
             return true
@@ -956,7 +989,11 @@ final class AppModel {
             myCard = previous
             store.save(previous, LocalStore.myCard)
             let f = TDFailure(error)
-            showToast(f.message == "Card is full." ? "Card is full." : "Couldn't update your card. \(f.message)", tone: .bad)
+            // PRODUCT §2.23: the 4096-cap refusal is §2's, unchanged, plus the one line that says
+            // which of the writer's own text is standing in the way. That second line is the only
+            // part that tells them what to do about it, and it matters more now that a work card
+            // can be what pushed them over.
+            showToast(f.message == "Card is full." ? Self.cardFullText : "Couldn't update your card. \(f.message)", tone: .bad)
             return false
         }
     }
@@ -1544,8 +1581,8 @@ final class AppModel {
     /// wipe exactly this, and only sign out also drops the session.
     private func discardLocalState() {
         store.clear()
-        myNode = nil; myCard = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
-        setupSkipped = false; inSetup = false
+        myNode = nil; myCard = nil; myWork = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        setupSkipped = false; inSetup = false; feedMode = .all
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
         feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
         path = []; tab = .feed

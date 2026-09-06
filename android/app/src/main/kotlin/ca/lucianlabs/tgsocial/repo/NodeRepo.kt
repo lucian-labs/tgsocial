@@ -6,6 +6,7 @@ import ca.lucianlabs.tgsocial.protocol.Backlink
 import ca.lucianlabs.tgsocial.protocol.CardFormat
 import ca.lucianlabs.tgsocial.protocol.CardParse
 import ca.lucianlabs.tgsocial.protocol.Username
+import ca.lucianlabs.tgsocial.protocol.WorkFormat
 import ca.lucianlabs.tgsocial.td.TdError
 import ca.lucianlabs.tgsocial.td.TelegramClient
 import ca.lucianlabs.tgsocial.td.orNull
@@ -85,7 +86,9 @@ class NodeRepo(private val tg: TelegramClient, private val store: LocalStore, pr
             title = chat.title,
             description = full?.description.orEmpty(),
             photo = chat.photo?.small?.ref(),
-            card = parse.cardOrNull,
+            // PROTOCOL §10 — the second pass over the same bytes, attached here so nothing downstream has to
+            // remember: every card that enters the app carries its work lines, and so writes them back (§10.6).
+            card = WorkFormat.attach(parse.cardOrNull, text),
             newerVersion = parse is CardParse.Newer,
             pinnedMessageId = pinned?.id ?: 0L,
             fetchedAt = System.currentTimeMillis(),

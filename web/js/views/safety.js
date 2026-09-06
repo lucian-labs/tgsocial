@@ -59,6 +59,25 @@ export function commentSubject(comment) {
 }
 
 /**
+ * A vouch as one (PRODUCT §2.25). `Feed` names the voucher's comments channel
+ * and there is no `Mute`, for §2.17's reason: mute is about a channel's posts,
+ * and a vouch is not one. The subject of the vouch does not appear here — this
+ * is about the person who wrote it, who is the only person who can take it
+ * down (PROTOCOL §10.4).
+ */
+export function vouchSubject(vouch) {
+  return {
+    kind: 'vouch',
+    link: vouch.link,
+    channel: vouch.channel,
+    channelTitle: vouch.name || `@${vouch.channel}`,
+    messageId: linkMessageId(vouch.link),
+    node: vouch.node ?? null,
+    mine: !!vouch.mine,
+  };
+}
+
+/**
  * Hand the reader's own mail client a prefilled message (§2.15). A browser
  * never reports back whether a `mailto:` was handled — which is exactly why
  * hiding is unconditional — so the only failure this can see is the one the
@@ -84,12 +103,20 @@ export function contactMailLink(text = CONTACT_ADDRESS) {
 // ── report (PRODUCT §2.15) ─────────────────────────────────────────────────
 
 /**
+ * §2.15's h2, one per reportable kind. It reads off `subject.kind` for the same
+ * reason `REPORT_LABELS` does: a vouch (§2.25) is reportable, and a sheet whose
+ * button says `Report Vouch` opening a modal that asks about "this post" is the
+ * kind of string that has to be right once here and is wrong three times if it
+ * is not (§3 — the copy is shared across the three builds).
+ */
+const REPORT_TITLES = { post: 'Report this post.', comment: 'Report this comment.', vouch: 'Report this vouch.' };
+
+/**
  * The report confirm: the seven reasons, single-select, `Send Report` disabled
  * until one is picked. Sending opens the composer, hides the thing here, and
  * closes — in that order, though only the hide is guaranteed to have happened.
  */
 export function openReport(app, subject) {
-  const isComment = subject.kind === 'comment';
   let chosen = null;
   let m = null;
 
@@ -132,7 +159,7 @@ export function openReport(app, subject) {
 
   m = modal([
     sectionMark('Report'),
-    h('h2', isComment ? 'Report this comment.' : 'Report this post.'),
+    h('h2', REPORT_TITLES[subject.kind] ?? REPORT_TITLES.post),
     h('p.muted', 'This sends an email from your mail app to the person who maintains tgsocial, with a link to it. It disappears from this device as soon as you send.'),
     sectionMark('Why'),
     h('div.card.reason-list', { role: 'radiogroup', 'aria-label': 'Why' }, rows),
@@ -207,6 +234,8 @@ export function toggleMute(app, { username, title }) {
  *
  * `onDelete` is supplied by the comment sheet, which owns the delete path.
  */
+const REPORT_LABELS = { post: 'Report Post', comment: 'Report Comment', vouch: 'Report Vouch' };
+
 export function safetyBlock(app, subject, { close, onDelete = null } = {}) {
   const parts = [sectionMark('Safety')];
   if (subject.mine && onDelete) {
@@ -219,7 +248,7 @@ export function safetyBlock(app, subject, { close, onDelete = null } = {}) {
       },
     }));
   } else {
-    parts.push(button(subject.kind === 'comment' ? 'Report Comment' : 'Report Post', {
+    parts.push(button(REPORT_LABELS[subject.kind] ?? 'Report Post', {
       style: 'danger',
       size: 'sm',
       onClick: () => {

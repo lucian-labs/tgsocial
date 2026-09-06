@@ -35,8 +35,26 @@ import {
   isNewestFirst,
   insertIndex,
   parseComment,
+  addDays,
+  formatUntil,
+  formatVouchDate,
+  formatWorkDay,
+  intentLabel,
+  orderByExpiry,
+  todayUTC,
   serialiseComment,
   targetKey,
+  withFollow,
+  parseWork,
+  parseVouch,
+  serialiseVouch,
+  keepsVouch,
+  pruneWorkFeeds,
+  workTag,
+  openIsCurrent,
+  WORK_DOES_MAX,
+  WORK_INTENTS,
+  WORK_OPEN_HORIZON_DAYS,
   parsePublicPath,
   publicFeedUrl,
   publicNodeUrl,
@@ -46,6 +64,7 @@ import {
   setPublicOrigin,
   trimFeedWindow,
 } from '../js/protocol.js';
+import { Repo } from '../js/repo.js';
 import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
 import { readImageHeader } from '../js/decode.js';
 import { Td } from '../js/td.js';
@@ -1508,4 +1527,262 @@ test('§2.22.1: reactions and views derive from the id, and none of them is zero
   }
   assert.equal((144 * 7) % 23, 19, 'post 144 carries 19 reactions on every platform');
   assert.equal(60 + ((144 * 37) % 900), 888, 'and 888 views');
+});
+
+// ── §10 fixtures: a Repo with no Telegram behind it ────────────────────────
+
+/*
+ * `commentChannels` and `toVouch` are card-cache arithmetic — no TDLib call in
+ * either — so they are measured against the real Repo rather than a
+ * reimplementation of it, with a client that answers nothing.
+ */
+const silentTd = { on() {}, track: (_label, work) => (typeof work === 'function' ? work() : work) };
+
+function emptyCardShape() {
+  return { name: null, bio: null, link: null, public: true, feeds: [], follows: [], replies: null };
+}
+
+function stubRepo(mine, cardTexts) {
+  const repo = new Repo(silentTd, {}, null);
+  repo.myNode = { username: mine, chatId: 1, supergroupId: 1, pinnedMessageId: 1 };
+  repo.cards = {};
+  for (const [username, body] of Object.entries(cardTexts)) {
+    repo.cards[username.toLowerCase()] = { username, title: username, card: parseCard(`tgsocial v1\n${body}`) };
+  }
+  return repo;
+}
+
+function textMessage(text) {
+  return { id: 4194304, chat_id: -100, date: 1772000000, content: { '@type': 'messageText', text: { text, entities: [] } } };
+}
+
+// ── PROTOCOL §10, the work extension ───────────────────────────────────────
+
+for (const c of vectors.work.parse) {
+  test(`work parse: ${c.name}`, () => {
+    assert.deepEqual(parseWork(c.text), c.expect);
+  });
+}
+
+for (const c of vectors.work.serialise) {
+  test(`work serialise: ${c.name}`, () => {
+    assert.equal(serialiseCard({ ...c.card, work: c.work }), c.expect);
+  });
+}
+
+for (const c of vectors.work.tag.cases) {
+  test(`work tag: ${JSON.stringify(c.in)}`, () => {
+    assert.equal(workTag(c.in), c.out);
+  });
+}
+
+for (const c of vectors.work.open.cases) {
+  test(`work open: ${JSON.stringify(c.open)} on ${c.today}`, () => {
+    assert.equal(openIsCurrent(c.open, c.today), c.out);
+  });
+}
+
+for (const c of vectors.work.vouch.parse) {
+  test(`vouch parse: ${JSON.stringify(c.in.slice(0, 48))}`, () => {
+    assert.deepEqual(parseVouch(c.in), c.out);
+  });
+}
+
+for (const c of vectors.work.vouch.serialise) {
+  test(`vouch serialise: ${c.node} / ${c.does}`, () => {
+    assert.equal(serialiseVouch(c.node, c.does, c.body), c.out);
+    assert.deepEqual(parseVouch(c.out), { node: c.node.replace(/^@/, ''), does: c.does.trim().toLowerCase(), body: c.body });
+  });
+}
+
+for (const c of vectors.work.vouch.self.cases) {
+  test(`vouch self: ${JSON.stringify(c.in.slice(0, 40))} in ${c.voucherNode}`, () => {
+    assert.equal(keepsVouch(parseVouch(c.in), c.voucherNode), c.out);
+  });
+}
+
+/**
+ * §10's whole claim: the extension is additive, and a client that does not
+ * implement it renders the card it renders today. The vector loop above
+ * asserts the read half through §2's own parser; this asserts the write half,
+ * which is the one that can destroy data. A non-implementing client that
+ * follows somebody rewrites the card from the seven keys it knows and the work
+ * lines are gone — §10.6 is that hazard stated, and the second assertion is
+ * the round-trip that answers it.
+ */
+test('§10.6: a follow keeps the work lines only when the client round-trips them', () => {
+  const text = vectors.work.parse[0].text;
+  const card = parseCard(text);
+  const work = parseWork(text);
+  assert.ok(work, 'the fixture has a work card');
+
+  const unaware = serialiseCard(withFollow(card, 'tgs_new'));
+  assert.equal(parseWork(unaware), null, 'a §2-only rewrite drops §10 — this is the hazard, not a bug');
+  assert.deepEqual(parseCard(unaware).follows, ['tgs_ana', 'tgs_new']);
+
+  const aware = serialiseCard({ ...withFollow(card, 'tgs_new'), work });
+  assert.deepEqual(parseWork(aware), work, 'an implementing client writes back what it read');
+  assert.deepEqual(parseCard(aware), parseCard(unaware), 'and changes nothing a §2 client can see');
+});
+
+/**
+ * §10.4 puts vouches in the comments channel §6.1 already made, so one pass
+ * over one channel builds both indexes. That only holds if neither parser ever
+ * claims the other's message — a `vouch:` counted as a comment would inflate a
+ * post's count, and a `re:` counted as a vouch would put a stranger's reply on
+ * somebody's work card.
+ */
+test('§10.4: one comments channel, two formats, no overlap', () => {
+  const channel = [
+    're: https://t.me/waveloop_devlog/144\nNice one.',
+    'vouch: https://t.me/tgs_elijah\ndoes: live sound\nNever missed a cue.',
+    'A plain post the owner made.',
+    'vouch: https://t.me/tgs_elijah\nno does line, so not a vouch',
+  ];
+  const comments = channel.map(parseComment).filter(Boolean);
+  const vouches = channel.map(parseVouch).filter(Boolean);
+  assert.equal(comments.length, 1);
+  assert.equal(vouches.length, 1);
+  assert.equal(comments[0].target, 'https://t.me/waveloop_devlog/144');
+  assert.equal(vouches[0].node, 'tgs_elijah');
+  for (const m of channel) assert.ok(!(parseComment(m) && parseVouch(m)), `${m} claimed by both`);
+});
+
+/**
+ * §10.2's caps exist because the card is one 4096-character message (§2) and
+ * `follows:` has to keep growing inside it. Held as numbers because three
+ * platforms have to agree on where the writer refuses.
+ */
+test('§10.2: twelve tags, and a work card costs about a bio', () => {
+  assert.equal(WORK_DOES_MAX, 12);
+  assert.equal(WORK_OPEN_HORIZON_DAYS, 180);
+  const text = vectors.work.parse[0].text;
+  const bare = serialiseCard(parseCard(text));
+  assert.ok(text.length - bare.length < 200, `§10 added ${text.length - bare.length} characters to the card`);
+});
+
+/**
+ * §10.2's `work.feeds` MUST is a rule about the wire, and a reader that
+ * forgives a dangling entry does not make a writer that emits one correct. The
+ * entry is worse than cosmetic: readers hide it, so it sits on the card until
+ * the owner lists that channel again and it re-marks the feed as work with
+ * nobody having touched the toggle.
+ */
+test('§10.2: a channel that leaves `feeds:` takes its work marking with it', () => {
+  const base = {
+    ...emptyCardShape(),
+    feeds: ['feed_alpha', 'feed_beta'],
+    work: { role: null, does: [], open: null, feeds: ['feed_beta'] },
+  };
+  assert.match(serialiseCard(base), /\nwork\.feeds: @feed_beta$/, 'the marking is written while the channel is claimed');
+
+  // the write side enforces the intersection the read side enforces, so no
+  // caller can put the forbidden line on the wire
+  const stale = { ...base, feeds: ['feed_alpha'] };
+  assert.ok(!/work\.feeds/.test(serialiseCard(stale)), '§10.2 is enforced on write, not merely forgiven on read');
+
+  // and the model is pruned with it, so re-listing the channel is not a way to
+  // get the marking back without asking for it
+  const pruned = { ...stale, work: pruneWorkFeeds(stale.work, stale.feeds) };
+  assert.deepEqual(pruned.work.feeds, []);
+  assert.equal(parseWork(serialiseCard({ ...pruned, feeds: ['feed_alpha', 'feed_beta'] })), null,
+    're-listing the channel does not resurrect the marking');
+});
+
+/**
+ * §10.4's guarantee — "the one channel a person can write is the one that
+ * cannot speak about them" — is checked against whichever node the client
+ * believes owns a comments channel, and that belief comes from an unverified
+ * `replies:` claim. A feed has §3's backlink; this has nothing. So a channel
+ * two in-scope cards claim must be attributed to neither: award it to the
+ * wrong one and a self-vouch, the single message the format forbids, renders
+ * as somebody else's sentence and counts on the subject's own work card.
+ */
+test('§10.4: a comments channel two nodes claim is attributed to neither', () => {
+  const repo = stubRepo('tgs_me', {
+    tgs_me: 'follows: @tgs_mallory @tgs_elijah\nreplies: @tgs_me_r',
+    tgs_mallory: 'replies: @tgs_elijah_r',
+    tgs_elijah: 'replies: @tgs_elijah_r',
+  });
+  assert.deepEqual(repo.commentChannels(), [{ channel: 'tgs_me_r', node: 'tgs_me' }],
+    'the contested channel is in scope for nobody');
+
+  // the message the drop is about, and the only thing standing between it and
+  // a rendered vouch: `toVouch` can only apply §10.4 against the node it is
+  // handed, so the pairing above must never be produced
+  const selfVouch = textMessage('vouch: https://t.me/tgs_elijah\ndoes: live sound\nNobody better.');
+  assert.equal(repo.toVouch(selfVouch, { channel: 'tgs_elijah_r', node: 'tgs_elijah' }), null,
+    'read against its true owner it is a self-vouch and is dropped');
+  assert.equal(repo.toVouch(selfVouch, { channel: 'tgs_elijah_r', node: 'tgs_mallory' })?.node, 'tgs_mallory',
+    'read against a captor it is a third-party vouch — which is why the captor never gets named');
+});
+
+/**
+ * The other half of the same rule: dropping a contested channel must not
+ * become a way to silence somebody. My own card is the one card in this walk I
+ * wrote, so a stranger naming my comments channel loses to me rather than
+ * taking my comments and vouches out of my own client.
+ */
+test('§10.4: my own `replies:` claim cannot be contested away', () => {
+  const repo = stubRepo('tgs_me', {
+    tgs_me: 'follows: @tgs_mallory\nreplies: @tgs_me_r',
+    tgs_mallory: 'replies: @tgs_me_r',
+  });
+  assert.deepEqual(repo.commentChannels(), [{ channel: 'tgs_me_r', node: 'tgs_me' }]);
+});
+
+/**
+ * §2.23's date strings are derived on three platforms from the same two
+ * fields, so they are asserted here rather than eyeballed on one of them. The
+ * year rule is the interesting half: `until 1 Dec` says the year only when it
+ * is not this one, and §10.3's 180-day horizon makes that a boundary case
+ * rather than the usual one.
+ */
+test('§2.23: the intent date says the year only when it is not this one', () => {
+  assert.equal(formatUntil('2026-12-01', '2026-09-06'), 'until 1 Dec');
+  assert.equal(formatUntil('2027-01-05', '2026-12-30'), 'until 5 Jan 2027');
+  assert.equal(formatUntil('2026-02-30', '2026-01-01'), '', 'a date that is not a calendar day says nothing');
+  assert.equal(formatWorkDay('2026-12-05'), '5 Dec 2026', 'the Edit Card line always carries its year');
+  assert.equal(addDays('2026-12-30', 30), '2027-01-29', 'the writer horizons cross a year end');
+  assert.equal(todayUTC(Date.parse('2026-09-06T23:30:00Z')), '2026-09-06');
+});
+
+/**
+ * §2.25 — a vouch is dated by month and year while everything else in the app
+ * is relative. `2y ago` buries exactly the thing the reader is weighing, so
+ * this is a deliberate departure and is worth a test that fails if someone
+ * "fixes" it into `formatTime`.
+ */
+test('§2.25: a vouch is dated by month and year, not relatively', () => {
+  const d = new Date(2026, 2, 14, 9, 0, 0);
+  assert.equal(formatVouchDate(d), 'Mar 2026');
+  assert.notEqual(formatVouchDate(d), formatTime(d, d));
+  assert.equal(formatVouchDate(new Date('nope')), '');
+});
+
+/**
+ * §2.24 writes the OPEN NOW order down because three platforms otherwise
+ * produce three orders: end date ascending — what expires first — and ties by
+ * username ascending so the list is stable rather than merely sorted.
+ */
+test('§2.24: OPEN NOW is soonest first, ties by username', () => {
+  const row = (username, until) => ({ username, work: { open: { intent: 'work', until } } });
+  const ordered = orderByExpiry([
+    row('tgs_pell', '2026-11-05'),
+    row('tgs_bly', '2026-09-14'),
+    row('tgs_ana', '2026-09-14'),
+    row('tgs_juno', '2026-09-26'),
+  ]).map((r) => r.username);
+  assert.deepEqual(ordered, ['tgs_ana', 'tgs_bly', 'tgs_juno', 'tgs_pell']);
+});
+
+/**
+ * §10.3's set is closed because a client cannot render a word it has no copy
+ * for, and §2.23 fixes the four words. An intent with no label is an intent
+ * with no pill.
+ */
+test('§10.3: the four intents have copy and nothing else does', () => {
+  assert.deepEqual(WORK_INTENTS.map(intentLabel), ['Open to work', 'Open to contract', 'Hiring', 'Open to collaborate']);
+  assert.equal(intentLabel('freelance'), '');
+  assert.equal(intentLabel(undefined), '');
 });

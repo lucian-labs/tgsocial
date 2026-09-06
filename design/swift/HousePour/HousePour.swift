@@ -261,8 +261,11 @@ public enum HPMetric {
     public static let composeRows: Int = 6
     /// Sign-in code length (PRODUCT §2.1).
     public static let codeLength: Int = 5
-    /// HPTabs label minimum scale before truncation (keeps four segments on one line at 1.4x Dynamic Type).
-    public static let tabLabelMinScale: CGFloat = 0.8
+    /// HPTabs label minimum scale before truncation. A segment label is always COPY — `Contract`,
+    /// `Explore`, `Nothing` — so it shrinks rather than eliding, and the floor has to clear the
+    /// widest control the app builds: PRODUCT §2.23's five-segment `OPEN TO`, which leaves each
+    /// label about a fifth of the column. Raising this back to 0.8 puts `NOTH…` on that screen.
+    public static let tabLabelMinScale: CGFloat = 0.5
     /// HPScrubber knob (PRODUCT §2.11: "a 12pt panel knob with the contact shadow").
     public static let scrubberKnob: CGFloat = 12
     /// HPSpectrogramStrip: the envelope's peak as a fraction of the half-height, so a full-scale

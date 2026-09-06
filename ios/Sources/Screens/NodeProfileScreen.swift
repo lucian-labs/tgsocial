@@ -28,6 +28,9 @@ struct NodeProfileScreen: View {
                         FollowButton(username: node.username, size: .regular)
                             .padding(.bottom, HPTokens.Space.cardGap)
                     }
+                    // PRODUCT §2.23: between the bio/link block and FEEDS, and absent entirely
+                    // when the node carries no work keys — no empty section, no "not set up yet".
+                    WorkCardSection(node: node)
                     HPSectionMark("Feeds")
                     if card.feeds.isEmpty {
                         HPCard { HPMuted("No feeds listed.") }
@@ -52,7 +55,8 @@ struct NodeProfileScreen: View {
                         HPListCard {
                             ForEach(Array(card.follows.enumerated()), id: \.element) { i, name in
                                 let info = follows.first { $0.key == Username.key(name) }
-                                    ?? NodeInfo(username: name, chatId: 0, title: name, card: nil, state: .ok, photo: nil, fetchedAt: .distantPast)
+                                    ?? NodeInfo(username: name, chatId: 0, title: name, card: nil,
+                                                state: .ok, photo: nil, fetchedAt: .distantPast)
                                 NodeRow(node: info, isLast: i == card.follows.count - 1, showFollow: false) {
                                     model.path.append(.profile(username: name))
                                 }

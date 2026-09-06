@@ -40,6 +40,16 @@ data class NodeSnapshot(
     val isNode: Boolean get() = card != null
     val displayName: String get() = card?.name?.takeIf { it.isNotBlank() } ?: title.ifBlank { "@$username" }
     val initial: String get() = displayName.firstOrNull { it.isLetterOrDigit() }?.toString() ?: "·"
+
+    /**
+     * The name a sentence about this person uses: the card's `name`, first token only. PRODUCT §2.25's copy
+     * is `Say one thing Ana does.`, not the whole display name and not the channel title — and PRODUCT §3
+     * makes that copy shared across the three builds, so it is the card's `name` here too and nothing else.
+     *
+     * Null when the card carries no `name`, which is the branch §2.25 words differently rather than putting
+     * a username where a person's name goes.
+     */
+    val firstName: String? get() = card?.name?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.takeIf { it.isNotEmpty() }
 }
 
 /** A feed channel as a source (my own or a followed node's). */

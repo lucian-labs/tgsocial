@@ -172,6 +172,24 @@ your own data model" — the fixity is exactly what lets someone else's client
 read what yours wrote, and it is why rule 1 lets you add keys of your own but
 never repurpose one.
 
+## 7. The worked example of adding keys
+
+`PROTOCOL.md §10` is a professional layer — role, capabilities, expiring
+intent, and vouches written by other people — added entirely in new
+`work.`-prefixed card keys and one message format in the comments channel §6.1
+already made. Nothing existing was repurposed and the marker is still
+`tgsocial v1`, so a client that ignores all of it parses those cards into
+exactly the cards it parses today; `docs/card-vectors.json` asserts that through
+the same §2 loop every client already runs, and adds a `work` section for
+clients that do implement it.
+
+Read it as the shape of an extension rather than as a feature: namespace your
+keys, keep the malformed ones non-fatal, write back what you read (§10.6 — a
+serialiser that emits only the keys it knows deletes the rest on the next
+follow), and say in the spec which of your numbers cannot exist without a
+server (§10.5, §10.8). The product half is `PRODUCT.md §2.23`–`§2.26`, and it
+is a different client's to disagree with — which is the whole point of §4.
+
 And breaking the contract does not extend the network, it leaves it. A client
 that writes a card in its own format still works, for its own users, on its
 own graph, and none of the people already here can read them. That is a real

@@ -90,15 +90,17 @@ class DemoGateTest {
             }
         }
         // §2.22.3 names six: the post sheet, the comment sheet, the blocked-node sheet, a node profile's
-        // kebab, a feed channel's kebab, and the full-screen viewer. Fewer means one lost its control;
-        // more means a seventh appeared and nobody checked which sentence it answers with.
-        assertEquals(controls.toString(), 6, controls.size)
-        // …and nothing else calls it, so the six above are the whole of its use (the declaration aside).
+        // kebab, a feed channel's kebab, and the full-screen viewer. PRODUCT §2.25 adds the seventh — the
+        // vouch sheet, which is the comment sheet with two strings changed, so it carries the same row.
+        // Fewer means one lost its control; more means an eighth appeared and nobody checked which sentence
+        // it answers with.
+        assertEquals(controls.toString(), 7, controls.size)
+        // …and nothing else calls it, so the seven above are the whole of its use (the declaration aside).
         val calls = mainSources().sumOf { f ->
             val text = f.readText()
             (text.split("openInTelegram(").size - 1) - (text.split("fun openInTelegram(").size - 1)
         }
-        assertEquals(6, calls)
+        assertEquals(7, calls)
     }
 
     private fun mainSources(): List<File> =

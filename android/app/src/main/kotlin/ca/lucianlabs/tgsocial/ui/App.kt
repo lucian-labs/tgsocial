@@ -81,6 +81,10 @@ import ca.lucianlabs.tgsocial.ui.screens.SignInScreen
 import ca.lucianlabs.tgsocial.ui.screens.SignOutSheet
 import ca.lucianlabs.tgsocial.ui.screens.StatusSheet
 import ca.lucianlabs.tgsocial.ui.screens.ThreadItems
+import ca.lucianlabs.tgsocial.ui.screens.VouchOptionsSheet
+import ca.lucianlabs.tgsocial.ui.screens.VouchSheetBody
+import ca.lucianlabs.tgsocial.ui.screens.VouchesItems
+import ca.lucianlabs.tgsocial.ui.screens.DeleteVouchSheet
 import ca.lucianlabs.tgsocial.ui.screens.YouItems
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -153,7 +157,11 @@ private fun Shell(vm: AppViewModel) {
                     is Screen.Profile -> {
                         val profile by vm.visibleProfile.collectAsStateWithLifecycle()
                         val me by vm.me.collectAsStateWithLifecycle()
-                        ColumnList(key = screen, state = remember(screen) { LazyListState() }) { ProfileItems(vm, profile, me) }
+                        // PRODUCT §2.23 — the vouches decide whether the WORK section is in the list at all,
+                        // so they are read here, where a change rebuilds it, and not inside its items.
+                        val vouchIndex by vm.vouchIndex.collectAsStateWithLifecycle()
+                        val vouches = vm.vouchesFor(profile.username, vouchIndex)
+                        ColumnList(key = screen, state = remember(screen) { LazyListState() }) { ProfileItems(vm, profile, me, vouches) }
                     }
                     is Screen.FeedChannel -> {
                         val channel by vm.visibleChannel.collectAsStateWithLifecycle()
@@ -164,6 +172,10 @@ private fun Shell(vm: AppViewModel) {
                     Screen.Settings -> {
                         val myNode by vm.myNode.collectAsStateWithLifecycle()
                         ColumnList(key = screen, state = remember(screen) { LazyListState() }) { SettingsItems(vm, safety, myNode, inDemo) }
+                    }
+                    // PRODUCT §2.25 — the vouches for one capability of one node.
+                    is Screen.Vouches -> ColumnList(key = screen, state = remember(screen) { LazyListState() }) {
+                        VouchesItems(vm, screen.username, screen.tag)
                     }
                     is Screen.Thread -> {
                         // PRODUCT §2.12 — the thread refreshes its comment index when opened; pull-to-refresh re-scans.
@@ -256,6 +268,9 @@ private fun Shell(vm: AppViewModel) {
             Sheet.Report -> ReportSheet(vm)
             is Sheet.Block -> BlockSheet(vm, s.username)
             Sheet.DeleteNode -> DeleteNodeSheet(vm)
+            is Sheet.Vouch -> VouchSheetBody(vm)
+            is Sheet.VouchSheet -> VouchOptionsSheet(vm, s.vouch)
+            is Sheet.DeleteVouch -> DeleteVouchSheet(vm, s.vouch)
             null -> Unit
         }
     }
@@ -344,6 +359,9 @@ private fun SetupHost(vm: AppViewModel, feedsOnly: Boolean) {
 private fun Home(vm: AppViewModel, tab: Tab) {
     // PRODUCT §2.18 — every list on this screen reads the filtered view; nothing here can forget to.
     val feed by vm.visibleFeed.collectAsStateWithLifecycle()
+    // PRODUCT §2.24 — Work is a mode on this same list, over this same filtered feed.
+    val feedMode by vm.feedMode.collectAsStateWithLifecycle()
+    val work by vm.work.collectAsStateWithLifecycle()
     val explore by vm.visibleExplore.collectAsStateWithLifecycle()
     val graph by vm.visibleGraph.collectAsStateWithLifecycle()
     val me by vm.me.collectAsStateWithLifecycle()
@@ -364,6 +382,13 @@ private fun Home(vm: AppViewModel, tab: Tab) {
         // is exactly that state — pages loaded, none of them visible, more to fetch — and this is the ask the
         // scroll has no way to make. It stops the moment a post survives or the feed runs out.
         LaunchedEffect(feed.chaining, feed.loading) { if (feed.chaining && !feed.loading) vm.loadMoreFeed() }
+        // PRODUCT §2.24 — Work mode is a second filter over the same window and has the same blind spot: a
+        // page with no work post in it leaves the item count where it was, so the pager above never asks
+        // again and the column stalls on `No work posts yet.` — advice already satisfied, since the control
+        // is only drawn when the network carries a `work.feeds` entry — with work posts unfetched below.
+        LaunchedEffect(feedMode, work.chaining) {
+            if (feedMode == FeedMode.WORK && work.chaining) vm.loadMoreFeed()
+        }
         // A completed refresh replaces the window with the newest page, so the reader has to land on it. From
         // pull-to-refresh that is a no-op (already at the top); from the `Newer posts` jump, after pages of
         // load-more have slid the window's head down, it is the whole point.
@@ -383,7 +408,7 @@ private fun Home(vm: AppViewModel, tab: Tab) {
     ) {
         ColumnList(key = tab, state = state) {
             when (tab) {
-                Tab.FEED -> FeedItems(vm, feed, me)
+                Tab.FEED -> FeedItems(vm, feed, me, feedMode, work)
                 Tab.EXPLORE -> ExploreItems(vm, explore, me)
                 Tab.GRAPH -> GraphItems(vm, graph, me, cards)
                 Tab.YOU -> YouItems(vm, me, myNode)

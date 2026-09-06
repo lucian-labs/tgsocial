@@ -2,6 +2,7 @@ package ca.lucianlabs.tgsocial.protocol
 
 import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.model.Vouch
 
 /** What is being reported (PRODUCT §2.15): a post, or a comment. [ReportEmail] turns one into the mail. */
 data class ReportSubject(
@@ -31,6 +32,18 @@ data class ReportSubject(
             channel = comment.channelUsername,
             messageId = comment.messageId,
             node = comment.authorUsername,
+            isComment = true,
+        )
+
+        /**
+         * PRODUCT §2.25 — `Report Vouch`. A vouch is an ordinary message in the voucher's comments channel
+         * (PROTOCOL §10.4), so it reports as one: the node named is the **voucher's**, because a vouch is
+         * their sentence and the subject could not have written it.
+         */
+        fun forVouch(vouch: Vouch): ReportSubject = ReportSubject(
+            channel = vouch.channelUsername,
+            messageId = vouch.messageId,
+            node = vouch.voucherUsername,
             isComment = true,
         )
     }

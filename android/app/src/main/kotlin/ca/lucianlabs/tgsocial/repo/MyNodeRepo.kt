@@ -358,6 +358,13 @@ class MyNodeRepo(private val tg: TelegramClient, private val store: LocalStore, 
         val group = tg.call { searchPublicChat(username = INDEX_GROUP) }
         val joined = withTimeoutOrNull(40_000L) { tg.client.joinChat(chatId = group.id) }
         if (joined is TdlResult.Failure && joined.code != 400) joined.orThrow()
-        sendAndAwait(group.id, "node: @${node.username}")
+        // PROTOCOL §10.7.3 — an additive second line. The `node:` line is unchanged, so clients that read
+        // only it are unaffected; this one exists so a directory can filter a couple of hundred
+        // announcements without fetching a couple of hundred cards. It is stale by construction — it says
+        // what was claimed at announce time — which is why the read side here still resolves the card and
+        // lets the card win.
+        val does = card.work?.does.orEmpty()
+        val text = if (does.isEmpty()) "node: @${node.username}" else "node: @${node.username}\ndoes: ${does.joinToString(", ")}"
+        sendAndAwait(group.id, text)
     }
 }

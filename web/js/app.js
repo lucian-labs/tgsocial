@@ -2,6 +2,7 @@
  *
  * Routes: #/feed #/explore #/graph #/you #/setup #/node/<username>
  *         #/feed/<username> #/compose[?feed=<username>]
+ *         #/vouches/<node>/<tag>  (PRODUCT §2.25)
  *
  * Public links (PRODUCT §2.13) are pathnames, not hashes: /u/<name>,
  * /f/<channel> and /n/<node>. nginx falls back to index.html for them, so the
@@ -41,6 +42,7 @@ import * as graph from './views/graph.js';
 import * as you from './views/you.js';
 import * as settings from './views/settings.js';
 import * as thread from './views/thread.js';
+import * as work from './views/work.js';
 import { commentsPanel } from './views/comments.js';
 import { openThread } from './views/shared.js';
 import { openCompose } from './views/compose.js';
@@ -75,6 +77,15 @@ const NAG_DISMISSED = 'tgs.nagDismissed';
  * public routes too, where a visitor can report and mute (§2.15). Counting it
  * would boot 14 MB of wasm at somebody who only ever hid one post.
  */
+/** A §10.2 tag out of a hash segment; a malformed escape is the literal text. */
+function decodeTag(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function hasLocalSession() {
   try {
     for (let i = 0; i < localStorage.length; i += 1) {
@@ -162,6 +173,7 @@ class App {
       dock: document.getElementById('dock'),
       view: document.getElementById('view'),
     };
+    window.addEventListener('resize', () => this.measureHead(), { passive: true });
     this.tabs = tabs(MAIN_TABS, 'feed', (id) => this.navigate(`#/${id}`));
     this.tabs.classList.add('floating');
     this.els.dock.append(this.tabs);
@@ -267,6 +279,19 @@ class App {
    * unmounts, so every scroll surface's last element clears the tab bar AND
    * everything stacked over it, exactly while they are there.
    */
+  /**
+   * The topbar's painted height, published as `--app-head-h` so a sticky
+   * element inside the column (Feed's mode control, PRODUCT §2.24) can dock
+   * under it rather than behind it. The demo strip lives inside `.head`, so
+   * the height changes with it and this is measured rather than assumed.
+   */
+  measureHead() {
+    const head = this.els.head;
+    if (!head) return;
+    const px = head.hidden ? 0 : Math.round(head.getBoundingClientRect().height);
+    this.els.app.style.setProperty('--app-head-h', `${px}px`);
+  }
+
   updateDock() {
     const extras = [...this.els.dock.children].filter((el) => el !== this.tabs && !el.hidden);
     this.els.dock.hidden = this.tabs.hidden && extras.length === 0;
@@ -359,6 +384,13 @@ class App {
     if ((name === 'node' || name === 'feed') && parts[1]) {
       const username = normaliseUsername(parts[1]);
       return { name: name === 'node' ? 'node' : 'channel', username: username || parts[1], params };
+    }
+    if (name === 'vouches' && parts[1] && parts[2]) {
+      // PRODUCT §2.25 — the tag is a §10.2 tag, so `c#` and `front of house`
+      // both reach here; the hash carries it percent-encoded or `c#` would
+      // become a second fragment and the screen would open on `c`.
+      const username = normaliseUsername(parts[1]);
+      return { name: 'vouches', username: username || parts[1], tag: decodeTag(parts[2]), params };
     }
     if (name === 'thread' && parts[1] && parts[2]) {
       const username = normaliseUsername(parts[1]);
@@ -585,7 +617,7 @@ class App {
       setLead(false);
     } else {
       // pushed screens keep the floating tab bar; Setup does not (PRODUCT §1)
-      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread' || route.name === 'person' || route.name === 'settings';
+      const pushed = route.name === 'node' || route.name === 'channel' || route.name === 'thread' || route.name === 'person' || route.name === 'settings' || route.name === 'vouches';
       setTabs(pushed, this.lastMain.replace('#/', ''));
       setLead(true);
     }
@@ -623,6 +655,9 @@ class App {
       case 'thread':
         el = thread.render(this, { username: route.username, serverId: route.serverId, compose: route.params.compose === '1' });
         break;
+      case 'vouches':
+        el = work.renderVouches(this, { username: route.username, tag: route.tag });
+        break;
       case 'compose': {
         // modal over the last main view
         const under = this.lastMain.replace('#/', '');
@@ -638,6 +673,9 @@ class App {
     }
     replace(view, el);
     window.scrollTo(0, 0);
+    this.measureHead();
+    // fonts and the demo strip can change the topbar's height after this frame
+    requestAnimationFrame(() => this.measureHead());
   }
 
   // ── the demo (PRODUCT §2.22) ─────────────────────────────────────────────

@@ -861,3 +861,125 @@ p { margin: 0 0 var(--hp-space-input-bottom); }
   cursor: pointer;
 }
 .nag-close:hover { color: var(--ink); }
+
+/* ── work (PRODUCT §2.23–§2.25) ──────────────────────────────────────────── */
+
+/* §2.24's mode control: full column width, `bg2` track (the kit's own .tabs
+   fill), sticky under the topbar — `--app-head-h` is the topbar's measured
+   height (js/app.js measureHead), so the demo strip pushes it down with the
+   bar it is part of. No shadow: the floating tab bar is the one raised pill on
+   this screen (PRODUCT §1), and a second would read as a second surface. */
+.feed-mode {
+  position: sticky;
+  top: var(--app-head-h, 0px);
+  z-index: 5;
+  margin: calc(-1 * var(--hp-space-tabs-pad)) 0 var(--hp-space-card-gap);
+  padding: var(--hp-space-tabs-pad) 0;
+  background: var(--bg);
+}
+.feed-mode:empty { display: none; }
+.feed-mode .tabs { margin-bottom: 0; box-shadow: none; }
+
+/* §2.23 — the role line is body text and nothing else. No pill, no tick, no
+   badge: it is a self-claim exactly like the bio two lines above it, and
+   borrowing the `Verified` pill's language would empty that pill
+   (PROTOCOL §10.8). */
+.work-claim { margin: 0 0 var(--hp-space-card-gap); }
+.work-role { margin: 0 0 var(--hp-space-row-gap); }
+.work-open { display: flex; align-items: center; gap: var(--hp-space-row-gap); flex-wrap: wrap; }
+.work-open .pill { flex: none; }
+
+.work-tag-name { font: var(--type-body); }
+.work-tag-link { cursor: pointer; }
+.work-tag-link:hover .row-name { color: var(--accent); }
+/* a tag with no vouches is not a control: no chevron, no press state, and
+   nothing under the finger that could be mistaken for one (§2.23) */
+.work-tag:not(.work-tag-link) { cursor: default; }
+.work-empty { margin: calc(-1 * var(--hp-space-tabs-pad)) 0 var(--hp-space-card-gap); }
+.work-empty p { margin: 0 0 var(--hp-space-tabs-pad); }
+.work-empty p:last-child { margin-bottom: 0; }
+
+/* §2.24's row wants the name, the date, three tags and a gold pill on one
+   line. On a phone column they do not fit — `Open to collaborate` is a wide
+   pill — and the thing that must not be the one to truncate is the person's
+   name. So the trail wraps to its own line rather than squeezing the name to
+   an initial; on a wide column it stays where the spec draws it. */
+.work-open-row { flex-wrap: wrap; row-gap: var(--hp-space-tabs-pad); }
+.work-open-row .row-main { flex: 1 1 auto; min-width: min(100%, 210px); }
+.work-open-row .row-trail { margin-left: auto; }
+.work-open-sub { font-family: inherit; }
+.work-open-sub .work-open-tags { color: var(--muted); }
+
+/* §2.23's reminder row — one line and a ghost button. No badge, no red: it is
+   information about a date, not an alarm. */
+.work-remind {
+  display: flex;
+  align-items: center;
+  gap: var(--hp-space-row-gap);
+  margin: 0 0 var(--hp-space-card-gap);
+}
+.work-remind span { flex: 1; min-width: 0; }
+.work-remind .btn { flex: none; width: auto; }
+
+.work-fields { margin-top: var(--hp-space-card-gap); }
+.work-fields .tabs { margin-bottom: var(--hp-space-input-bottom); }
+/* §2.23's OPEN TO carries five items where the kit's segmented control is
+   drawn for two or three. The label typography is what does not fit, not the
+   control: `Nothing Work Contract Hiring Collab` at the kit's tracking runs
+   past a phone column and clips `Collab`. Tighter tracking and narrower side
+   padding keep all five legible and none of them cut off. */
+.work-fields .tabs button { letter-spacing: 0.04em; padding-left: 4px; padding-right: 4px; }
+.work-note { margin: calc(-1 * var(--hp-space-tabs-pad)) 0 var(--hp-space-input-bottom); }
+.work-note:empty { display: none; }
+.work-feed-row .row-name { font: var(--type-body); }
+.card-full { margin: var(--hp-space-row-gap) 0 0; }
+.card-full:empty { display: none; }
+
+/* The kit's field wrapper sets `display: block`, which outranks the UA's
+   `[hidden] { display: none }` — so a hidden field would still paint. §2.25's
+   custom-tag input is revealed by `Something else` and has to be gone until
+   then. */
+.field-wrap[hidden] { display: none; }
+
+/* §2.25's chips: single-select, and rule 6's 40pt region as an overlay rather
+   than an inflated pill — the pill keeps the size the kit draws it at. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--hp-space-row-gap);
+  margin: 0 0 var(--hp-space-input-bottom);
+}
+button.chip {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: var(--font-body);
+  cursor: pointer;
+  /* a chip carries the subject's own words, not a label: the kit's pill
+     typography is uppercase and letterspaced, which reads `node.js` as chrome
+     rather than as the thing being said about somebody */
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: 0.8rem;
+  font-weight: 400;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+button.chip.on {
+  color: var(--accent);
+  border-color: rgba(164, 129, 59, 0.35);
+  background: var(--accent-soft);
+}
+button.chip.ghost { cursor: default; color: var(--faint); }
+.vouch-note { margin: var(--hp-space-row-gap) 0 0; }
+.vouch-note:empty { display: none; }
+
+.vouch-head { text-align: left; }
+.vouch-head h1 { margin: 0 0 var(--hp-space-tabs-pad); }
+.vouch + .vouch {
+  border-top: var(--hp-border-width) solid var(--line);
+  margin-top: var(--hp-space-row-pad);
+  padding-top: var(--hp-space-row-pad);
+}
+.vouch .post-head .pill { flex: none; align-self: center; }
+/* §2.25 — a month and a year, never a relative time */
+.vouch-date { white-space: nowrap; }
+.vouch-scope, .cap-scope { margin: calc(-1 * var(--hp-space-tabs-pad)) 0 var(--hp-space-card-gap); }

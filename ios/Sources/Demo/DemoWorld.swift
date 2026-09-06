@@ -39,9 +39,15 @@ final class DemoWorld {
     /// Target key → the comments pointing at it, the same shape `CommentRepository` indexes by, so
     /// the thread walk is the app's own and not a second implementation.
     private(set) var commentIndex: [String: [Comment]] = [:]
+    /// Node key → the vouches about that node, the shape `CommentRepository` indexes by
+    /// (PROTOCOL §10.4), so the lookup and the ordering are the app's own.
+    private(set) var vouchIndex: [String: [Vouch]] = [:]
 
     private(set) var myNode: MyNode
     private(set) var myCard: Card
+    /// The reader carries no work keys (PRODUCT §2.26): the first thing the demo shows about work
+    /// is the empty state on your own card.
+    private(set) var myWork: Work?
     private(set) var myTitle: String
 
     // Discovery, precomputed: the demo's graph never changes, so there is nothing to walk.
@@ -65,6 +71,7 @@ final class DemoWorld {
         buildNodes()
         buildPosts()
         buildComments()
+        buildVouches()
         buildDiscovery()
     }
 
@@ -120,6 +127,7 @@ final class DemoWorld {
                                                           chatId: Self.chatId(spec.username),
                                                           title: spec.name,
                                                           card: card,
+                                                          work: work(for: spec.username, card: card),
                                                           state: .ok,
                                                           // No node carries a photograph of a
                                                           // person (§2.22): the initial over a
@@ -240,6 +248,49 @@ final class DemoWorld {
     /// one plain span exactly as it renders a real message's.
     static func richText(_ text: String) -> RichText {
         text.isEmpty ? .empty : RichText(spans: [RichSpan(text: text, kind: .plain, url: nil)])
+    }
+
+    /// A node's work card, built the way a read one is: serialised into a card and parsed back out
+    /// by `WorkCodec`. So the fixture goes through the same grammar, the same caps and the same
+    /// `work.feeds` ∩ `feeds:` rule a card off Telegram does, and a fixture the protocol would
+    /// reject cannot quietly paint here.
+    private func work(for username: String, card: Card) -> Work? {
+        guard let spec = DemoFixtures.work.first(where: { Username.key($0.node) == Username.key(username) }) else { return nil }
+        var draft = Work(role: spec.role, does: spec.does, open: nil, feeds: spec.feeds)
+        if let intent = spec.intent, let until = WorkCodec.day(after: spec.openDays, from: WorkCodec.today(startedAt)) {
+            draft.open = WorkOpen(intent: intent, until: until)
+        }
+        return WorkCodec.parse(CardCodec.serialise(card, work: draft))
+    }
+
+    /// The five §2.26 vouch fixtures, each serialised to the §10.4 message a voucher would post and
+    /// parsed back. The self-vouch is dropped by `VouchCodec.keeps` — the app's own rule, on the
+    /// app's own path — rather than by being left out of the table, which is what makes it a test.
+    private func buildVouches() {
+        for spec in DemoFixtures.vouches {
+            guard let voucher = nodes[Username.key(spec.voucher)],
+                  let channel = voucherChannel(spec.voucher),
+                  let text = VouchCodec.serialise(node: spec.about, does: spec.does, body: spec.body),
+                  let parsed = VouchCodec.parse(text),
+                  VouchCodec.keeps(parsed, voucherNode: spec.voucher) else { continue }
+            let vouch = Vouch(channelUsername: channel,
+                              chatId: Self.chatId(channel),
+                              messageId: Self.messageId(spec.id),
+                              date: Int(startedAt.timeIntervalSince1970) - spec.age,
+                              node: parsed.node,
+                              does: parsed.does,
+                              body: parsed.body,
+                              ownerUsername: voucher.username,
+                              ownerTitle: voucher.displayName,
+                              ownerPhoto: voucher.photo,
+                              isPlusOne: !isDirectFollow(voucher.username),
+                              isMine: Username.key(voucher.username) == Username.key(DemoFixtures.reader))
+            vouchIndex[vouch.nodeKey, default: []].append(vouch)
+        }
+    }
+
+    private func voucherChannel(_ node: String) -> String? {
+        DemoFixtures.nodes.first { Username.key($0.username) == Username.key(node) }?.replies
     }
 
     private func buildComments() {

@@ -12,7 +12,7 @@ import UIKit
 /// What is being reported (PRODUCT §2.15). Built from a `Post` or a `Comment` so the report confirm,
 /// the email and the hidden list all name the same thing.
 struct ReportSubject: Equatable, Hashable {
-    enum Kind: String, Equatable, Hashable { case post, comment }
+    enum Kind: String, Equatable, Hashable { case post, comment, vouch }
 
     var kind: Kind
     /// The channel the reported message lives in: the source feed for a post, the commenter's
@@ -26,10 +26,22 @@ struct ReportSubject: Equatable, Hashable {
     /// Where it lands on the hidden list (PROTOCOL §7.1).
     var hiddenKey: String { Moderation.key(channel: channel, serverMessageId: serverMessageId) }
 
-    /// `Report this post.` / `Report this comment.`
-    var title: String { kind == .post ? "Report this post." : "Report this comment." }
-    /// `Report Post` / `Report Comment`
-    var buttonLabel: String { kind == .post ? "Report Post" : "Report Comment" }
+    /// `Report this post.` / `Report this comment.` / `Report this vouch.`
+    var title: String {
+        switch kind {
+        case .post: return "Report this post."
+        case .comment: return "Report this comment."
+        case .vouch: return "Report this vouch."
+        }
+    }
+    /// `Report Post` / `Report Comment` / `Report Vouch`
+    var buttonLabel: String {
+        switch kind {
+        case .post: return "Report Post"
+        case .comment: return "Report Comment"
+        case .vouch: return "Report Vouch"
+        }
+    }
 
     init(post: Post) {
         kind = .post
@@ -43,6 +55,16 @@ struct ReportSubject: Equatable, Hashable {
         channel = comment.channelUsername
         serverMessageId = DeepLink.serverMessageId(comment.messageId)
         node = comment.ownerUsername
+    }
+
+    /// A vouch (PRODUCT §2.25) reports as the `vouch` kind: it is a message in someone's comments
+    /// channel like a comment, but the operator opening the link needs to know which of the two
+    /// formats they are looking at, and `Kind:` is the line that tells them.
+    init(vouch: Vouch) {
+        kind = .vouch
+        channel = vouch.channelUsername
+        serverMessageId = DeepLink.serverMessageId(vouch.messageId)
+        node = vouch.ownerUsername
     }
 }
 

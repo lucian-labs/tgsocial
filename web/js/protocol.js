@@ -112,6 +112,12 @@ export function serialiseCard(card) {
   if (follows.length) lines.push(`follows: ${follows.map((u) => `@${u}`).join(' ')}`);
   const replies = card.replies ? normaliseUsername(`@${String(card.replies).replace(/^@/, '')}`) : null;
   if (replies) lines.push(`replies: @${replies}`);
+  // §10.2: the extension's lines come after every §2 key, so a card written
+  // before the extension and one written after differ by an append — a diff a
+  // person reading their own channel on Telegram can follow. `card.work` is
+  // absent for a client that does not implement §10, and then this is §2's
+  // serialiser unchanged, character for character.
+  for (const line of workLines(card.work, feeds)) lines.push(line);
   const text = lines.join('\n');
   if (text.length > CARD_MAX) throw new RangeError('Card is full.');
   return text;
@@ -223,6 +229,284 @@ export function targetKey(link) {
   if (typeof link !== 'string') return null;
   const m = /^https?:\/\/(?:www\.)?t\.me\/([A-Za-z0-9_]+)\/(\d+)\/?$/.exec(link.trim());
   return m ? `${m[1].toLowerCase()}/${m[2]}` : null;
+}
+
+// ── work (PROTOCOL §10) ────────────────────────────────────────────────────
+
+/*
+ * §10 is an extension, and the shape of this file is the argument for it.
+ * `parseCard` above is §2 and knows nothing about anything below: delete this
+ * whole block and every card on the network still parses byte-identically,
+ * work keys included, because §2 already says unknown keys are ignored. §10 is
+ * read by a SECOND pass over the same text.
+ *
+ * The two meet in exactly one place — `serialiseCard` emits work lines when,
+ * and only when, the caller hands it a `work`. That is §10.6: a client that
+ * read the keys has to write them back, or a follow would quietly delete
+ * somebody's work card.
+ */
+
+export const WORK_ROLE_MAX = 80;
+export const WORK_DOES_MAX = 12;
+export const WORK_OPEN_HORIZON_DAYS = 180;
+/** Lowercase, 2–24, and the punctuation real trades carry: `c++`, `c#`, `node.js`, `front of house`. */
+export const WORK_TAG_RE = /^[a-z0-9][a-z0-9 +#.-]{0,22}[a-z0-9+#]$/;
+export const WORK_INTENTS = ['work', 'contract', 'hiring', 'collab'];
+
+const WORK_KEYS = new Set(['work.role', 'work.does', 'work.open', 'work.feeds']);
+
+/** One capability tag, normalised: trimmed, inner whitespace collapsed, lowercased. Invalid → null. */
+export function workTag(input) {
+  if (typeof input !== 'string') return null;
+  const s = input.trim().replace(/\s+/g, ' ').toLowerCase();
+  return WORK_TAG_RE.test(s) ? s : null;
+}
+
+/** `a, b, c` → up to WORK_DOES_MAX tags. Invalid tags are dropped, never fatal (§10.2). */
+export function parseWorkDoes(value) {
+  const out = [];
+  const seen = new Set();
+  for (const part of String(value ?? '').split(',')) {
+    const tag = workTag(part);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+    if (out.length === WORK_DOES_MAX) break;
+  }
+  return out;
+}
+
+/** A real calendar day in `YYYY-MM-DD` — `2026-02-30` is not one. */
+export function isCalendarDay(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+/** Whole days from `a` to `b`, both `YYYY-MM-DD`. Negative when `b` is behind `a`. */
+export function daysBetween(a, b) {
+  const ms = Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`);
+  return Math.round(ms / 86400000);
+}
+
+/** `<intent> until <YYYY-MM-DD>` → `{intent, until}`; anything else → null (§10.3). */
+export function parseWorkOpen(value) {
+  const m = /^([A-Za-z]+)\s+until\s+(\S+)$/.exec(String(value ?? '').trim());
+  if (!m) return null;
+  const intent = m[1].toLowerCase();
+  if (!WORK_INTENTS.includes(intent)) return null;
+  if (!isCalendarDay(m[2])) return null;
+  return { intent, until: m[2] };
+}
+
+export function serialiseWorkOpen(open) {
+  return open ? `${open.intent} until ${open.until}` : '';
+}
+
+/**
+ * Is this intent a statement about now? Expired is obvious; the far-future
+ * cap is the other half — `until 2099-01-01` is a claim nobody has to renew,
+ * which is the same as no expiry at all (§10.3). `today` is `YYYY-MM-DD`.
+ */
+export function openIsCurrent(open, today) {
+  if (!open || !isCalendarDay(open.until) || !isCalendarDay(today)) return false;
+  const days = daysBetween(today, open.until);
+  return days >= 0 && days <= WORK_OPEN_HORIZON_DAYS;
+}
+
+export function emptyWork() {
+  return { role: null, does: [], open: null, feeds: [] };
+}
+
+/**
+ * The §10 pass over a card's text. Returns the work card, or null when the
+ * text is not a v1 card or carries nothing §10 can use — so "has a work card"
+ * is one truthy check, and a card whose every work line is malformed is the
+ * same as a card with none.
+ *
+ * `work.feeds` is intersected with `feeds:` here rather than trusted: `feeds:`
+ * is the ownership claim (§3, which needs post rights), and a marking line has
+ * no business introducing a channel the owner never claimed.
+ */
+export function parseWork(text) {
+  const card = parseCard(text);
+  if (!card) return null;
+  const raw = {};
+  const lines = text.split(/\r?\n/);
+  for (let i = 1; i < lines.length; i += 1) {
+    const colon = lines[i].indexOf(':');
+    if (colon < 0) continue;
+    const key = lines[i].slice(0, colon).trim().toLowerCase();
+    const value = lines[i].slice(colon + 1).trim();
+    if (!WORK_KEYS.has(key)) continue;
+    raw[key] = raw[key] === undefined ? value : `${raw[key]} ${value}`;
+  }
+  const work = emptyWork();
+  const role = (raw['work.role'] ?? '').replace(/\s+/g, ' ').trim();
+  work.role = role ? role.slice(0, WORK_ROLE_MAX) : null;
+  work.does = parseWorkDoes(raw['work.does']);
+  work.open = parseWorkOpen(raw['work.open']);
+  work.feeds = parseUsernameList(raw['work.feeds']).filter((f) => card.feeds.some((g) => sameUsername(f, g)));
+  const empty = !work.role && !work.does.length && !work.open && !work.feeds.length;
+  return empty ? null : work;
+}
+
+/**
+ * §10.2 — `work.feeds` is a marking on channels `feeds:` already claims, so it
+ * never outlives them. Dropping a channel from `feeds:` drops its marking with
+ * it; a stale entry is a line §10.2 forbids on the wire, and it is latent
+ * rather than harmless — readers ignore it today and it re-marks the channel
+ * as work the moment the owner lists it again, with nobody having touched the
+ * toggle.
+ */
+export function pruneWorkFeeds(work, feeds) {
+  if (!work) return null;
+  const list = work.feeds ?? [];
+  const kept = list.filter((f) => (feeds ?? []).some((g) => sameUsername(f, g)));
+  return kept.length === list.length ? work : { ...work, feeds: kept };
+}
+
+/**
+ * The §10 lines, in §10.2 order, for `serialiseCard` to append after `replies`.
+ *
+ * `feeds` is the card's own `feeds:` and is not optional in practice: the
+ * intersection §10.2 requires is enforced on the write side here, the same way
+ * `parseWork` enforces it on the read side, so no caller can put a `work.feeds`
+ * entry on the wire that the card does not claim.
+ */
+export function workLines(work, feeds = []) {
+  const pruned = pruneWorkFeeds(work, feeds);
+  if (!pruned) return [];
+  const lines = [];
+  const role = typeof pruned.role === 'string' ? pruned.role.replace(/\s+/g, ' ').trim().slice(0, WORK_ROLE_MAX) : '';
+  if (role) lines.push(`work.role: ${role}`);
+  const does = parseWorkDoes((pruned.does ?? []).join(','));
+  if (does.length) lines.push(`work.does: ${does.join(', ')}`);
+  const open = parseWorkOpen(serialiseWorkOpen(pruned.open));
+  if (open) lines.push(`work.open: ${serialiseWorkOpen(open)}`);
+  const marked = parseUsernameList((pruned.feeds ?? []).map((u) => `@${String(u).replace(/^@/, '')}`).join(' '));
+  if (marked.length) lines.push(`work.feeds: ${marked.map((u) => `@${u}`).join(' ')}`);
+  return lines;
+}
+
+/** §10.4: `vouch: ` + one space + a node's channel link. A post link is a comment (§6.2), not a vouch. */
+export const VOUCH_TARGET_RE = /^vouch: https:\/\/t\.me\/([A-Za-z0-9_]+)\s*$/;
+const VOUCH_DOES_RE = /^does: (.+)$/;
+
+/**
+ * Parse a comments-channel message as a vouch: `{ node, does, body }`, or null.
+ *
+ * Both lines are mandatory. A `vouch:` with no `does:` under it would be "I
+ * vouch for this person", which asserts nothing anyone can weigh and would
+ * decay into a like button the first week — §10.4 makes the claim specific or
+ * makes it nothing.
+ */
+export function parseVouch(text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split('\n');
+  const m = VOUCH_TARGET_RE.exec((lines[0] ?? '').replace(/\r$/, ''));
+  if (!m || !USERNAME_RE.test(m[1])) return null;
+  const d = VOUCH_DOES_RE.exec((lines[1] ?? '').replace(/\r$/, ''));
+  if (!d) return null;
+  const does = workTag(d[1]);
+  if (!does) return null;
+  return { node: m[1], does, body: lines.slice(2).join('\n') };
+}
+
+/** §10.4, exact bytes. Throws RangeError('Pick one thing.') on a tag §10.2 would drop. */
+export function serialiseVouch(node, does, body) {
+  const tag = workTag(does);
+  if (!tag) throw new RangeError('Pick one thing.');
+  const head = `vouch: ${channelLink(normaliseUsername(node) ?? node)}\ndoes: ${tag}`;
+  const b = typeof body === 'string' ? body : '';
+  return b ? `${head}\n${b}` : head;
+}
+
+/**
+ * §10.4: a vouch for the channel's own owner is not a vouch. Unforgeable-by-
+ * construction is the whole value of the format, and it holds only because the
+ * one channel a person can write is the one that cannot speak about them.
+ */
+export function keepsVouch(vouch, voucherNode) {
+  return !!vouch && !!voucherNode && !sameUsername(vouch.node, voucherNode);
+}
+
+// ── work, rendered (PRODUCT §2.23–§2.25) ───────────────────────────────────
+
+/*
+ * The three §10 surfaces print dates, and three platforms have to print them
+ * the same way, so the strings are derived here beside `formatTime` rather
+ * than in each client's view layer. Nothing below parses anything: give it a
+ * §10 value and it hands back the words PRODUCT names.
+ */
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Today as §10.3 counts it: `YYYY-MM-DD`, UTC. */
+export function todayUTC(now = new Date()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+/** `day` shifted by whole days, still `YYYY-MM-DD` UTC — the writer's 30/60/90 (§2.23). */
+export function addDays(day, n) {
+  if (!isCalendarDay(day)) return null;
+  return new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+}
+
+/** `5 Dec 2026` — the Edit Card modal's derived end date (§2.23). */
+export function formatWorkDay(day) {
+  if (!isCalendarDay(day)) return '';
+  const [y, m, d] = day.split('-').map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
+
+/**
+ * `until 1 Dec` beside the intent pill (§2.23) — day and month, the year
+ * appended only when it is not this one. §10.3 caps the horizon at 180 days,
+ * so the year is a boundary case rather than the usual one.
+ */
+export function formatUntil(until, today = todayUTC()) {
+  if (!isCalendarDay(until)) return '';
+  const [y, m, d] = until.split('-').map(Number);
+  const sameYear = isCalendarDay(today) && today.slice(0, 4) === until.slice(0, 4);
+  return `until ${d} ${MONTHS[m - 1]}${sameYear ? '' : ` ${y}`}`;
+}
+
+/**
+ * `Mar 2026` on a vouch (§2.25). Every other time in this app is relative
+ * because a post's recency is what matters; a vouch is the opposite — `2y ago`
+ * buries the thing the reader is weighing.
+ */
+export function formatVouchDate(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** §2.23's four verbatim intent strings. An intent outside §10.3's set has no copy and no pill. */
+export const WORK_INTENT_LABELS = {
+  work: 'Open to work',
+  contract: 'Open to contract',
+  hiring: 'Hiring',
+  collab: 'Open to collaborate',
+};
+
+export function intentLabel(intent) {
+  return WORK_INTENT_LABELS[intent] ?? '';
+}
+
+/**
+ * §2.24's OPEN NOW order: end date ascending — soonest first — ties by
+ * username ascending. Written down because three platforms otherwise produce
+ * three orders, and because "what expires first" is derived from the data
+ * rather than scored.
+ */
+export function orderByExpiry(rows) {
+  return [...rows].sort((a, b) => {
+    const byDate = String(a.work?.open?.until ?? '').localeCompare(String(b.work?.open?.until ?? ''));
+    if (byDate) return byDate;
+    return usernameKey(a.username).localeCompare(usernameKey(b.username));
+  });
 }
 
 // ── attribution (PRODUCT §2.3) ─────────────────────────────────────────────

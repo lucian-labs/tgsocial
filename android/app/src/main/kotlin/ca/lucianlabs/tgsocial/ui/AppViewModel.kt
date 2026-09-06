@@ -21,6 +21,7 @@ import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.model.SyncStatus
+import ca.lucianlabs.tgsocial.model.Vouch
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CardFormat
 import ca.lucianlabs.tgsocial.protocol.CommentFormat
@@ -34,6 +35,10 @@ import ca.lucianlabs.tgsocial.protocol.ReportSubject
 import ca.lucianlabs.tgsocial.protocol.SafetyFilter
 import ca.lucianlabs.tgsocial.protocol.SafetyLists
 import ca.lucianlabs.tgsocial.protocol.Username
+import ca.lucianlabs.tgsocial.protocol.VouchFormat
+import ca.lucianlabs.tgsocial.protocol.WorkCard
+import ca.lucianlabs.tgsocial.protocol.WorkFormat
+import ca.lucianlabs.tgsocial.protocol.WorkOpen
 import ca.lucianlabs.tgsocial.repo.ActivityRegistry
 import ca.lucianlabs.tgsocial.repo.CardFullException
 import ca.lucianlabs.tgsocial.repo.MyNodeRepo
@@ -139,6 +144,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** The demo's comment index and card cache, which shadow the real ones for as long as it runs. */
     private val _demoComments = MutableStateFlow<Map<String, List<Comment>>?>(null)
     private val _demoCards = MutableStateFlow<Map<String, NodeSnapshot>?>(null)
+    /** PROTOCOL §10.4 — and its vouch index, which shadows the real one the same way (PRODUCT §2.26). */
+    private val _demoVouches = MutableStateFlow<Map<String, List<Vouch>>?>(null)
 
     // ---- status (PRODUCT §2.10)
     /** The live list of in-flight operations; the Status sheet's `Pending` rows. */
@@ -208,6 +215,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val editCard: StateFlow<EditCardUi> = _editCard.asStateFlow()
     private val _commentComposer = MutableStateFlow(CommentComposerUi())
     val commentComposer: StateFlow<CommentComposerUi> = _commentComposer.asStateFlow()
+    /** PRODUCT §2.25 — the vouch modal. */
+    private val _vouch = MutableStateFlow(VouchUi())
+    val vouch: StateFlow<VouchUi> = _vouch.asStateFlow()
 
     /**
      * Every surface that resolves a username to a name or a photo reads this. In the demo it is the fixture
@@ -234,9 +244,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         c.copy(posts = SafetyFilter.posts(c.posts, s, mainFeed = false), muted = s.isMuted(c.username))
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ChannelUi())
 
-    val visibleExplore: StateFlow<ExploreUi> = combine(_explore, _safety) { e, s ->
-        e.copy(nearby = SafetyFilter.nodes(e.nearby, s), directory = SafetyFilter.nodes(e.directory, s))
+    val visibleExplore: StateFlow<ExploreUi> = combine(_explore, _safety, cards) { e, s, snapshots ->
+        e.copy(
+            nearby = SafetyFilter.nodes(e.nearby, s),
+            directory = SafetyFilter.nodes(e.directory, s),
+            capability = capabilityHits(e.query, snapshots, s),
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ExploreUi())
+
+    /**
+     * PRODUCT §2.24 / PROTOCOL §10.7 — capability search, honestly bounded. `searchPublicChats` indexes
+     * usernames and titles, not card contents, so Telegram will never return a node because of a tag inside
+     * its pinned message. What is left is a local filter over the cards this client has already read — my
+     * follows, my +1, and the directory announcements — and the screen prints that limit rather than hiding
+     * it. Live on the query, because it costs one pass over a map the app already holds.
+     */
+    private fun capabilityHits(query: String, snapshots: Map<String, NodeSnapshot>, safety: SafetyLists): List<CapabilityHit> {
+        val q = query.trim().lowercase().removePrefix("@")
+        if (q.isEmpty()) return emptyList()
+        val mine = _myNode.value?.username?.let { Username.key(it) }
+        val follows = myCard?.follows.orEmpty()
+        return snapshots.values
+            .filter { Username.key(it.username) != mine && !safety.isBlocked(it.username) }
+            .mapNotNull { snap ->
+                val tags = snap.card?.work?.does.orEmpty().filter { it.contains(q) }
+                if (tags.isEmpty()) return@mapNotNull null
+                // `Followed by N of yours` is the same figure §5.1 puts on a Nearby row, over the same walk.
+                val mutual = follows.count { f -> snapshots[Username.key(f)]?.card?.follows(snap.username) == true }
+                CapabilityHit(discovery.entry(snap, mutual), tags)
+            }
+            .sortedBy { Username.key(it.entry.username) }
+    }
 
     /** §2.18 — a blocked node is not in `DIRECT · 12` or `+1 · 84`; the counts are these lists' sizes. */
     val visibleGraph: StateFlow<GraphUi> = combine(_graph, _safety) { g, s ->
@@ -255,6 +293,99 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val commentIndex: StateFlow<Map<String, List<Comment>>> = combine(commentRepo.index, _demoComments, _safety) { index, demo, s ->
         SafetyFilter.comments(demo ?: index, s)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // ------------------------------------------------------------------ work (PROTOCOL §10)
+
+    /**
+     * PROTOCOL §10.5 — the vouches this reader can see: written in the comments channels of me, my follows,
+     * and my +1, which are the channels the comment scan was already paging. Filtered like everything else
+     * (§2.18), so a blocked voucher leaves no residue in `Vouched by N` either.
+     *
+     * Two readers looking at the same person see different ones, and that is not a bug: there is no reverse
+     * index in Telegram (§8) and no server here, so the complete number does not exist for anybody.
+     */
+    val vouchIndex: StateFlow<Map<String, List<Vouch>>> = combine(commentRepo.vouches, _demoVouches, _safety) { real, demo, s ->
+        SafetyFilter.vouches(demo ?: real, s)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** PRODUCT §2.24 — which way Feed is being read. A UI preference (PROTOCOL §7); it reaches no card. */
+    private val _feedMode = MutableStateFlow(FeedMode.ALL)
+    val feedMode: StateFlow<FeedMode> = _feedMode.asStateFlow()
+
+    fun setFeedMode(mode: FeedMode) {
+        if (_feedMode.value == mode) return
+        _feedMode.value = mode
+        // The demo persists nothing (§2.22.5), the mode included.
+        if (!inDemo) viewModelScope.launch { store.saveFeedMode(mode.ordinal) }
+    }
+
+    /**
+     * PRODUCT §2.24 — Work mode, derived from what is already loaded. Nothing here fetches: `OPEN NOW` reads
+     * cards Explore and Graph already pulled, and the work column is the merged feed with everything from an
+     * unmarked feed suppressed. That is the entire filter — no scoring, no promotion, no "relevant to you".
+     */
+    val work: StateFlow<WorkUi> = combine(visibleFeed, cards, _me, _safety) { feed, snapshots, me, safety ->
+        val myUsername = me?.username
+        val myCard = me?.card
+        val follows = myCard?.follows.orEmpty()
+        fun snap(username: String): NodeSnapshot? = snapshots[Username.key(username)]
+
+        // The feeds anybody in my network marked work: mine, and my follows'. Not +1 — walking their feed
+        // history is a fetch per channel, and §2.24 buys the extra hop for intent only.
+        val workFeeds = HashSet<String>()
+        myCard?.work?.feeds?.forEach { workFeeds += Username.key(it) }
+        follows.forEach { f -> snap(f)?.card?.work?.feeds?.forEach { workFeeds += Username.key(it) } }
+
+        // §10.3 is a reader-side rule, so `OPEN NOW` is computed against today every time it is read.
+        val today = WorkFormat.today()
+        val seen = HashSet<String>()
+        val open = ArrayList<OpenIntent>()
+        fun offer(username: String, plusOne: Boolean) {
+            val key = Username.key(username)
+            if (!seen.add(key)) return
+            if (safety.isBlocked(username)) return
+            val snapshot = snap(username) ?: return
+            val intent = snapshot.card?.work?.open ?: return
+            if (!WorkFormat.openIsCurrent(intent, today)) return
+            open += OpenIntent(
+                username = snapshot.username,
+                name = snapshot.displayName,
+                photo = snapshot.photo,
+                initial = snapshot.initial,
+                intent = intent.intent,
+                until = intent.until,
+                tags = snapshot.card?.work?.does.orEmpty().take(3),
+                plusOne = plusOne,
+            )
+        }
+        myUsername?.let { offer(it, plusOne = false) }
+        follows.forEach { offer(it, plusOne = false) }
+        // +1: the nodes my follows list, from cached cards only — the same best-effort walk §6.3 makes.
+        for (f in follows) {
+            snap(f)?.card?.follows.orEmpty().forEach { second ->
+                if (follows.none { Username.same(it, second) } && myUsername?.let { Username.same(it, second) } != true) {
+                    offer(second, plusOne = true)
+                }
+            }
+        }
+        WorkUi(
+            available = workFeeds.isNotEmpty(),
+            // §2.24 — end date ascending, ties by username ascending. Specified because three platforms
+            // otherwise produce three orders, and because "what expires first" is derived, never scored.
+            openNow = open.sortedWith(compareBy({ it.until }, { Username.key(it.username) })),
+            followCount = follows.size,
+            // The column, and what the filter took on the way — a page that vanishes whole into it owes the
+            // reader the next page rather than an empty state (WorkUi.chaining, PRODUCT §2.18).
+        ).column(feed, workFeeds)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, WorkUi())
+
+    /** The vouches about one node, newest first, already scoped and filtered. */
+    fun vouchesFor(username: String, index: Map<String, List<Vouch>> = vouchIndex.value): List<Vouch> =
+        index[Username.key(username)].orEmpty()
+
+    /** Those of them naming one capability — what the Vouches screen (§2.25) lists. */
+    fun vouchesFor(username: String, tag: String, index: Map<String, List<Vouch>> = vouchIndex.value): List<Vouch> =
+        vouchesFor(username, index).filter { it.tag.equals(tag, ignoreCase = true) }
 
     fun postTargetKey(post: Post): String = CommentFormat.postKey(post.sourceUsername, post.messageId)
     fun commentCount(post: Post, index: Map<String, List<Comment>>): Int = commentRepo.countFor(postTargetKey(post), index)
@@ -391,6 +522,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _demo.value = session
         _demoCards.value = session.cards
         _demoComments.value = session.comments
+        // PRODUCT §2.26 — including the self-vouch, which is in the fixtures precisely so that a client which
+        // forgot PROTOCOL §10.4's rule fails visibly, on all three platforms, without a test being written.
+        _demoVouches.value = session.vouches
         _myNode.value = session.myNode
         _me.value = session.me
         _phone.value = ""
@@ -418,6 +552,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _demo.value = null
         _demoCards.value = null
         _demoComments.value = null
+        _demoVouches.value = null
+        _vouch.value = VouchUi()
         _safety.value = storedSafety ?: SafetyLists()
         storedSafety = null
         _myNode.value = null
@@ -484,6 +620,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             restoreSafety()
             nodes.restore()
             _tab.value = Tab.entries[store.lastTab().coerceIn(0, Tab.entries.lastIndex)]
+            // PRODUCT §2.24 — the mode is remembered, and the control is visible in both, so it is never a trap.
+            _feedMode.value = FeedMode.entries[store.feedMode().coerceIn(0, FeedMode.entries.lastIndex)]
             // Cold start: the last cached feed first, never a blank screen behind a spinner.
             val cached = feedRepo.cachedFeed()
             if (cached.isNotEmpty()) _feed.update { it.copy(posts = FeedOrder.sort(cached), ready = true) }
@@ -636,7 +774,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun openSheet(s: Sheet) {
         when (s) {
             is Sheet.Compose -> prepareCompose(s.feedUsername)
-            Sheet.EditCard -> _editCard.value = EditCardUi(name = myCard?.name.orEmpty(), bio = myCard?.bio.orEmpty(), link = myCard?.link.orEmpty())
+            Sheet.EditCard -> {
+                val work = myCard?.work
+                // PROTOCOL §10.3 — an expired or over-horizon intent opens on `Nothing`: a reader would
+                // not be shown it, so the writer must not be asked to re-confirm something invisible.
+                val open = work?.open?.takeIf { WorkFormat.openIsCurrent(it) }
+                _editCard.value = EditCardUi(
+                    name = myCard?.name.orEmpty(),
+                    bio = myCard?.bio.orEmpty(),
+                    link = myCard?.link.orEmpty(),
+                    role = work?.role.orEmpty(),
+                    does = work?.does.orEmpty().joinToString(", "),
+                    openIntent = open?.intent,
+                    // Seeded from the card, like every other field here. Save rewrites `work.open` from
+                    // these two tabs whatever the reason for the save was, so a horizon that opened on a
+                    // default would shorten published intent on the way past (§2.23, WorkFormat.horizonFor).
+                    openDays = WorkFormat.horizonFor(open),
+                    workFeeds = work?.feeds.orEmpty().map { Username.key(it) }.toSet(),
+                )
+            }
+            is Sheet.Vouch -> prepareVouch(s.username)
+            is Sheet.VouchSheet, is Sheet.DeleteVouch -> Unit
             is Sheet.CommentComposer -> prepareCommentComposer(s.post, s.target)
             // PRODUCT §2.21 — the field opens empty every time; a typed username is not a standing permission.
             Sheet.DeleteNode -> _deleteNode.value = DeleteNodeUi()
@@ -652,6 +810,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_sheet.value is Sheet.CommentComposer && _commentComposer.value.posting) return
         // PRODUCT §2.21 — while the delete runs the modal cannot be dismissed.
         if (_sheet.value is Sheet.DeleteNode && _deleteNode.value.running) return
+        if (_sheet.value is Sheet.Vouch && _vouch.value.posting) return
         _sheet.value = null
     }
 
@@ -937,6 +1096,168 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ------------------------------------------------------------------ vouching (PROTOCOL §10.4 / PRODUCT §2.25)
+
+    /**
+     * `( Vouch for Ana )`. The control does not exist on my own work card; reached by deep link anyway, this
+     * is the refusal — a channel cannot speak about its own owner, and that is the whole reason a vouch is
+     * worth anything (PROTOCOL §10.4).
+     */
+    fun openVouch(username: String) {
+        if (isMe(username)) { toast.show("You can't vouch for yourself.", HPToastTone.BAD); return }
+        openSheet(Sheet.Vouch(username))
+    }
+
+    private fun prepareVouch(username: String) {
+        val snap = cards.value[Username.key(username)]
+        val chips = snap?.card?.work?.does.orEmpty()
+        val mine = _myNode.value?.username
+        // §2.25 — a second identical vouch is noise, so the chip reads `Vouched` instead of being selectable.
+        val already = vouchesFor(username)
+            .filter { mine != null && Username.same(it.voucherUsername, mine) }
+            .map { it.tag }
+            .toSet()
+        val needsChannel = myCard != null && myCard?.replies == null
+        val suggested = mine?.let { Replies.convention(it) }.orEmpty()
+        // §2.25's five strings name the person the way a sentence does — `Ana`, not `Ana Iliovic` and not
+        // `@tgs_ana` — and PRODUCT §3 makes that copy shared across the three builds.
+        val named = snap?.firstName
+        _vouch.value = VouchUi(
+            subject = username,
+            subjectName = named,
+            fieldLabel = VouchCopy.fieldLabel(named),
+            chips = chips,
+            // A node that claims nothing shows only `Something else`, with the input already revealed: you
+            // can vouch for someone who has claimed nothing.
+            custom = chips.isEmpty(),
+            alreadyVouched = already,
+            needsChannel = needsChannel,
+            channelName = suggested,
+        )
+        if (needsChannel && suggested.isNotEmpty()) checkVouchChannelName()
+    }
+
+    fun pickVouchTag(tag: String?) {
+        _vouch.update { it.copy(selected = tag, custom = tag == null) }
+    }
+
+    fun setVouchCustom(text: String) { _vouch.update { it.copy(customText = text, custom = true, selected = null) } }
+
+    fun setVouchBody(text: String) { _vouch.update { it.copy(body = text) } }
+
+    fun setVouchChannelName(name: String) {
+        if (inDemo) return
+        _vouch.update { it.copy(channelName = name.trim(), channelAvailability = Availability.UNKNOWN) }
+        checkVouchChannelName()
+    }
+
+    private fun checkVouchChannelName() {
+        replyChannelJob?.cancel()
+        replyChannelJob = viewModelScope.launch {
+            delay(450)
+            val name = _vouch.value.channelName
+            if (Username.normalise(name) != name || name.isEmpty()) {
+                _vouch.update { it.copy(channelAvailability = Availability.TAKEN, channelNote = "Invalid") }
+                return@launch
+            }
+            _vouch.update { it.copy(channelAvailability = Availability.CHECKING) }
+            val r = runCatching { myNodeRepo.checkUsername(name, 0L) }.getOrNull()
+            _vouch.update {
+                when (r) {
+                    is MyNodeRepo.Availability.Available -> it.copy(channelAvailability = Availability.AVAILABLE, channelNote = "")
+                    is MyNodeRepo.Availability.Taken -> it.copy(channelAvailability = Availability.TAKEN, channelNote = r.reason)
+                    null -> it.copy(channelAvailability = Availability.UNKNOWN)
+                }
+            }
+        }
+    }
+
+    /**
+     * PRODUCT §2.25 — the first vouch with no comments channel shows §2.12's card verbatim, because it is
+     * the same channel (PROTOCOL §10.4) and so it is the same card, not a second one saying nearly the same
+     * thing.
+     */
+    fun makeVouchChannel() {
+        if (demoRefusesWrite()) return
+        val node = _myNode.value ?: return
+        val card = cardOrToast() ?: return
+        val name = _vouch.value.channelName
+        if (Username.normalise(name) != name || name.isEmpty()) { toast.show("That name isn't allowed.", HPToastTone.BAD); return }
+        if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
+        viewModelScope.launch {
+            _vouch.update { it.copy(creatingChannel = true) }
+            runCatching { myNodeRepo.createRepliesChannel(node, card, name) }
+                .onSuccess { (updated, next) ->
+                    _myNode.value = updated
+                    _me.value = _me.value?.copy(card = next)
+                    nodes.persist()
+                    _vouch.update { it.copy(needsChannel = false, creatingChannel = false) }
+                }
+                .onFailure { e ->
+                    _vouch.update { it.copy(creatingChannel = false) }
+                    fail(e)
+                }
+        }
+    }
+
+    /** `( Post Vouch )` — optimistic in the subject's work card the same way a comment is (§2.12). */
+    fun postVouch() {
+        if (demoRefusesWrite()) return
+        val v = _vouch.value
+        val tag = v.tag ?: return
+        val me = _me.value ?: run { toast.show("Make your node first.", HPToastTone.BAD); return }
+        if (isMe(v.subject)) { toast.show("You can't vouch for yourself.", HPToastTone.BAD); return }
+        val repliesChannel = myCard?.replies ?: run { toast.show("Make your comments channel first.", HPToastTone.BAD); return }
+        if (tg.isOffline) { toast.show("You're offline.", HPToastTone.BAD); return }
+        val text = runCatching { VouchFormat.serialise(v.subject, tag, v.body.trim()) }.getOrNull()
+            ?: run { toast.show("Pick one thing.", HPToastTone.BAD); return }
+        val now = System.currentTimeMillis()
+        val optimistic = Vouch(
+            chatId = 0L,
+            messageId = -now,
+            date = (now / 1000).toInt(),
+            channelUsername = repliesChannel,
+            voucherUsername = me.username,
+            voucherName = me.displayName,
+            voucherPhoto = me.photo,
+            subjectUsername = v.subject,
+            tag = tag,
+            body = v.body.trim(),
+            own = true,
+        )
+        viewModelScope.launch {
+            _vouch.update { it.copy(posting = true) }
+            commentRepo.addPendingVouch(optimistic)
+            _sheet.value = null
+            runCatching {
+                app.activity.track("Posting your vouch") {
+                    val chat = tg.call { searchPublicChat(username = repliesChannel) }
+                    myNodeRepo.sendAndAwait(chat.id, text)
+                }
+            }.onSuccess {
+                _vouch.value = VouchUi()
+                toast.show("Vouched.", HPToastTone.GOOD)
+                delay(600)
+                runCatching { commentRepo.rescan(repliesChannel, _myNode.value?.username, myCard) }
+                commentRepo.removePendingVouch(optimistic)
+            }.onFailure { e ->
+                commentRepo.removePendingVouch(optimistic)
+                _vouch.update { it.copy(posting = false) }
+                if (!isCancelled(e)) fail(e)
+            }
+        }
+    }
+
+    /** PRODUCT §2.25 — `Delete this vouch?` confirmed. Only ever my own; a vouch about me is not mine to remove. */
+    fun deleteVouch(vouch: Vouch) {
+        if (demoRefusesWrite()) return
+        _sheet.value = null
+        viewModelScope.launch {
+            runCatching { commentRepo.deleteVouch(vouch) }
+                .onFailure { e -> if (!isCancelled(e)) fail(e) }
+        }
+    }
+
     // ------------------------------------------------------------------ safety (PRODUCT §2.15–§2.21)
 
     /**
@@ -1138,6 +1459,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.value = SetupUi()
         _compose.value = ComposeUi()
         _commentComposer.value = CommentComposerUi()
+        _vouch.value = VouchUi()
         _stack.value = listOf(Screen.Home)
         _viewer.value = null
         _tab.value = Tab.FEED
@@ -1330,11 +1652,61 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _editCard.update { it.copy(name = name ?: it.name, bio = bio ?: it.bio, link = link ?: it.link) }
     }
 
+    /** PRODUCT §2.23 — the field takes the first 80 and says so; a paste is never silently shortened. */
+    fun setEditRole(value: String) {
+        _editCard.update { it.copy(role = value.take(WorkFormat.ROLE_MAX), roleTrimmed = value.length > WorkFormat.ROLE_MAX) }
+    }
+
+    fun setEditDoes(value: String) { _editCard.update { it.copy(does = value) } }
+
+    /** `Nothing` is null — the state of every card written before PROTOCOL §10 existed. */
+    fun setEditOpenIntent(intent: String?) { _editCard.update { it.copy(openIntent = intent) } }
+
+    fun setEditOpenDays(days: Int) { _editCard.update { it.copy(openDays = days) } }
+
+    fun toggleWorkFeed(username: String, on: Boolean) {
+        val k = Username.key(username)
+        _editCard.update { it.copy(workFeeds = if (on) it.workFeeds + k else it.workFeeds - k) }
+    }
+
+    /**
+     * PRODUCT §2.23 — Save. The §10.2 caps are applied here, and each one that bit says so: malformed values
+     * are dropped, never fatal, and the card is still written with what survived.
+     */
     fun saveEditCard() {
         val card = myCard ?: return
         val e = _editCard.value
+        val typed = e.does.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        val refused = typed.firstOrNull { WorkFormat.tag(it) == null }
+        val tags = typed.mapNotNull { WorkFormat.tag(it) }.distinct()
+        val overTwelve = tags.size > WorkFormat.DOES_MAX
+        val open = e.openIntent?.let { WorkOpen(intent = it, until = WorkFormat.horizonDate(e.openDays)) }
+        // PROTOCOL §10.2 — `feeds:` is the ownership claim, so a marking line cannot introduce a channel.
+        val workFeeds = card.feeds.filter { Username.key(it) in e.workFeeds }
+        val work = WorkCard(
+            role = e.role.trim().take(WorkFormat.ROLE_MAX).ifEmpty { null },
+            does = tags.take(WorkFormat.DOES_MAX),
+            open = open,
+            feeds = workFeeds,
+        ).takeIf { !it.isEmpty }
+        val next = card.copy(
+            name = e.name.trim().ifEmpty { null },
+            bio = e.bio.trim().ifEmpty { null },
+            link = e.link.trim().ifEmpty { null },
+            work = work,
+        )
+        // §2.23 — the existing refusal, plus the one line that says which of the two dials to turn. Checked
+        // here rather than left to writeCard so the modal stays up with the text still in the fields.
+        if (CardFormat.isFull(next)) {
+            toast.show("Card is full.\nShorten your bio or drop a tag — your card is one Telegram message.", HPToastTone.BAD)
+            return
+        }
         _sheet.value = null
-        writeCard(card.copy(name = e.name.trim().ifEmpty { null }, bio = e.bio.trim().ifEmpty { null }, link = e.link.trim().ifEmpty { null }))
+        when {
+            refused != null -> toast.show("Dropped \"$refused\". Letters, numbers, spaces, and + # . - only.", HPToastTone.BAD)
+            overTwelve -> toast.show("Twelve at most. The rest were dropped.", HPToastTone.BAD)
+        }
+        writeCard(next) { toast.show("Card saved.", HPToastTone.GOOD) }
     }
 
     fun announce() {
@@ -1508,7 +1880,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val s = _setup.value
         val chosen = s.candidates.mapNotNull { c -> c.username?.takeIf { Username.key(it) in s.selected } }
         _setup.update { it.copy(saving = true) }
-        writeCard(card.copy(feeds = chosen)) {
+        // PROTOCOL §10.2 — `feeds:` is the ownership claim, so un-listing a feed un-marks it. The rest of the
+        // work card rides along untouched, which is §10.6's requirement on every write, not just this one.
+        val work = card.work
+            ?.let { w -> w.copy(feeds = w.feeds.filter { f -> chosen.any { Username.same(it, f) } }) }
+            ?.takeIf { !it.isEmpty }
+        writeCard(card.copy(feeds = chosen, work = work)) {
             _setup.update { it.copy(saving = false) }
             toast.show("Feeds saved.", HPToastTone.GOOD)
             if (_setupNeeded.value) _setupNeeded.value = false
@@ -1614,6 +1991,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _setup.value = SetupUi()
         _compose.value = ComposeUi()
         _commentComposer.value = CommentComposerUi()
+        _vouch.value = VouchUi()
         // PROTOCOL §7.1 — `_safety` is deliberately NOT reset here. The record outlives sign-out and is keyed
         // to the account that wrote it, so the next sign-in either gets its own lists back or starts empty.
         _report.value = ReportUi()

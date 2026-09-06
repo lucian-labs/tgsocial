@@ -20,6 +20,12 @@ struct NodeInfo: Codable, Equatable, Identifiable {
     var chatId: Int64
     var title: String
     var card: Card?
+    /// The §10 second pass over the same pinned message (PROTOCOL §10.1). Nil for every card
+    /// written before that section existed, which is every card on the network today — so the work
+    /// surfaces are absent rather than empty, exactly as the protocol is additive rather than
+    /// versioned. Decoded with `decodeIfPresent`, so a cache written before this field existed
+    /// still loads.
+    var work: Work? = nil
     var state: CardState
     var photo: PhotoRef?
     var fetchedAt: Date
@@ -198,6 +204,38 @@ struct Comment: Codable, Equatable, Hashable, Identifiable {
     /// Every comment has its own t.me link — replying to it is a reply (PROTOCOL §6.2).
     var link: String { DeepLink.post(username: channelUsername, messageId: messageId) }
     var targetKey: String? { CommentCodec.targetKey(target) }
+}
+
+/// One vouch from a comments channel (PROTOCOL §10.4): a `vouch:` pointer at a node, one
+/// capability tag, and a body that may be empty.
+///
+/// It shares a channel and a scan with `Comment` and shares nothing else. The subject is a NODE,
+/// not a message, which is exactly what keeps the two formats apart in one channel: a `vouch:` line
+/// carries no message id, and a `re:` line always does.
+struct Vouch: Codable, Equatable, Hashable, Identifiable {
+    var channelUsername: String
+    var chatId: Int64
+    var messageId: Int64
+    var date: Int
+    /// The node this is about.
+    var node: String
+    /// One tag, in the §10.2 grammar.
+    var does: String
+    var body: String
+    /// The voucher's node — never the same as `node` (§10.4's self-vouch ban).
+    var ownerUsername: String
+    var ownerTitle: String
+    var ownerPhoto: PhotoRef?
+    /// Found via a +1 node rather than a direct follow — shows the `+1` pill.
+    var isPlusOne: Bool
+    var isMine: Bool
+    /// Optimistic send not yet confirmed by Telegram (PRODUCT §2.25).
+    var isPending: Bool = false
+
+    var id: String { "\(chatId):\(messageId)" }
+    var link: String { DeepLink.post(username: channelUsername, messageId: messageId) }
+    var nodeKey: String { Username.key(node) }
+    var tagKey: String { does.lowercased() }
 }
 
 /// What a comment points at, carried into the composer (PRODUCT §2.12). `link` is what becomes the

@@ -3,6 +3,7 @@ import { h, button, kebabMenu, replace, sectionMark } from '../../vendor/house-p
 import { channelLink, hasBacklink, publicNodeUrl, usernameKey, isFollowing } from '../protocol.js';
 import { avatarFor, copyLink, feedRow, nodeRow, emptyCard, openExternal, openTelegram } from './shared.js';
 import { blockedProfile, confirmBlock, isMyNode } from './safety.js';
+import { workSection } from './work.js';
 import { userMessage } from '../repo.js';
 
 export function render(app, { username }) {
@@ -11,6 +12,16 @@ export function render(app, { username }) {
   // would read as a broken app if it were empty, so it says what happened.
   if (app.safety.isBlocked(username)) return blockedProfile(app, username);
   const root = h('div');
+  /**
+   * §2.25 — a vouch posted from this screen lands in the comment index, which
+   * notifies 'comments'. Without a repaint the reader would have to navigate
+   * away and back to see the thing they just wrote. Declared before the first
+   * `paint()` below: the painter is a hoisted function, this is not.
+   */
+  let painted = null;
+  app.onLeave(app.repo.subscribe((what) => {
+    if ((what === 'comments' || what === 'safety') && painted && root.isConnected) paint(painted);
+  }));
   const cached = app.repo.cachedCard(username);
   if (cached?.card) paint(cached);
   else root.append(h('div.card', h('p.muted', 'Loading…')));
@@ -27,6 +38,7 @@ export function render(app, { username }) {
   });
 
   function paint(entry) {
+    painted = entry;
     const card = entry.card;
     const name = card.name || entry.title || `@${entry.username}`;
     const isMe = app.repo.myNode && usernameKey(entry.username) === usernameKey(app.repo.myNode.username);
@@ -69,7 +81,10 @@ export function render(app, { username }) {
       }
     }
 
-    replace(root, head, sectionMark('Feeds'), feeds, sectionMark('Follows', shownFollows.length), follows);
+    // §2.23 — the work card sits between the bio/link block and FEEDS, and is
+    // absent entirely when the node has no work keys. The UI is additive
+    // because the protocol is (PROTOCOL §10).
+    replace(root, head, ...workSection(app, entry), sectionMark('Feeds'), feeds, sectionMark('Follows', shownFollows.length), follows);
   }
 
   return root;

@@ -13,6 +13,13 @@ data class Card(
     val follows: List<String> = emptyList(),
     /** PROTOCOL §6.1 — the node's comments channel, without `@`. Absent means no comments yet. */
     val replies: String? = null,
+    /**
+     * PROTOCOL §10 — the work extension, attached by a second pass ([WorkFormat.attach]) and never by §2's
+     * own parser. It rides on the card so that every `copy()` on the way to a write carries it: §10.6's one
+     * requirement is that a client which read these lines writes them back, and a serialiser that emits only
+     * the keys it knows deletes the rest on the next follow.
+     */
+    val work: WorkCard? = null,
 ) {
     fun follows(username: String): Boolean = follows.any { Username.same(it, username) }
     fun hasFeed(username: String): Boolean = feeds.any { Username.same(it, username) }
@@ -98,6 +105,10 @@ object CardFormat {
                 "replies" -> line(key, card.replies?.let { "@$it" })
             }
         }
+        // PROTOCOL §10.2 — the extension's lines come after every §2 key, so a card written before §10 and one
+        // written after differ by an append. This is the single place §2 and §10 meet, and it is §10.6's
+        // requirement made structural: the lines are emitted when, and only when, a `work` was handed in.
+        for (line in WorkFormat.lines(card.work, card.feeds)) sb.append('\n').append(line)
         return sb.toString()
     }
 

@@ -34,15 +34,22 @@ struct BackButton: View {
 }
 
 /// Topbar + scrolling single column. `leadingBack` swaps the wordmark for `‹ Back`.
-struct Screen<Content: View>: View {
+///
+/// `sticky` is a control that rides under the topbar instead of scrolling with the content —
+/// Feed's All / Work mode is the only one (PRODUCT §2.24), and it is sticky because a mode you
+/// have to scroll back up to leave is a mode you are stuck in. Every other screen passes nothing
+/// and gets exactly the layout it had.
+struct Screen<Content: View, Sticky: View>: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let back: Bool
     let refresh: (() async -> Void)?
+    let sticky: Sticky
     let content: Content
 
-    init(back: Bool = false, refresh: (() async -> Void)? = nil, @ViewBuilder content: () -> Content) {
-        self.back = back; self.refresh = refresh; self.content = content()
+    init(back: Bool = false, refresh: (() async -> Void)? = nil,
+         @ViewBuilder sticky: () -> Sticky, @ViewBuilder content: () -> Content) {
+        self.back = back; self.refresh = refresh; self.sticky = sticky(); self.content = content()
     }
 
     var body: some View {
@@ -54,6 +61,8 @@ struct Screen<Content: View>: View {
             }
             // §2.22, indicator 2: sticky with the topbar, on every screen that has one.
             if model.isDemo { DemoStrip() }
+            sticky
+                .padding(.horizontal, HPTokens.Space.columnSide)
             scroll
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -89,5 +98,11 @@ struct FeedFooter: View {
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
             .padding(.vertical, HPTokens.Space.rowPad)
+    }
+}
+
+extension Screen where Sticky == EmptyView {
+    init(back: Bool = false, refresh: (() async -> Void)? = nil, @ViewBuilder content: () -> Content) {
+        self.init(back: back, refresh: refresh, sticky: { EmptyView() }, content: content)
     }
 }

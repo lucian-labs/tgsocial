@@ -6,6 +6,7 @@ import ca.lucianlabs.tgsocial.model.MyNode
 import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.model.Vouch
 import ca.lucianlabs.tgsocial.protocol.SafetyLists
 import ca.lucianlabs.tgsocial.protocol.Username
 
@@ -34,18 +35,21 @@ class DemoRepo(
         pinnedMessageId = 1L shl 20,
     )
 
-    val me: NodeSnapshot = requireNotNull(DemoWorld.snapshot(DemoWorld.READER))
+    val me: NodeSnapshot = requireNotNull(DemoWorld.snapshot(DemoWorld.READER, startedAt))
 
     private val allPosts: List<Post> = DemoWorld.posts(startedAt)
 
     /** Username key → the snapshot every surface reads, so Settings rows and the graph radial resolve names. */
     val cards: Map<String, NodeSnapshot> =
-        DemoWorld.nodes.mapNotNull { DemoWorld.snapshot(it.username) }.associateBy { Username.key(it.username) }
+        DemoWorld.nodes.mapNotNull { DemoWorld.snapshot(it.username, startedAt) }.associateBy { Username.key(it.username) }
 
     val feedSources: Map<String, FeedSource> =
         DemoWorld.channels.mapNotNull { DemoWorld.feedSource(it.username) }.associateBy { Username.key(it.username) }
 
     val comments: Map<String, List<Comment>> = DemoWorld.commentIndex(startedAt)
+
+    /** PROTOCOL §10.4 / PRODUCT §2.26 — the vouch index, built through the real parser and the self-vouch rule. */
+    val vouches: Map<String, List<Vouch>> = DemoWorld.vouchIndex(startedAt)
 
     /**
      * PROTOCOL §7.1 — the demo's block, mute and report state: a record **of the same shape**, in memory, with

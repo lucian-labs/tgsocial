@@ -429,3 +429,277 @@ The marker carries the version. A v2 card will start with `tgsocial v2` and
 v1 clients MUST treat it as "Newer card. Update the app." rather than
 silently ignoring it. Keys added to v1 later are ignored by older clients by
 rule; keys removed or renamed require a version bump.
+
+## 10. Extension: work
+
+A professional layer, built as an extension rather than a version. This is the
+first thing added to the card since v1 froze, and it is here to be the worked
+proof of the claim `docs/FORKING.md` rule 1 and `docs/CLIENTS.md` make — that a
+client may add keys and stay on the same graph — so it is held to that claim
+rather than excused from it.
+
+Three properties, and each is checkable rather than asserted:
+
+- **Additive.** New keys only, nothing existing repurposed. §2 already says
+  unknown keys are ignored, so a client that does not implement this section
+  parses a card carrying it into exactly the card it parsed before — the vector
+  `work keys are unknown keys to the v1 parser` in
+  [`docs/card-vectors.json`](./docs/card-vectors.json) is that sentence as a
+  test, run by the same loop every client already has. The marker stays
+  `tgsocial v1`; §9 is not touched.
+- **Ownership unchanged.** The only thing a person can write is their own
+  channel. So a self-claim (what you do) lives on your own card, and a claim
+  about someone else — a **vouch** — lives in the claimant's channel and points
+  at the subject, the same shape §6 uses for comments. Nobody can write a word
+  onto your node.
+- **No server.** No index, no directory beyond §5, no verifier. Every number
+  this section produces is scoped to what the reader's own client walked, and
+  §10.8 says plainly which numbers therefore cannot exist.
+
+### 10.1 Namespaced keys
+
+Every key below is prefixed `work.`. §2's keys are bare because they are the
+protocol's own; an extension's are not, and two extensions written by people
+who never met must not collide on `role:`. A client adding keys of its own
+SHOULD take a prefix the same way. Parsing is unchanged: `work.role` is a
+lowercase ASCII key with a colon, and to a client that has never heard of it,
+an unknown one.
+
+### 10.2 The keys
+
+All optional. A card with none of them has no work card, which is the state of
+every card written before this section existed.
+
+| Key | Value | Cap |
+| --- | --- | --- |
+| `work.role` | One line, free text. What you do. | 80 characters |
+| `work.does` | Comma-separated capability tags. | 12 tags, each 2–24 characters |
+| `work.open` | `<intent> until <YYYY-MM-DD>` (§10.3). | one |
+| `work.feeds` | Whitespace-separated channel usernames, each `@`-led, each of which MUST also appear in `feeds:`. | fits the card |
+
+- A **tag** is lowercased, its inner whitespace collapsed to single spaces, and
+  matches `[a-z0-9][a-z0-9 +#.-]{0,22}[a-z0-9+#]` — so `c++`, `c#`, `node.js`
+  and `front of house` are tags and `live/sound` is not. Tags are compared
+  lowercased; duplicates collapse to the first.
+- **Malformed values are dropped, never fatal.** A `work.role` longer than 80
+  characters keeps its first 80. A tag outside the grammar is dropped and the
+  rest of the line stands. Tags past the twelfth are dropped. A `work.open`
+  that does not match the grammar, names an intent outside the closed set, or
+  carries a date that is not a real calendar day (`2026-02-30`) is absent. A
+  `work.feeds` entry not present in `feeds:` is dropped — `feeds:` is the
+  ownership claim, and §3 requires post rights for it, so a marking line has no
+  business introducing a channel the owner never claimed. A card whose every
+  work line is malformed is a card with no work card. **A malformed work line
+  never invalidates the card**; §2 decides what a card is, and it decides
+  alone.
+- Repetition follows §2: a repeated `work.` key concatenates with a space.
+
+Serialisation: the §10 lines come **after** every §2 key, in the order
+`work.role, work.does, work.open, work.feeds`, each omitted when empty.
+`work.does` is written comma-and-space separated, and `work.feeds` is written
+as its intersection with `feeds:` — the MUST above is a rule about the wire,
+not only about what a reader forgives, so a channel that leaves `feeds:` takes
+its marking with it in the same write. A writer that keeps the dangling entry
+puts a line §10.2 forbids in a message its owner can read on plain Telegram,
+and re-marks that channel as work the moment it is listed again. §2's own order and output are
+unchanged, so a card written before this section and one written after differ
+by an append — a diff a person reading their own channel on Telegram can
+follow. The 4096-character cap is §2's and is unmoved; a full work card costs
+about what a `bio` costs, and the client refuses the write with `Card is full.`
+the same way.
+
+### 10.3 Intent expires
+
+`work.open` is the one time-sensitive thing on a card, and stale intent is
+worse than none: a year-old "open to work" wastes the reader's message and
+embarrasses the writer. So it carries its own end date and the reader enforces
+it.
+
+Intent is one of a closed set — `work`, `contract`, `hiring`, `collab` — and
+unknown intents are dropped rather than shown, because a client cannot render
+a word it has no copy for. The date is `YYYY-MM-DD`, interpreted UTC.
+
+A reader MUST treat `work.open` as **absent** when the date is behind today, and
+also when it is more than **180 days** ahead. The second rule is the one that
+makes the first mean something: `until 2099-01-01` is an expiry nobody ever has
+to renew, which is no expiry. Both are pure reader-side arithmetic on the card
+text and need no write date. There is no rendering of an expired intent — not
+greyed, not "was open until" — it is simply not there.
+
+Writers SHOULD offer horizons well inside the cap; the reference clients offer
+30, 60 and 90 days (`PRODUCT §2.23`).
+
+A writer MUST NOT move an existing `work.open` date except when the person
+picked one. §10.6 requires writing back what you read, and a client that
+recomputes the horizon on every card write instead — a follow, a bio edit, a
+feed toggle — has built `until 2099-01-01` out of moving parts: the intent
+renews itself forever and is never re-asserted by anybody. The same arithmetic
+run on an expired date resurrects intent this section had retired. Preserving
+the stored date, expired or not, is both rules at once.
+
+### 10.4 The vouch
+
+A self-claim is cheap and the card is already made of them. The one thing a
+professional network has that a social one does not is a statement someone
+**else** makes about you, and its whole value is that you cannot write it. That
+maps onto §6 without inventing anything: the voucher writes it in the voucher's
+own channel, pointing at your node.
+
+A vouch is an ordinary message in the voucher's **comments channel** (§6.1,
+`replies: @<username>`) — no new channel, no new card key, and one pass over
+one channel builds both the comment index and the vouch index.
+
+```
+vouch: https://t.me/tgs_elijah
+does: live sound
+Ran front of house for two years. Never missed a cue.
+```
+
+- Line 1 MUST be `vouch: ` — one space — then the **node channel's** link,
+  `https://t.me/<node>`, with no message id and no trailing slash. A link with
+  a message id is a §6.2 comment, not a vouch.
+- Line 2 MUST be `does: ` then **exactly one** tag, in the §10.2 grammar.
+  Both lines are mandatory: a `vouch:` with no `does:` asserts "I vouch for
+  this person", which nobody can weigh and which decays into a like button
+  inside a week. The claim is specific or it is nothing. A message missing
+  either line is not a vouch; readers skip it, the same way §6.2 skips a
+  message with no `re:` line.
+- Everything after the second newline is the body, and it may be empty.
+- **One vouch, one tag, one message.** Vouching the same person for two things
+  is two messages. This is what makes a vouch countable per capability rather
+  than in aggregate, and §10.8 says why the aggregate would be a lie anyway.
+- The tag does **not** have to appear in the subject's `work.does`. A vouch is
+  the voucher's sentence and the subject cannot edit it, including by editing
+  their own card; a client renders such a vouch under its own heading
+  (`PRODUCT §2.23`).
+- **A vouch for the channel's own owner MUST be ignored by readers.** The
+  format is unforgeable only because the one channel a person can write is the
+  one that cannot speak about them, and a client that renders a self-vouch has
+  given that away.
+- That rule is only as good as the binding it is checked against, and the
+  binding is `replies:` — a claim on somebody's own card, which **nothing
+  verifies**. A feed has §3's description backlink; a comments channel has no
+  equivalent a reader can rely on. So when two nodes in the reader's scope
+  claim the same comments channel, the client cannot tell which owns it and
+  **MUST NOT attribute that channel to either**: dropping it costs the reader
+  some comments, and awarding it renders the one message the format forbids —
+  a self-vouch, wearing the name of whoever the walk reached first. A client
+  MAY except the reader's own node, which is the one card in the walk they
+  wrote themselves.
+- Editing or deleting the message on Telegram edits or deletes the vouch. The
+  subject cannot delete it — that is the cost of the guarantee, and
+  `PRODUCT §2.25` says so to the person it costs.
+
+A plain-Telegram reader sees a channel of short statements with a working link
+to the person each is about, which is the same graceful degradation §6.5 asks
+for. Forks MUST keep the two lines byte-compatible.
+
+### 10.5 Reading vouches — network-scoped, like everything else
+
+§6.3 applies unchanged and for the same reason. The vouches a client shows for
+a node are those found in the comments channels of me, every node in my
+`follows:`, and my +1 — the channels it was already paging for comments, now
+classified two ways instead of one.
+
+So a vouch count is **vouches from your network**, and two readers looking at
+the same person see different ones. Say it plainly, because it is the part
+that sounds like a bug and is not: a node with two hundred vouches shows
+**zero** to a reader who follows nobody, and a person's own client shows them
+only the vouches whose writers they can reach — **you can be vouched and never
+know it**. There is no reverse index in Telegram (§8) and no server here to
+build one, so the complete number does not exist for anyone. What a client can
+honestly render is *who* — names the reader recognises, from their own network,
+which they can weigh themselves.
+
+So a client MAY show a figure, and it MUST be one the reader can resolve into
+names in one step and MUST be labelled with its scope. `Vouched by 2` above a
+list of the two is a description of what this reader can see; `2 endorsements`
+is a claim about the world, and there is no world here to make it about.
+`PRODUCT §2.23` and `§2.25` are that distinction on a screen.
+
+### 10.6 Writing, and the one thing that can go wrong
+
+A client that implements this section MUST write back the work lines it read
+when it rewrites the card for any other reason. Following somebody is an
+`editMessageText` of the whole pinned message (§4.4, §4.6), and a serialiser
+that emits only the keys it knows deletes the rest.
+
+That hazard is real and it reaches past this section: §2 says unknown keys are
+ignored, and ignoring is exactly what destroys them on the next write. So a v1
+client that has never heard of `work.` **will** drop these lines the first time
+its user follows anyone, and it is behaving correctly when it does. The
+consequences, honestly:
+
+- The loss is one person's own work card, on their own node, caused by their
+  own second client. It is not silent to them — their work card is simply
+  empty next time they look — and re-entering it is a minute's typing.
+- Nobody else's data is touched, and no other client's read is broken.
+- The fix belongs to whoever adds a key, not to whoever ignores it: **an
+  extension is only as durable as the clients that implement it.** A future
+  revision of §2 could require preserving unknown lines on rewrite. This
+  section does not require it retroactively, because a rule that quietly
+  reclassifies every shipped v1 client as broken is not an additive change.
+
+`docs/card-vectors.json` holds both halves as `§10.6` in the web suite: a
+§2-only rewrite drops the lines, and a round-tripping rewrite keeps them while
+changing nothing a §2 client can see.
+
+### 10.7 Discovery by capability
+
+§5's three modalities, honestly assessed against "find me people who do X":
+
+1. **Graph walk — yes, and bounded.** Cards the client has already read carry
+   `work.does`; filtering them is local, instant, and covers exactly the
+   reader's follows and +1. It is not search, it is a filter over a network the
+   reader assembled themselves.
+2. **Username prefix — no.** `searchPublicChats` indexes usernames and titles,
+   not card contents. Telegram will never return a node because of a tag inside
+   its pinned message. A client MUST NOT present capability search as though it
+   reaches the whole network.
+3. **Index group — partially.** A node announcing itself in `@tgsocial_index`
+   (§5.3) MAY add a second line to its announcement:
+
+   ```
+   node: @tgs_elijah
+   does: swift, product architecture, live sound
+   ```
+
+   This is additive to §5.3 — the `node:` line is unchanged and clients that
+   only read it are unaffected. It exists so a directory can filter a couple of
+   hundred announcements without fetching a couple of hundred cards. It is
+   **stale by construction**: it says what someone claimed when they announced,
+   which may be old and which they may never revisit. A client MUST resolve the
+   node's card before showing its profile, and the card wins.
+
+The union of 1 and 3 is what capability discovery is here, and it is smaller
+than a search box implies. `PRODUCT §2.24` prints that limit on the screen
+rather than in a footnote.
+
+### 10.8 What this section deliberately cannot do
+
+Each of these needs an authority. There is none, and a version that pretends
+otherwise would be worse than the absence.
+
+- **Verified employment.** `work.role` is a self-claim, exactly as `bio` is.
+  Nothing can check it, no company can confirm it, and the `Verified` pill §3
+  defines for a feed backlink MUST NOT appear anywhere on a work card — that
+  pill means one checkable thing and lending it to an unverifiable one empties
+  it.
+- **A vouch count that means anything.** §10.5: no reverse index, so no total.
+  Clients show who, not how many out of what.
+- **Reputation scores, rankings, "top" anything.** They need a complete graph
+  to be computed over and an authority to be trusted. Neither exists.
+- **A global capability directory.** §10.7.2.
+- **Company or organisation nodes.** §1 is one node per person, and an
+  employment edge between a person and an organisation would be a claim by one
+  about the other with nothing to check it. A company can make a node like
+  anyone else and post from it; it just cannot be anyone's employer here.
+- **Job postings as an object.** A posting is an ordinary post in a work feed.
+  A first-class one would need an index to be findable, which is the same
+  server this network does not have.
+- **Negative vouches.** Deliberately absent from the format. Unforgeable-by-
+  construction cuts both ways: a claim written in the claimant's own channel,
+  about someone else, reachable through that someone's own network, with no
+  takedown path anywhere in the design, is a harassment tool. The `does:` line
+  makes a vouch a statement of capability and there is no grammar here for its
+  negation.

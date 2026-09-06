@@ -10,10 +10,15 @@ import ca.lucianlabs.tgsocial.model.Post
 import ca.lucianlabs.tgsocial.model.PostMedia
 import ca.lucianlabs.tgsocial.model.PostText
 import ca.lucianlabs.tgsocial.model.Reaction
+import ca.lucianlabs.tgsocial.model.Vouch
 import ca.lucianlabs.tgsocial.protocol.Card
 import ca.lucianlabs.tgsocial.protocol.CommentFormat
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.Username
+import ca.lucianlabs.tgsocial.protocol.VouchFormat
+import ca.lucianlabs.tgsocial.protocol.WorkCard
+import ca.lucianlabs.tgsocial.protocol.WorkFormat
+import ca.lucianlabs.tgsocial.protocol.WorkOpen
 
 /**
  * PRODUCT §2.22.1 — the fixture world: fifteen invented nodes, a follow graph, fifteen posts across six
@@ -49,25 +54,63 @@ object DemoWorld {
         val follows: List<String> = emptyList(),
         val replies: String,
         val public: Boolean = true,
+        /** PRODUCT §2.26 — PROTOCOL §10's keys. Six of the fifteen carry them; the reader carries none. */
+        val work: Work? = null,
     ) {
         val card: Card get() = Card(name = name, bio = bio, public = public, feeds = feeds, follows = follows, replies = replies)
     }
+
+    /**
+     * PRODUCT §2.26 — one node's work fixture. [openDays] is `+N d`: **N days after the demo is entered,
+     * computed at entry**, never a literal date. A hardcoded date rots into an expired intent and then
+     * §2.24's `OPEN NOW` is permanently empty, which is a fixture that tests nothing — the same
+     * derive-never-recall rule §2.3's relative times follow.
+     */
+    data class Work(
+        val role: String,
+        val does: List<String>,
+        val intent: String? = null,
+        val openDays: Int = 0,
+        val feeds: List<String> = emptyList(),
+    )
 
     /** A fixture feed channel. [plate] is the two channels that carry a generated photo (§2.22 avatar rule). */
     data class Channel(val username: String, val title: String, val owner: String, val plate: Boolean = false, val backlink: Boolean = false)
 
     val nodes: List<Node> = listOf(
         Node(READER, "Demo Reader", "Looking around.", listOf("demo_you_notes"), listOf("tgs_demo_wren", "tgs_demo_mox", "tgs_demo_juno", "tgs_demo_pell"), READER_REPLIES, public = false),
-        Node("tgs_demo_wren", "Wren Alderiss", "Tide clocks and bad solder.", listOf("demo_tidewright", "demo_wren_bench"), listOf("tgs_demo_mox", "tgs_demo_arto", "tgs_demo_sable", "tgs_demo_ilka"), "demo_wren_r"),
-        Node("tgs_demo_mox", "Mox Petrakis", "Field recordings. Mostly rain.", listOf("demo_slow_radio"), listOf("tgs_demo_juno", "tgs_demo_arto", "tgs_demo_bly"), "demo_mox_r"),
-        Node("tgs_demo_juno", "Juno Bell-Okafor", "Ceramics, mostly failures.", listOf("demo_kiln_log"), listOf("tgs_demo_pell", "tgs_demo_wren", "tgs_demo_orrin"), "demo_juno_r"),
-        Node("tgs_demo_pell", "Pell Nakagawa", "Letterpress, one press.", listOf("demo_press_run"), listOf("tgs_demo_sable", "tgs_demo_hask", "tgs_demo_orrin", "tgs_demo_crate"), "demo_pell_r"),
+        Node(
+            "tgs_demo_wren", "Wren Alderiss", "Tide clocks and bad solder.", listOf("demo_tidewright", "demo_wren_bench"),
+            listOf("tgs_demo_mox", "tgs_demo_arto", "tgs_demo_sable", "tgs_demo_ilka"), "demo_wren_r",
+            work = Work("Tide clocks, built one at a time", listOf("electronics", "tide clocks", "bad solder"), "contract", 45, listOf("demo_wren_bench")),
+        ),
+        Node(
+            "tgs_demo_mox", "Mox Petrakis", "Field recordings. Mostly rain.", listOf("demo_slow_radio"),
+            listOf("tgs_demo_juno", "tgs_demo_arto", "tgs_demo_bly"), "demo_mox_r",
+            work = Work("Records rain for a living", listOf("field recording", "sound design"), feeds = listOf("demo_slow_radio")),
+        ),
+        Node(
+            "tgs_demo_juno", "Juno Bell-Okafor", "Ceramics, mostly failures.", listOf("demo_kiln_log"),
+            listOf("tgs_demo_pell", "tgs_demo_wren", "tgs_demo_orrin"), "demo_juno_r",
+            work = Work("Production potter, small kiln", listOf("ceramics", "glaze chemistry"), "work", 20, listOf("demo_kiln_log")),
+        ),
+        Node(
+            "tgs_demo_pell", "Pell Nakagawa", "Letterpress, one press.", listOf("demo_press_run"),
+            listOf("tgs_demo_sable", "tgs_demo_hask", "tgs_demo_orrin", "tgs_demo_crate"), "demo_pell_r",
+            work = Work("Letterpress, one press", listOf("letterpress", "typesetting"), "hiring", 60, listOf("demo_press_run")),
+        ),
         Node("tgs_demo_arto", "Arto Vansi", "Trail cameras on the creek.", listOf("demo_creek_cam"), replies = "demo_arto_r"),
         Node("tgs_demo_orrin", "Orrin Baptiste", "Bread, weather, complaints.", listOf("demo_proof_box"), replies = "demo_orrin_r"),
         Node("tgs_demo_sable", "Sable Quiring", "Maps nobody asked for.", listOf("demo_paper_maps"), replies = "demo_sable_r"),
         Node("tgs_demo_bly", "Bly Toussaint", "Night sky, cheap lens.", listOf("demo_dark_sky"), replies = "demo_bly_r"),
-        Node("tgs_demo_hask", "Hask Oyelaran", "Fixes the ferry radio.", listOf("demo_ferry_net"), replies = "demo_hask_r"),
-        Node("tgs_demo_ilka", "Ilka Ferreira", "Bike frames.", listOf("demo_frame_jig"), replies = "demo_ilka_r"),
+        Node(
+            "tgs_demo_hask", "Hask Oyelaran", "Fixes the ferry radio.", listOf("demo_ferry_net"), replies = "demo_hask_r",
+            work = Work("Fixes the ferry radio", listOf("marine radio", "antennas"), "collab", 8, listOf("demo_ferry_net")),
+        ),
+        Node(
+            "tgs_demo_ilka", "Ilka Ferreira", "Bike frames.", listOf("demo_frame_jig"), replies = "demo_ilka_r",
+            work = Work("Frame builder", listOf("frame building", "brazing"), feeds = listOf("demo_frame_jig")),
+        ),
         Node("tgs_demo_crate", "Crate Mailer", "Free crates. Ask me.", listOf("demo_free_crates"), replies = "demo_crate_r"),
         Node("tgs_demo_lume", "Lume Adeyemi", "Neon repair.", listOf("demo_neon_bench"), replies = "demo_lume_r"),
         Node("tgs_demo_noor", "Noor Salk", "Weather balloons.", listOf("demo_balloon_log"), replies = "demo_noor_r"),
@@ -115,7 +158,22 @@ object DemoWorld {
     private fun channelPhoto(c: Channel): FileRef? =
         if (c.plate) DemoMedia.ref("${c.username}/avatar", 320, 320) else null
 
-    fun snapshot(username: String): NodeSnapshot? {
+    /**
+     * PRODUCT §2.26 — the work card, derived at entry. `+N d` is N days after [start], so a reviewer a year
+     * from now sees the same four current intents a reviewer today does.
+     */
+    fun workCard(n: Node, start: Long): WorkCard? {
+        val w = n.work ?: return null
+        val today = java.time.LocalDate.ofEpochDay(start / 86_400L).toString()
+        return WorkCard(
+            role = w.role,
+            does = w.does,
+            open = w.intent?.let { WorkOpen(intent = it, until = WorkFormat.horizonDate(w.openDays, today)) },
+            feeds = w.feeds,
+        )
+    }
+
+    fun snapshot(username: String, start: Long = System.currentTimeMillis() / 1000): NodeSnapshot? {
         val n = node(username) ?: return null
         return NodeSnapshot(
             username = n.username,
@@ -124,7 +182,8 @@ object DemoWorld {
             title = n.name,
             description = "tgsocial v1 · ${n.bio}",
             photo = null,
-            card = n.card,
+            // PROTOCOL §10 — the extension rides on the card exactly as a real read attaches it (WorkFormat.attach).
+            card = n.card.copy(work = workCard(n, start)),
             fetchedAt = 0L,
         )
     }
@@ -403,6 +462,60 @@ object DemoWorld {
             map.getOrPut(row.target) { mutableListOf() } += comment
         }
         for (list in map.values) list.sortWith(compareByDescending<Comment> { it.date }.thenByDescending { it.messageId })
+        return map
+    }
+
+    // ------------------------------------------------------------------ vouches (PROTOCOL §10.4)
+
+    private data class V(val channel: String, val id: Long, val age: Long, val subject: String, val does: String, val body: String)
+
+    /**
+     * PRODUCT §2.26 — five vouch fixtures, and the fifth is the point. Between them they exercise, one screen
+     * each: a claimed tag with a vouch, a claimed tag with none, `VOUCHED, NOT CLAIMED` (`kiln repair`, which
+     * Juno does not claim), and a **self-vouch that MUST NOT render anywhere** (PROTOCOL §10.4). The last one
+     * is here so that a client which forgot that rule fails visibly, on all three platforms, without anyone
+     * writing a test for it.
+     */
+    private val vouchRows: List<V> = listOf(
+        V("demo_wren_r", 61, 9 * DAY, "tgs_demo_juno", "glaze chemistry", "Fired my clock faces for a year. Nothing cracked."),
+        V("demo_mox_r", 62, 40 * DAY, "tgs_demo_wren", "tide clocks", "Built the clock in my studio. Still right."),
+        V("demo_juno_r", 63, 120 * DAY, "tgs_demo_wren", "bad solder", "I've seen worse. Not much worse."),
+        V("demo_pell_r", 64, 400 * DAY, "tgs_demo_juno", "kiln repair", "Got my kiln lit the night before a show."),
+        V("demo_wren_r", 65, 3 * DAY, "tgs_demo_wren", "tide clocks", "Nobody does this better."),
+    )
+
+    /**
+     * The vouch index in the shape `CommentRepo` publishes: subject username key → vouches newest first.
+     *
+     * Each fixture is written as the real message text and read back with the real parser, then held against
+     * [VouchFormat.keeps] with the channel's own owner — so the self-vouch is dropped by **the rule**, not by
+     * the fixture leaving it out. A demo that filtered it by hand would prove nothing.
+     */
+    fun vouchIndex(start: Long): Map<String, List<Vouch>> {
+        val map = LinkedHashMap<String, MutableList<Vouch>>()
+        for (row in vouchRows) {
+            val author = commentAuthor(row.channel) ?: continue
+            val text = VouchFormat.serialise(row.subject, row.does, row.body)
+            val pointer = VouchFormat.parse(text) ?: continue
+            if (!VouchFormat.keeps(pointer, author.username)) continue
+            val date = (start - row.age).toInt()
+            val messageId = row.id shl 20
+            map.getOrPut(Username.key(pointer.node)) { mutableListOf() } += Vouch(
+                chatId = chatId(row.channel),
+                messageId = messageId,
+                date = date,
+                channelUsername = row.channel,
+                voucherUsername = author.username,
+                voucherName = author.name,
+                voucherPhoto = null,
+                subjectUsername = pointer.node,
+                tag = pointer.does,
+                body = pointer.body,
+                plusOne = isPlusOne(author.username),
+                own = Username.same(author.username, READER),
+            )
+        }
+        for (list in map.values) list.sortWith(compareByDescending<Vouch> { it.date }.thenByDescending { it.messageId })
         return map
     }
 

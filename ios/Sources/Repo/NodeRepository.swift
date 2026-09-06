@@ -56,7 +56,12 @@ final class NodeRepository {
         if let pinned = try? await api.getChatPinnedMessage(chatId: chat.id),
            case .messageText(let t) = pinned.content {
             switch CardCodec.parse(t.text.text) {
-            case .card(let card): info.card = card; info.state = .ok
+            case .card(let card):
+                info.card = card
+                info.state = .ok
+                // PROTOCOL §10.1: a SECOND pass over the same bytes. `CardCodec.parse` above knows
+                // nothing about it and its answer does not change when this line is deleted.
+                info.work = WorkCodec.parse(t.text.text)
             case .newerVersion: info.state = .newerVersion
             case .notACard: info.state = .notANode
             }
@@ -145,16 +150,17 @@ final class NodeRepository {
                   case .messageText(let t) = pinned.content else { continue }
             let state: CardState
             let card: Card?
+            var work: Work?
             switch CardCodec.parse(t.text.text) {
-            case .card(let c): state = .ok; card = c
+            case .card(let c): state = .ok; card = c; work = WorkCodec.parse(t.text.text)
             case .newerVersion: state = .newerVersion; card = nil
             case .notACard: continue
             }
             let sg = try? await api.getSupergroup(supergroupId: sgId)
             guard let username = Mapping.username(of: chat, supergroup: sg) else { continue }
             let node = MyNode(chatId: chatId, supergroupId: sgId, username: username, pinnedMessageId: pinned.id)
-            let info = NodeInfo(username: username, chatId: chatId, title: chat.title, card: card, state: state,
-                                photo: Mapping.photoRef(chat.photo), fetchedAt: Foundation.Date())
+            let info = NodeInfo(username: username, chatId: chatId, title: chat.title, card: card, work: work,
+                                state: state, photo: Mapping.photoRef(chat.photo), fetchedAt: Foundation.Date())
             nodes[info.key] = info
             persist()
             return (node, info)
@@ -241,8 +247,8 @@ final class NodeRepository {
         return (node, info)
     }
 
-    private func sendCardMessage(chatId: Int64, card: Card) async throws -> Message {
-        let text = FormattedText(entities: [], text: CardCodec.serialise(card))
+    private func sendCardMessage(chatId: Int64, card: Card, work: Work? = nil) async throws -> Message {
+        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work))
         let content = InputMessageContent.inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: Self.noPreview, text: text))
         let pending = try await api.sendMessage(chatId: chatId, inputMessageContent: content, options: Self.quiet, replyMarkup: nil, replyTo: nil, topicId: nil)
         return try await sends.awaitSent(pending.id)
@@ -256,11 +262,20 @@ final class NodeRepository {
     // MARK: §4.4 Write my card
 
     /// Edits the pinned card in place; re-pins if the pin was lost. Returns the (possibly updated) node pointer.
-    func writeCard(_ card: Card, node: MyNode) async throws -> MyNode {
-        guard !CardCodec.isFull(card) else { throw TDFailure(code: 400, message: "Card is full.") }
+    ///
+    /// Declared through `CardWriting` so §10.6 is checkable off the wire: what makes a work card
+    /// survive is not that the serialiser CAN carry the lines, it is that the app hands them over
+    /// on every write, and only something standing where TDLib stands can see that happen.
+    ///
+    /// `work` is not optional decoration: PROTOCOL §10.6 says a client that implements §10 MUST
+    /// write back the work lines it read, and this method is where every card write in the app
+    /// lands — a follow, a feed change, an Edit Card save. A serialiser handed nothing here deletes
+    /// somebody's work card on their next follow, which is the one thing §10.6 asks us not to do.
+    func writeCard(_ card: Card, work: Work?, node: MyNode) async throws -> MyNode {
+        guard !CardCodec.isFull(card, work: work) else { throw TDFailure(code: 400, message: "Card is full.") }
         let token = activity.begin("Writing your card")
         defer { activity.end(token) }
-        let text = FormattedText(entities: [], text: CardCodec.serialise(card))
+        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work))
         let content = InputMessageContent.inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: Self.noPreview, text: text))
         var messageId = node.pinnedMessageId
         var needsPin = false
@@ -271,22 +286,22 @@ final class NodeRepository {
             needsPin = true
         } else {
             // The card message itself is gone: the only way to restore the record is a fresh card, pinned.
-            let fresh = try await sendCardMessage(chatId: node.chatId, card: card)
+            let fresh = try await sendCardMessage(chatId: node.chatId, card: card, work: work)
             try await api.pinChatMessage(chatId: node.chatId, disableNotification: true, messageId: fresh.id, onlyForSelf: false)
-            return updatedNode(node, pinnedMessageId: fresh.id, card: card)
+            return updatedNode(node, pinnedMessageId: fresh.id, card: card, work: work)
         }
         _ = try await api.editMessageText(chatId: node.chatId, inputMessageContent: content, messageId: messageId, replyMarkup: nil)
         if needsPin {
             try await api.pinChatMessage(chatId: node.chatId, disableNotification: true, messageId: messageId, onlyForSelf: false)
         }
         _ = try? await api.setChatDescription(chatId: node.chatId, description: CardCodec.description(bio: card.bio))
-        return updatedNode(node, pinnedMessageId: messageId, card: card)
+        return updatedNode(node, pinnedMessageId: messageId, card: card, work: work)
     }
 
-    private func updatedNode(_ node: MyNode, pinnedMessageId: Int64, card: Card) -> MyNode {
+    private func updatedNode(_ node: MyNode, pinnedMessageId: Int64, card: Card, work: Work?) -> MyNode {
         var n = node; n.pinnedMessageId = pinnedMessageId
         if var info = nodes[Username.key(node.username)] {
-            info.card = card; info.state = .ok; info.fetchedAt = Foundation.Date()
+            info.card = card; info.work = work; info.state = .ok; info.fetchedAt = Foundation.Date()
             nodes[info.key] = info
         }
         persist()
@@ -413,3 +428,21 @@ final class NodeRepository {
         return .announced
     }
 }
+
+// MARK: - The card-write seam (PROTOCOL §10.6)
+
+/// What every card write in the app ends in.
+///
+/// A protocol rather than a direct call because §10.6's requirement is a property of the ARGUMENT,
+/// not of the serialiser: `CardCodec.serialise(_:work:)` carries the work lines when it is handed
+/// them, and the way a client loses somebody's work card is by handing over nothing. The signature
+/// makes `work` impossible to forget and possible to supply wrongly, so the thing worth measuring
+/// is what the writer actually received on a real follow — which needs somewhere to stand between
+/// `AppModel` and TDLib. `NodeRepository` is that writer in the app; `WorkLivePathTests` is the
+/// only other conformer.
+@MainActor
+protocol CardWriting: AnyObject {
+    func writeCard(_ card: Card, work: Work?, node: MyNode) async throws -> MyNode
+}
+
+extension NodeRepository: CardWriting {}

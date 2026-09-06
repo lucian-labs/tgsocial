@@ -1,8 +1,10 @@
 /* PRODUCT §2.3 Feed — the chronological main feed (PROTOCOL §4.8). */
-import { h, button, replace } from '../../vendor/house-pour.js';
+import { h, button, replace, tabs } from '../../vendor/house-pour.js';
 import { isPost, insertIndex, albumId, trimFeedWindow } from '../protocol.js';
 import { releaseMedia } from '../media.js';
 import { postCard, emptyCard } from './shared.js';
+import { openNowSection } from './work.js';
+import { editCard } from './you.js';
 
 const PAGE = 20;
 /** How long a live album message waits for its siblings before painting. */
@@ -22,13 +24,64 @@ const CACHE_HEAD = 40;
 
 export function render(app, { cacheOnly = false } = {}) {
   const root = h('div');
+  /**
+   * PRODUCT §2.24 — a MODE on Feed, not a fifth tab. A tab would say there are
+   * two networks; there is one, read two ways, which is the whole claim
+   * PROTOCOL §10 exists to prove. The control is sticky under the topbar and
+   * carries no shadow: the floating tab bar (§1) is the raised pill on this
+   * screen and there is only one of those.
+   */
+  const modeHost = h('div.feed-mode');
   const toolbar = h('div.toolbar');
+  /** Work mode's first block: expiring intent (§2.24). Empty in All mode. */
+  const openHost = h('div');
   const list = h('div');
   const tail = h('div');
-  root.append(toolbar, list, tail);
+  root.append(modeHost, toolbar, openHost, list, tail);
 
   const refresh = button('Refresh', { style: 'ghost', size: 'sm', ariaLabel: 'Refresh feed' });
   toolbar.append(refresh);
+
+  /** The mode is a UI preference (PROTOCOL §7), remembered between visits. */
+  let mode = app.repo.prefs?.feedMode === 'work' ? 'work' : 'all';
+
+  /**
+   * Has a sources walk read my follows' cards this session? `hasWorkFeeds()`
+   * answers from the card cache alone, so before the walk it cannot tell "my
+   * network has no work in it" from "this client has not looked yet" — and a
+   * cold cache is ordinary: first render on a new device, or a cache-version
+   * bump that discarded `tgs.cards`.
+   */
+  let walked = false;
+
+  /**
+   * §2.24 — the control appears only when at least one node in my follows, or
+   * I, carry a `work.feeds` entry. A reader whose network has no work in it
+   * sees Feed exactly as it is today. It is visible in BOTH modes once it is
+   * there, so the mode is never a state someone is stuck in.
+   */
+  function paintMode() {
+    if (!app.repo.hasWorkFeeds?.()) {
+      replace(modeHost);
+      // a network that lost its last work feed must not leave the reader
+      // looking at a column they can no longer get out of — but only once the
+      // walk has actually established that it lost it. Resetting off a cold
+      // cache destroys a preference §2.24 promises to remember (PROTOCOL §7)
+      // and does it permanently, on a client that simply had not read yet.
+      if (mode === 'work' && walked) {
+        mode = 'all';
+        app.repo.setPref('feedMode', 'all');
+      }
+      return;
+    }
+    if (modeHost.firstElementChild) return;
+    replace(modeHost, tabs([{ id: 'all', label: 'All' }, { id: 'work', label: 'Work' }], mode, (id) => {
+      if (id === mode) return;
+      mode = id;
+      app.repo.setPref('feedMode', id);
+      start({ refreshCards: false });
+    }));
+  }
 
   let session = null;
   let posts = [];
@@ -43,6 +96,7 @@ export function render(app, { cacheOnly = false } = {}) {
   let cacheHead = [];
 
   const writeCache = () => {
+    if (mode !== 'all') return;
     cacheHead = cacheHead.slice(0, CACHE_HEAD);
     app.repo.cacheFeed(cacheHead);
   };
@@ -80,8 +134,10 @@ export function render(app, { cacheOnly = false } = {}) {
     if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
   };
 
-  // cold start: paint the cache first (PRODUCT §4)
-  const cached = app.repo.cachedFeed();
+  paintMode();
+  // cold start: paint the cache first (PRODUCT §4). The cache is the main
+  // feed's; work mode's column is a different merge and starts from nothing.
+  const cached = mode === 'all' ? app.repo.cachedFeed() : [];
   if (cached.length && app.repo.myNode) {
     posts = cached;
     cacheHead = cached.slice(0, CACHE_HEAD);
@@ -105,13 +161,23 @@ export function render(app, { cacheOnly = false } = {}) {
     done = false;
     replace(tail, h('div.loading-row.muted', 'Loading…'));
     try {
-      const sources = await app.busy(app.repo.feedSources({ refresh: refreshCards }));
+      const sources = mode === 'work'
+        ? await app.busy(app.repo.workSources({ refresh: refreshCards }))
+        : await app.busy(app.repo.feedSources({ refresh: refreshCards }));
       if (mine !== gen) return;
+      // the sources walk read my follows' cards, so this is the first render
+      // that can honestly answer whether my network has any work in it
+      walked = true;
+      paintMode();
+      if (mode === 'work') await paintOpenNow(mine, refreshCards);
+      else replace(openHost);
       if (!sources.length) {
         posts = [];
         cacheHead = [];
-        app.repo.cacheFeed([]);
-        replace(list, emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
+        writeCache();
+        replace(list, mode === 'work'
+          ? emptyCard('No work posts yet.', 'Mark one of your feeds as work, or follow someone who has.', { label: 'Edit Card', onClick: () => editCard(app) })
+          : emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
         replace(tail);
         done = true;
         return;
@@ -126,7 +192,9 @@ export function render(app, { cacheOnly = false } = {}) {
       writeCache();
       app.feedStats = { sources: sources.length, posts: posts.length, at: Date.now() };
       if (!posts.length) {
-        replace(list, emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
+        replace(list, mode === 'work'
+          ? emptyCard('No work posts yet.', 'Mark one of your feeds as work, or follow someone who has.', { label: 'Edit Card', onClick: () => editCard(app) })
+          : emptyCard('Nothing here yet.', 'Follow a node and their feeds show up here, newest first.', { label: 'Explore', onClick: () => app.navigate('#/explore') }));
       } else paint();
       done = session.exhausted;
       paintTail();
@@ -139,6 +207,24 @@ export function render(app, { cacheOnly = false } = {}) {
       replace(tail);
     } finally {
       if (mine === gen) loading = false;
+    }
+  }
+
+  /**
+   * §2.24 — OPEN NOW reads me, my follows AND my +1, because intent is one
+   * structured line on a card the +1 walk already fetched. The work column
+   * below stops at my follows: walking +1's feed history is a fetch per
+   * channel, and a post one hop out is not worth it.
+   */
+  async function paintOpenNow(mine, refreshCards) {
+    replace(openHost, h('div.loading-row.muted', 'Loading…'));
+    try {
+      const rows = await app.busy(app.repo.openNow({ refresh: refreshCards }));
+      if (mine !== gen || mode !== 'work') return;
+      replace(openHost, ...openNowSection(app, rows, { follows: app.repo.myCard?.follows?.length ?? 0 }));
+    } catch (e) {
+      if (mine !== gen || mode !== 'work') return;
+      replace(openHost, ...openNowSection(app, [], { follows: app.repo.myCard?.follows?.length ?? 0 }));
     }
   }
 

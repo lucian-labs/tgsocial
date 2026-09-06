@@ -15,7 +15,7 @@
  * and PROTOCOL §7.1's hidden key all behave exactly as they do in a real
  * session; nothing downstream can tell the difference, which is the point.
  */
-import { attributionNode, deepLink, nodeDescription, parseCard, serialiseCard, usernameKey } from '../protocol.js';
+import { addDays, attributionNode, deepLink, nodeDescription, parseCard, parseVouch, parseWork, serialiseCard, serialiseVouch, todayUTC, usernameKey } from '../protocol.js';
 import { clipUrl, documentUrl, minithumb, plate, recordClip, waveformBytes } from './media.js';
 
 /** PROTOCOL §2, verbatim — the vector the three builds' parsers have to agree on. */
@@ -90,6 +90,41 @@ const PLATED_CHANNELS = new Set(['demo_tidewright', 'demo_slow_radio']);
 const MINUTE = 60;
 const HOUR = 3600;
 const DAY = 86400;
+
+/**
+ * §2.26 — work on six of the fifteen. The reader carries NONE, so the first
+ * thing the demo shows about work is the empty state on your own card.
+ *
+ * `openIn` is DAYS FROM WHEN THE DEMO OPENS, never a date. A literal date in a
+ * fixture rots into an expired intent and then §2.24's OPEN NOW is permanently
+ * empty, which is a fixture that tests nothing — the same derive-never-recall
+ * rule §2.3's relative times follow.
+ */
+const WORK = {
+  tgs_demo_wren: { role: 'Tide clocks, built one at a time', does: ['electronics', 'tide clocks', 'bad solder'], intent: 'contract', openIn: 45, feeds: ['demo_wren_bench'] },
+  tgs_demo_mox: { role: 'Records rain for a living', does: ['field recording', 'sound design'], feeds: ['demo_slow_radio'] },
+  tgs_demo_juno: { role: 'Production potter, small kiln', does: ['ceramics', 'glaze chemistry'], intent: 'work', openIn: 20, feeds: ['demo_kiln_log'] },
+  tgs_demo_pell: { role: 'Letterpress, one press', does: ['letterpress', 'typesetting'], intent: 'hiring', openIn: 60, feeds: ['demo_press_run'] },
+  tgs_demo_hask: { role: 'Fixes the ferry radio', does: ['marine radio', 'antennas'], intent: 'collab', openIn: 8, feeds: ['demo_ferry_net'] },
+  tgs_demo_ilka: { role: 'Frame builder', does: ['frame building', 'brazing'], feeds: ['demo_frame_jig'] },
+};
+
+/**
+ * §2.26's five vouches (PROTOCOL §10.4), in the voucher's own comments channel
+ * — the same channel the comments above are in, which is the point of §10.4
+ * needing no new channel and no new card key.
+ *
+ * The fifth is the one that matters: wren vouching for wren. It is in the
+ * fixtures precisely so a client that forgot §10.4's self-vouch rule fails
+ * visibly, on all three platforms, without anyone writing a test for it.
+ */
+const VOUCHES = [
+  { channel: 'demo_wren_r', node: 'tgs_demo_wren', id: 61, age: 40 * DAY, about: 'tgs_demo_juno', does: 'glaze chemistry', body: 'Fired my clock faces for a year. Nothing cracked.' },
+  { channel: 'demo_mox_r', node: 'tgs_demo_mox', id: 62, age: 120 * DAY, about: 'tgs_demo_wren', does: 'tide clocks', body: 'Built the clock in my studio. Still right.' },
+  { channel: 'demo_juno_r', node: 'tgs_demo_juno', id: 63, age: 400 * DAY, about: 'tgs_demo_wren', does: 'bad solder', body: "I've seen worse. Not much worse." },
+  { channel: 'demo_pell_r', node: 'tgs_demo_pell', id: 64, age: 300 * DAY, about: 'tgs_demo_juno', does: 'kiln repair', body: 'Got my kiln lit the night before a show.' },
+  { channel: 'demo_wren_r', node: 'tgs_demo_wren', id: 65, age: 10 * DAY, about: 'tgs_demo_wren', does: 'tide clocks', body: 'Nobody does this better.' },
+];
 
 /** The six main-feed sources: the reader's feed plus the five of the four they follow. */
 export const MAIN_SOURCES = ['demo_you_notes', 'demo_tidewright', 'demo_wren_bench', 'demo_slow_radio', 'demo_kiln_log', 'demo_press_run'];
@@ -283,8 +318,15 @@ export function buildWorld(now = Date.now()) {
   };
 
   addNode(READER, readerCard, 'Demo Reader');
+  const today = todayUTC(now);
   for (const n of NODES) {
-    const card = parseCard(serialiseCard({
+    const w = WORK[n.u];
+    // §2.22.2 — the demo runs the real code paths, so a fixture card is written
+    // by `serialiseCard` and read back by `parseCard` + `parseWork`. That means
+    // §10.2's serialisation order, its caps and its `work.feeds` ⊆ `feeds:` rule
+    // all apply to the fixtures, and a table that broke one of them would fail
+    // here rather than paint a card no real client could write.
+    const text = serialiseCard({
       name: n.name,
       bio: n.bio,
       link: null,
@@ -292,7 +334,11 @@ export function buildWorld(now = Date.now()) {
       feeds: n.feeds,
       follows: n.follows,
       replies: `${n.u.replace(/^tgs_/, '')}_r`,
-    }));
+      work: w ? { role: w.role, does: w.does, open: w.intent ? { intent: w.intent, until: addDays(today, w.openIn) } : null, feeds: w.feeds } : null,
+    });
+    const card = parseCard(text);
+    const work = parseWork(text);
+    if (work) card.work = work;
     addNode(n.u, card, n.name);
   }
 
@@ -397,7 +443,35 @@ export function buildWorld(now = Date.now()) {
     };
   });
 
-  return { cards, feeds, posts, comments, readerCard, startedAt: now };
+  /**
+   * §2.26's vouches, built the way a real one is read: the two lines are
+   * serialised and parsed back through §10.4, so the self-vouch in the table is
+   * a real self-vouch rather than a flag, and the rule that drops it is the
+   * rule a signed-in session runs (js/demo/repo.js indexComments).
+   */
+  const vouches = VOUCHES.map((v) => {
+    const entry = cards[usernameKey(v.node)];
+    const chatId = chatIdFor(v.channel);
+    const parsed = parseVouch(serialiseVouch(v.about, v.does, v.body));
+    if (!parsed) throw new Error(`A demo vouch does not parse: ${v.about} / ${v.does}`);
+    return {
+      key: `${chatId}:${v.id * SHIFT}`,
+      id: v.id * SHIFT,
+      chatId,
+      channel: v.channel,
+      node: entry.username,
+      name: entry.card?.name || `@${entry.username}`,
+      avatar: entry.photo,
+      date: nowS - v.age,
+      subject: parsed.node,
+      does: parsed.does,
+      body: parsed.body,
+      link: deepLink(v.channel, v.id * SHIFT),
+      mine: false,
+    };
+  });
+
+  return { cards, feeds, posts, comments, vouches, readerCard, startedAt: now };
 }
 
 /**

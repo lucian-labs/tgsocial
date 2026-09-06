@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text.",
+  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text. `work` cases: PROTOCOL §10, the additive work extension — parsed by a second pass, so §2's own cases above are untouched by it.",
   "parse": [
     {
       "name": "full card",
@@ -183,6 +183,24 @@
         "feeds": [],
         "follows": [],
         "replies": null
+      }
+    },
+    {
+      "name": "work keys are unknown keys to the v1 parser (PROTOCOL §10)",
+      "text": "tgsocial v1\nname: Elijah Lucian\nbio: Staff product architect.\npublic: yes\nfeeds: @waveloop_devlog @tresbuchet\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nwork.role: Staff product architect at Lucian Labs\nwork.does: swift, product architecture, live sound\nwork.open: contract until 2026-12-01\nwork.feeds: @waveloop_devlog",
+      "expect": {
+        "name": "Elijah Lucian",
+        "bio": "Staff product architect.",
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog",
+          "tresbuchet"
+        ],
+        "follows": [
+          "tgs_ana"
+        ],
+        "replies": "tgs_elijah_r"
       }
     }
   ],
@@ -432,6 +450,10 @@
       {
         "in": "re: not-a-link\nbody",
         "out": null
+      },
+      {
+        "in": "vouch: https://t.me/tgs_elijah\ndoes: live sound\nRan front of house for two years.",
+        "out": null
       }
     ],
     "serialise": [
@@ -441,5 +463,402 @@
         "out": "re: https://t.me/waveloop_devlog/144\nNice one."
       }
     ]
+  },
+  "work": {
+    "$comment": "PROTOCOL §10 — the work extension. `parse` cases: card text → parseWork(text), the SECOND pass over the same bytes (null = no work card). `serialise` cases: {card, work} → exact expected text, work lines last. `tag` cases: workTag(input) → normalised tag or null. `open` cases: openIsCurrent({intent,until}, today) → boolean. `vouch.parse` cases: message text → {node, does, body} or null. `vouch.self` cases: keepsVouch(parseVouch(text), voucherNode).",
+    "parse": [
+      {
+        "name": "full work card",
+        "text": "tgsocial v1\nname: Elijah Lucian\nbio: Staff product architect.\npublic: yes\nfeeds: @waveloop_devlog @tresbuchet\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nwork.role: Staff product architect at Lucian Labs\nwork.does: swift, product architecture, live sound\nwork.open: contract until 2026-12-01\nwork.feeds: @waveloop_devlog",
+        "expect": {
+          "role": "Staff product architect at Lucian Labs",
+          "does": [
+            "swift",
+            "product architecture",
+            "live sound"
+          ],
+          "open": {
+            "intent": "contract",
+            "until": "2026-12-01"
+          },
+          "feeds": [
+            "waveloop_devlog"
+          ]
+        }
+      },
+      {
+        "name": "a card with no work keys has no work card",
+        "text": "tgsocial v1\nname: Bob\npublic: yes\nfeeds: @bob_notes",
+        "expect": null
+      },
+      {
+        "name": "not a card at all",
+        "text": "hello",
+        "expect": null
+      },
+      {
+        "name": "every work line malformed is the same as none",
+        "text": "tgsocial v1\nname: Bob\nwork.does: ,,\nwork.open: someday\nwork.feeds: @not_a_listed_feed",
+        "expect": null
+      },
+      {
+        "name": "role longer than 80 keeps the first 80 and never rejects the card",
+        "text": "tgsocial v1\nname: Bob\nwork.role: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expect": {
+          "role": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "does": [],
+          "open": null,
+          "feeds": []
+        }
+      },
+      {
+        "name": "tags normalise, dedupe, drop the invalid, and stop at twelve",
+        "text": "tgsocial v1\nname: Bob\nwork.does:  Live Sound , live sound, C++, node.js, front  of house, x, one, two, three, four, five, six, seven, eight, nine, ten",
+        "expect": {
+          "role": null,
+          "does": [
+            "live sound",
+            "c++",
+            "node.js",
+            "front of house",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight"
+          ],
+          "open": null,
+          "feeds": []
+        }
+      },
+      {
+        "name": "work.feeds keeps only channels the card already claims in feeds:",
+        "text": "tgsocial v1\nname: Bob\nfeeds: @bob_notes @bob_band\nwork.feeds: @bob_band @someone_else",
+        "expect": {
+          "role": null,
+          "does": [],
+          "open": null,
+          "feeds": [
+            "bob_band"
+          ]
+        }
+      },
+      {
+        "name": "an unknown intent is not an intent",
+        "text": "tgsocial v1\nname: Bob\nwork.open: freelancing until 2026-12-01",
+        "expect": null
+      },
+      {
+        "name": "2026-02-30 is not a day",
+        "text": "tgsocial v1\nname: Bob\nwork.open: work until 2026-02-30",
+        "expect": null
+      },
+      {
+        "name": "a repeated work key concatenates like any other (§2)",
+        "text": "tgsocial v1\nname: Bob\nwork.does: swift,\nwork.does: kotlin",
+        "expect": {
+          "role": null,
+          "does": [
+            "swift",
+            "kotlin"
+          ],
+          "open": null,
+          "feeds": []
+        }
+      }
+    ],
+    "serialise": [
+      {
+        "name": "work lines come after replies, in key order",
+        "card": {
+          "name": "Elijah Lucian",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [
+            "waveloop_devlog"
+          ],
+          "follows": [],
+          "replies": "tgs_elijah_r"
+        },
+        "work": {
+          "role": "Staff product architect",
+          "does": [
+            "swift",
+            "live sound"
+          ],
+          "open": {
+            "intent": "hiring",
+            "until": "2026-11-12"
+          },
+          "feeds": [
+            "waveloop_devlog"
+          ]
+        },
+        "expect": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nreplies: @tgs_elijah_r\nwork.role: Staff product architect\nwork.does: swift, live sound\nwork.open: hiring until 2026-11-12\nwork.feeds: @waveloop_devlog"
+      },
+      {
+        "name": "no work is §2's serialiser, unchanged",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": false,
+          "feeds": [],
+          "follows": [],
+          "replies": null
+        },
+        "work": null,
+        "expect": "tgsocial v1\nname: Bob\npublic: no"
+      },
+      {
+        "name": "empty work lines are omitted one by one",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [],
+          "follows": [],
+          "replies": null
+        },
+        "work": {
+          "role": null,
+          "does": [
+            "ceramics"
+          ],
+          "open": null,
+          "feeds": []
+        },
+        "expect": "tgsocial v1\nname: Bob\npublic: yes\nwork.does: ceramics"
+      },
+      {
+        "name": "a work.feeds entry not in feeds: never reaches the wire",
+        "card": {
+          "name": "Wren Alderiss",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [
+            "demo_wren_bench"
+          ],
+          "follows": [],
+          "replies": null
+        },
+        "work": {
+          "role": null,
+          "does": [],
+          "open": null,
+          "feeds": [
+            "demo_wren_bench",
+            "demo_old_bench"
+          ]
+        },
+        "expect": "tgsocial v1\nname: Wren Alderiss\npublic: yes\nfeeds: @demo_wren_bench\nwork.feeds: @demo_wren_bench"
+      }
+    ],
+    "tag": {
+      "cases": [
+        {
+          "in": "Live Sound",
+          "out": "live sound"
+        },
+        {
+          "in": "  front   of house  ",
+          "out": "front of house"
+        },
+        {
+          "in": "c++",
+          "out": "c++"
+        },
+        {
+          "in": "C#",
+          "out": "c#"
+        },
+        {
+          "in": "node.js",
+          "out": "node.js"
+        },
+        {
+          "in": "x",
+          "out": null
+        },
+        {
+          "in": "",
+          "out": null
+        },
+        {
+          "in": "live/sound",
+          "out": null
+        },
+        {
+          "in": "tráfico",
+          "out": null
+        },
+        {
+          "in": "-swift",
+          "out": null
+        },
+        {
+          "in": "swift-",
+          "out": null
+        },
+        {
+          "in": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+          "out": null
+        }
+      ]
+    },
+    "open": {
+      "$comment": "openIsCurrent(open, today) — expired is gone, and so is a date so far out it is not a statement about now (§10.3).",
+      "cases": [
+        {
+          "open": {
+            "intent": "work",
+            "until": "2026-12-01"
+          },
+          "today": "2026-09-06",
+          "out": true
+        },
+        {
+          "open": {
+            "intent": "work",
+            "until": "2026-09-06"
+          },
+          "today": "2026-09-06",
+          "out": true
+        },
+        {
+          "open": {
+            "intent": "work",
+            "until": "2026-09-05"
+          },
+          "today": "2026-09-06",
+          "out": false
+        },
+        {
+          "open": {
+            "intent": "hiring",
+            "until": "2027-03-05"
+          },
+          "today": "2026-09-06",
+          "out": true
+        },
+        {
+          "open": {
+            "intent": "hiring",
+            "until": "2027-03-06"
+          },
+          "today": "2026-09-06",
+          "out": false
+        },
+        {
+          "open": {
+            "intent": "work",
+            "until": "2099-01-01"
+          },
+          "today": "2026-09-06",
+          "out": false
+        },
+        {
+          "open": null,
+          "today": "2026-09-06",
+          "out": false
+        }
+      ]
+    },
+    "vouch": {
+      "parse": [
+        {
+          "in": "vouch: https://t.me/tgs_elijah\ndoes: live sound\nRan front of house for two years. Never missed a cue.",
+          "out": {
+            "node": "tgs_elijah",
+            "does": "live sound",
+            "body": "Ran front of house for two years. Never missed a cue."
+          }
+        },
+        {
+          "in": "vouch: https://t.me/tgs_elijah\ndoes: Live Sound",
+          "out": {
+            "node": "tgs_elijah",
+            "does": "live sound",
+            "body": ""
+          }
+        },
+        {
+          "in": "vouch: https://t.me/tgs_elijah\ndoes: glaze chemistry\nfirst line\nsecond line",
+          "out": {
+            "node": "tgs_elijah",
+            "does": "glaze chemistry",
+            "body": "first line\nsecond line"
+          }
+        },
+        {
+          "in": "vouch: https://t.me/tgs_elijah\nRan front of house for two years.",
+          "out": null
+        },
+        {
+          "in": "vouch: https://t.me/tgs_elijah\ndoes: x\nbody",
+          "out": null
+        },
+        {
+          "in": "vouch: https://t.me/waveloop_devlog/144\ndoes: live sound\nbody",
+          "out": null
+        },
+        {
+          "in": "vouch:https://t.me/tgs_elijah\ndoes: live sound",
+          "out": null
+        },
+        {
+          "in": "vouch: t.me/tgs_elijah\ndoes: live sound",
+          "out": null
+        },
+        {
+          "in": "re: https://t.me/waveloop_devlog/144\nNice one.",
+          "out": null
+        },
+        {
+          "in": "just a channel post",
+          "out": null
+        }
+      ],
+      "serialise": [
+        {
+          "node": "tgs_elijah",
+          "does": "Live Sound",
+          "body": "Never missed a cue.",
+          "out": "vouch: https://t.me/tgs_elijah\ndoes: live sound\nNever missed a cue."
+        },
+        {
+          "node": "@tgs_elijah",
+          "does": "ceramics",
+          "body": "",
+          "out": "vouch: https://t.me/tgs_elijah\ndoes: ceramics"
+        }
+      ],
+      "self": {
+        "$comment": "keepsVouch(parseVouch(text), voucherNode) — a channel cannot vouch for its own owner (§10.4).",
+        "cases": [
+          {
+            "in": "vouch: https://t.me/tgs_wren\ndoes: bad solder\nI am great at this.",
+            "voucherNode": "tgs_wren",
+            "out": false
+          },
+          {
+            "in": "vouch: https://t.me/TGS_Wren\ndoes: bad solder\nstill me",
+            "voucherNode": "tgs_wren",
+            "out": false
+          },
+          {
+            "in": "vouch: https://t.me/tgs_juno\ndoes: glaze chemistry\nFired my clock faces for a year.",
+            "voucherNode": "tgs_wren",
+            "out": true
+          }
+        ]
+      }
+    }
   }
 }

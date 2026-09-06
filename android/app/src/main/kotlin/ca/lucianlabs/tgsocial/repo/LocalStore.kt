@@ -49,6 +49,7 @@ class LocalStore(private val context: Context) {
     private val lastTabKey = stringPreferencesKey("lastTab")
     private val setupSkippedKey = stringPreferencesKey("setupSkipped")
     private val moderationKey = stringPreferencesKey("moderation")
+    private val feedModeKey = stringPreferencesKey("feedMode")
 
     private val cardCacheFile get() = File(context.filesDir, "cards.json")
     private val feedCacheFile get() = File(context.filesDir, "feed.json")
@@ -63,6 +64,13 @@ class LocalStore(private val context: Context) {
 
     suspend fun lastTab(): Int = context.prefs.data.first()[lastTabKey]?.toIntOrNull() ?: 0
     suspend fun saveLastTab(i: Int) { context.prefs.edit { it[lastTabKey] = i.toString() } }
+
+    /**
+     * PRODUCT §2.24 — which way Feed is being read. A UI preference (PROTOCOL §7), so it survives a relaunch
+     * and nothing about it reaches the card: the mode is how this reader looks, not something they publish.
+     */
+    suspend fun feedMode(): Int = context.prefs.data.first()[feedModeKey]?.toIntOrNull() ?: 0
+    suspend fun saveFeedMode(i: Int) { context.prefs.edit { it[feedModeKey] = i.toString() } }
 
     suspend fun setupSkipped(): Boolean = context.prefs.data.first()[setupSkippedKey] == "1"
     suspend fun saveSetupSkipped(v: Boolean) { context.prefs.edit { it[setupSkippedKey] = if (v) "1" else "0" } }

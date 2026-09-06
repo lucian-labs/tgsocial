@@ -24,7 +24,7 @@
  * (js/repo.js `userMessage`).
  */
 import { FeedSession, Repo } from '../repo.js';
-import { rankPlusOne, usernameKey } from '../protocol.js';
+import { keepsVouch, rankPlusOne, usernameKey } from '../protocol.js';
 import { WRITE_REFUSED } from './mode.js';
 import { MAIN_SOURCES, READER, buildWorld, primeClips } from './world.js';
 import { releaseGenerated } from './media.js';
@@ -103,6 +103,7 @@ export class DemoRepo {
     this.cards = this.world.cards;
     this.comments = {};
     this.commentIndexCache = null;
+    this.vouchIndexCache = null;
     this.listeners = new Set();
     this.prefs = {};
     this.newerNode = null;
@@ -127,7 +128,10 @@ export class DemoRepo {
   }
 
   notify(what) {
-    if (what === 'comments' || what === 'safety') this.commentIndexCache = null;
+    if (what === 'comments' || what === 'safety') {
+      this.commentIndexCache = null;
+      this.vouchIndexCache = null;
+    }
     for (const fn of this.listeners) {
       try {
         fn(what);
@@ -163,6 +167,7 @@ export class DemoRepo {
     this.myNode = null;
     this.comments = {};
     this.commentIndexCache = null;
+    this.vouchIndexCache = null;
   }
 
   // ── reads ────────────────────────────────────────────────────────────────
@@ -284,13 +289,25 @@ export class DemoRepo {
   indexComments() {
     const scope = new Set([usernameKey(READER), ...this.walkKeys()]);
     this.comments = {};
+    const bucket = (channel, node) => {
+      const k = usernameKey(channel);
+      if (!this.comments[k]) this.comments[k] = { channel, node, comments: [], vouches: [], fetchedAt: Date.now() };
+      return this.comments[k];
+    };
     for (const c of this.world.comments) {
       if (!scope.has(usernameKey(c.node))) continue;
-      const k = usernameKey(c.channel);
-      if (!this.comments[k]) this.comments[k] = { channel: c.channel, node: c.node, comments: [], fetchedAt: Date.now() };
-      this.comments[k].comments.push(c);
+      bucket(c.channel, c.node).comments.push(c);
+    }
+    for (const v of this.world.vouches ?? []) {
+      if (!scope.has(usernameKey(v.node))) continue;
+      // PROTOCOL §10.4 — a vouch for the channel's own owner is not a vouch,
+      // dropped here by the rule itself rather than left out of the table. The
+      // fifth fixture is a self-vouch, and this is the line that must hold.
+      if (!keepsVouch({ node: v.subject }, v.node)) continue;
+      bucket(v.channel, v.node).vouches.push(v);
     }
     this.commentIndexCache = null;
+    this.vouchIndexCache = null;
   }
 
   async refreshComments() {
@@ -319,6 +336,10 @@ export class DemoRepo {
   post() { return refuse(); }
 
   postComment() { return refuse(); }
+
+  postVouch() { return refuse(); }
+
+  deleteVouch() { return refuse(); }
 
   createRepliesChannel() { return refuse(); }
 
@@ -384,3 +405,13 @@ export class DemoRepo {
 DemoRepo.prototype.commentIndex = Repo.prototype.commentIndex;
 DemoRepo.prototype.commentThread = Repo.prototype.commentThread;
 DemoRepo.prototype.commentCount = Repo.prototype.commentCount;
+// PROTOCOL §10, the same way: the vouch index, the OPEN NOW walk and the work
+// column's source list are Repo's, so §10.5's scope, §10.3's expiry and
+// §2.24's ordering are the signed-in code deciding what the demo shows.
+DemoRepo.prototype.vouchIndex = Repo.prototype.vouchIndex;
+DemoRepo.prototype.vouchesFor = Repo.prototype.vouchesFor;
+DemoRepo.prototype.vouchTags = Repo.prototype.vouchTags;
+DemoRepo.prototype.myVouch = Repo.prototype.myVouch;
+DemoRepo.prototype.hasWorkFeeds = Repo.prototype.hasWorkFeeds;
+DemoRepo.prototype.workSources = Repo.prototype.workSources;
+DemoRepo.prototype.openNow = Repo.prototype.openNow;

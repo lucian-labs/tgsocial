@@ -5,6 +5,7 @@ import { avatarFor, feedRow, emptyCard } from './shared.js';
 import { contactMailLink } from './safety.js';
 import { userMessage } from '../repo.js';
 import { openCompose } from './compose.js';
+import { expiryRow, workFields } from './work.js';
 
 export function render(app) {
   const root = h('div');
@@ -83,7 +84,12 @@ export function render(app) {
 
   const viewAs = button('View as others see it', { style: 'ghost', onClick: () => app.navigate(`#/node/${node.username}`) });
 
-  root.append(head, feedsMark, feeds, compose, sectionMark('Listing'), listing, viewAs, settingsButton(app), footer(app));
+  // §2.23's reminder, above LISTING and nowhere else: `work.open` expires on
+  // its own, and a person who forgets is invisible without being told.
+  const remind = expiryRow(app, () => editCard(app));
+  root.append(head, feedsMark, feeds, compose);
+  if (remind) root.append(remind);
+  root.append(sectionMark('Listing'), listing, viewAs, settingsButton(app), footer(app));
   return root;
 }
 
@@ -111,26 +117,55 @@ function footer(app) {
   );
 }
 
-function editCard(app) {
-  const card = app.repo.myCard ?? { name: null, bio: null, link: null };
+export function editCard(app) {
+  const card = app.repo.myCard ?? { name: null, bio: null, link: null, feeds: [] };
   const name = field('Name', { type: 'text', value: card.name ?? '', maxlength: 128, autocomplete: 'name' });
   const bio = field('Bio', { type: 'text', value: card.bio ?? '', maxlength: 255 });
   const link = field('Link', { type: 'url', value: card.link ?? '', placeholder: 'https://', inputmode: 'url' });
+  // §2.23 — NAME / BIO / LINK are unchanged and the work keys are appended
+  // below them, which is the same shape §10.2 gives the wire format
+  const work = workFields(app, card);
+  const full = h('p.muted.card-full');
   let m;
   const save = button('Save', { style: 'primary', type: 'submit' });
-  const form = h('form', name.wrap, bio.wrap, link.wrap, save);
+  const form = h('form', name.wrap, bio.wrap, link.wrap, work.el, save, full);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const next = work.read();
     save.disabled = true;
+    full.textContent = '';
     try {
-      await app.repo.editProfile({ name: name.input.value.trim(), bio: bio.input.value.trim(), link: link.input.value.trim() });
-      app.toast('Card updated.', 'good');
-      m.close();
+      await app.repo.writeCard((c) => ({
+        ...c,
+        name: name.input.value.trim() || null,
+        bio: bio.input.value.trim() || null,
+        link: link.input.value.trim() || null,
+        // §10.6's requirement made unavoidable: this modal is the only place
+        // the work lines are authored, and every other write goes through
+        // `writeCard`, which carries `card.work` forward untouched
+        work: next.work,
+      }));
+      app.toast('Card saved.', 'good');
+      // §2.23's two Save-time refusals are written into this modal, so closing
+      // it on success is what made them unreadable. When the grammar dropped
+      // something the modal stays up with the note under WHAT YOU DO and the
+      // field rewritten to what was actually written; otherwise it closes as
+      // before.
+      if (next.refusals.length) {
+        work.settle(next.work);
+        save.disabled = false;
+      } else {
+        m.close();
+      }
       app.render();
     } catch (err) {
       app.toast(userMessage(err, "Couldn't update your card."), 'bad');
+      // §2.23 — the 4096-cap refusal is §2's, unchanged, and this is the line
+      // that says which of the reader's own text is standing in the way
+      if (/Card is full\./.test(err?.message ?? '')) full.textContent = 'Shorten your bio or drop a tag — your card is one Telegram message.';
       save.disabled = false;
     }
   });
   m = modal([h('h2', 'Edit Card'), form], { label: 'Edit Card' });
+  return m;
 }

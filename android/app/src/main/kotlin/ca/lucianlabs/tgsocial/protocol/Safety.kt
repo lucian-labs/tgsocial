@@ -3,6 +3,7 @@ package ca.lucianlabs.tgsocial.protocol
 import ca.lucianlabs.tgsocial.model.Comment
 import ca.lucianlabs.tgsocial.model.NodeEntry
 import ca.lucianlabs.tgsocial.model.Post
+import ca.lucianlabs.tgsocial.model.Vouch
 import kotlinx.serialization.Serializable
 
 /**
@@ -125,6 +126,25 @@ object SafetyFilter {
         for ((target, list) in index) {
             val kept = list.filter { keeps(it, lists) }
             if (kept.isNotEmpty()) out[target] = kept
+        }
+        return out
+    }
+
+    /**
+     * PRODUCT §2.24 — "the safety filter applies to every surface in this section without exception". A vouch
+     * is dropped when its **voucher** is blocked, because a vouch is the voucher's sentence (PROTOCOL §10.4);
+     * the subject cannot write it and so cannot be the person the reader silenced by writing it. Filtering the
+     * index rather than the rendered list is what keeps `Vouched by 2` honest — the figure is this map's size.
+     */
+    fun keeps(vouch: Vouch, lists: SafetyLists): Boolean =
+        !lists.isBlocked(vouch.voucherUsername) && !lists.isHidden(CommentFormat.postKey(vouch.channelUsername, vouch.messageId))
+
+    fun vouches(index: Map<String, List<Vouch>>, lists: SafetyLists): Map<String, List<Vouch>> {
+        if (lists.isEmpty) return index
+        val out = LinkedHashMap<String, List<Vouch>>(index.size)
+        for ((subject, list) in index) {
+            val kept = list.filter { keeps(it, lists) }
+            if (kept.isNotEmpty()) out[subject] = kept
         }
         return out
     }

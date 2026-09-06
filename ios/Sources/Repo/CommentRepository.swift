@@ -2,6 +2,12 @@
 // paged with the same getChatHistory loop as feeds, parsed as `re:` pointers, indexed by target
 // link. Network-scoped by design: two users can see different comment sets. Refreshed alongside
 // the feed; discardable local state.
+//
+// It also holds the VOUCH index (PROTOCOL §10.4). A vouch lives in the same channel as a comment
+// and is read by the same pass — one scan over one channel builds both indexes, which is why §10
+// needed no new channel and no new card key. The two formats are disjoint by their first line
+// (`re: ` carries a message id, `vouch: ` never does), so neither parser can claim the other's
+// message.
 
 import Foundation
 import Observation
@@ -33,11 +39,16 @@ final class CommentRepository {
 
     /// Target key (canonical t.me link) → comments pointing at it.
     private(set) var index: [String: [Comment]] = [:]
+    /// Node key → the vouches about that node (PROTOCOL §10.4). Keyed by SUBJECT, not by message:
+    /// a vouch points at a person, and the only question a reader ever asks of this index is
+    /// "what has my network said about them".
+    private(set) var vouchIndex: [String: [Vouch]] = [:]
 
     init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
         // Versioned (PRODUCT §2.3): a comment cache written by an earlier build is discarded.
         index = store.loadVersioned([String: [Comment]].self, LocalStore.commentIndex) ?? [:]
+        vouchIndex = store.loadVersioned([String: [Vouch]].self, LocalStore.vouchIndex) ?? [:]
     }
 
     private var api: TDLibClient { td.api }
@@ -51,9 +62,12 @@ final class CommentRepository {
     }
     @ObservationIgnored private var positions: [String: ScanPosition] = [:]
 
-    func clear() { index = [:]; channels = []; positions = [:] }
+    func clear() { index = [:]; vouchIndex = [:]; channels = []; positions = [:] }
 
-    private func persist() { store.saveVersioned(index, LocalStore.commentIndex) }
+    private func persist() {
+        store.saveVersioned(index, LocalStore.commentIndex)
+        store.saveVersioned(vouchIndex, LocalStore.vouchIndex)
+    }
 
     /// The channels of the last refresh, for routing live updates.
     private(set) var channels: [ChannelRef] = []
@@ -113,18 +127,23 @@ final class CommentRepository {
             var pos = ScanPosition(from: 0, oldestDate: Int.max, exhausted: false)
             var fetched = 0
             var found: [Comment] = []
+            var vouched: [Vouch] = []
             while fetched < Self.historyLimit, !pos.exhausted {
                 let messages = try await self.fetchBatch(chatId: info.chatId, position: &pos)
                 if messages.isEmpty { break }
                 fetched += messages.count
                 for m in messages {
+                    // One message, two questions, asked once each (§10.4). A message that answers
+                    // neither is an ordinary channel post and is skipped by both.
                     if let c = Self.comment(from: m, ref: ref, feed: info) { found.append(c) }
+                    else if let v = Self.vouch(from: m, ref: ref) { vouched.append(v) }
                 }
             }
             // Comments below the rescan window (found by an earlier deepening pass) stay; when
             // the scan reached the end of history it covered everything, so nothing survives it.
-            self.replaceChannel(ref.channelUsername, with: found,
-                                keepingOlderThan: pos.exhausted ? Int.min : pos.oldestDate)
+            let floor = pos.exhausted ? Int.min : pos.oldestDate
+            self.replaceChannel(ref.channelUsername, with: found, keepingOlderThan: floor)
+            self.replaceChannelVouches(ref.channelUsername, with: vouched, keepingOlderThan: floor)
             self.positions[Username.key(ref.channelUsername)] = pos
         }
     }
@@ -163,21 +182,79 @@ final class CommentRepository {
                 try await activity.run("Reading comments @\(ref.channelUsername)") {
                     var fetched = 0
                     var found: [Comment] = []
+                    var vouched: [Vouch] = []
                     while fetched < Self.deepenLimit, !pos.exhausted, pos.oldestDate > date {
                         let messages = try await self.fetchBatch(chatId: info.chatId, position: &pos)
                         if messages.isEmpty { break }
                         fetched += messages.count
                         for m in messages {
                             if let c = Self.comment(from: m, ref: ref, feed: info) { found.append(c) }
+                            else if let v = Self.vouch(from: m, ref: ref) { vouched.append(v) }
                         }
                     }
                     self.add(found)
+                    self.add(vouched)
                 }
                 positions[key] = pos
             } catch { if flood == nil, TDFailure.isFloodWait(error) { flood = error } }
         }
         persist()
         if let flood { throw flood }
+    }
+
+    /// Adds vouches to the index without disturbing other channels' entries; dedupes by id.
+    private func add(_ vouches: [Vouch]) {
+        for v in vouches {
+            if vouchIndex[v.nodeKey]?.contains(where: { $0.id == v.id }) ?? false { continue }
+            vouchIndex[v.nodeKey, default: []].append(v)
+        }
+    }
+
+    /// The vouch half of `replaceChannel`, keyed by subject instead of by target link.
+    private func replaceChannelVouches(_ channelUsername: String, with vouches: [Vouch], keepingOlderThan floor: Int) {
+        let key = Username.key(channelUsername)
+        var next: [String: [Vouch]] = [:]
+        for (node, list) in vouchIndex {
+            let kept = list.filter { Username.key($0.channelUsername) != key || $0.isPending || $0.date < floor }
+            if !kept.isEmpty { next[node] = kept }
+        }
+        for v in vouches {
+            if next[v.nodeKey]?.contains(where: { $0.id == v.id }) ?? false { continue }
+            next[v.nodeKey, default: []].append(v)
+        }
+        vouchIndex = next
+    }
+
+    // MARK: Reading vouches (§10.5)
+
+    /// Every vouch about a node that this reader's own scan found — network-scoped, like everything
+    /// else here. Newest first, which is the order PRODUCT §2.25 renders.
+    func vouches(for node: String) -> [Vouch] {
+        Self.vouches(for: node, in: vouchIndex)
+    }
+
+    /// The lookup itself, over any index. Static so the demo (PRODUCT §2.26) can hand it the
+    /// fixture index instead of this one, and the ordering cannot drift between the two.
+    static func vouches(for node: String, in index: [String: [Vouch]]) -> [Vouch] {
+        (index[Username.key(node)] ?? []).sorted {
+            $0.date != $1.date ? $0.date > $1.date : $0.messageId > $1.messageId
+        }
+    }
+
+    /// A message in a comments channel → Vouch; nil when it is not one (§10.4).
+    ///
+    /// Text only, deliberately: a vouch's whole content is two structured lines and a body, and a
+    /// photo caption that happens to parse as one would put an image on a screen that is a list of
+    /// short statements. `keeps` is applied HERE rather than at render, so a self-vouch never
+    /// reaches an index any screen could read.
+    static func vouch(from m: Message, ref: ChannelRef) -> Vouch? {
+        guard case .messageText(let t) = m.content else { return nil }
+        guard let parsed = VouchCodec.parse(t.text.text),
+              VouchCodec.keeps(parsed, voucherNode: ref.ownerUsername) else { return nil }
+        return Vouch(channelUsername: ref.channelUsername, chatId: m.chatId, messageId: m.id, date: m.date,
+                     node: parsed.node, does: parsed.does, body: parsed.body,
+                     ownerUsername: ref.ownerUsername, ownerTitle: ref.ownerTitle, ownerPhoto: ref.ownerPhoto,
+                     isPlusOne: ref.isPlusOne, isMine: ref.isMine)
     }
 
     /// Adds comments to the index without disturbing other channels' entries; dedupes by id.
@@ -228,14 +305,21 @@ final class CommentRepository {
     /// Live insert: a new message in a known comments channel joins the index immediately.
     func apply(newMessage m: Message) {
         guard let ref = channels.first(where: { nodes.cachedFeed($0.channelUsername)?.chatId == m.chatId }),
-              let info = nodes.cachedFeed(ref.channelUsername),
-              let c = Self.comment(from: m, ref: ref, feed: info),
-              let target = c.targetKey else { return }
-        guard !(index[target]?.contains(where: { $0.id == c.id }) ?? false) else { return }
-        index[target, default: []].append(c)
-        persist()
+              let info = nodes.cachedFeed(ref.channelUsername) else { return }
+        if let c = Self.comment(from: m, ref: ref, feed: info), let target = c.targetKey {
+            guard !(index[target]?.contains(where: { $0.id == c.id }) ?? false) else { return }
+            index[target, default: []].append(c)
+            persist()
+            return
+        }
+        if let v = Self.vouch(from: m, ref: ref) {
+            guard !(vouchIndex[v.nodeKey]?.contains(where: { $0.id == v.id }) ?? false) else { return }
+            vouchIndex[v.nodeKey, default: []].append(v)
+            persist()
+        }
     }
 
+    /// §10.4: "editing or deleting the message on Telegram deletes the vouch". Both indexes drop it.
     func apply(deleted chatId: Int64, messageIds: [Int64]) {
         let gone = Set(messageIds)
         var changed = false
@@ -244,6 +328,13 @@ final class CommentRepository {
             if kept.count != list.count {
                 changed = true
                 if kept.isEmpty { index.removeValue(forKey: target) } else { index[target] = kept }
+            }
+        }
+        for (node, list) in vouchIndex {
+            let kept = list.filter { !($0.chatId == chatId && gone.contains($0.messageId)) }
+            if kept.count != list.count {
+                changed = true
+                if kept.isEmpty { vouchIndex.removeValue(forKey: node) } else { vouchIndex[node] = kept }
             }
         }
         if changed { persist() }
@@ -312,6 +403,66 @@ final class CommentRepository {
             remove(chatId: pending.chatId, messageId: pending.id)
             persist()
             throw error
+        }
+    }
+
+    /// Sends one vouch into my comments channel (§10.4). Text only — the format is two structured
+    /// lines and a body, and there is no media in it. Optimistic the same way a comment is
+    /// (PRODUCT §2.25): the pending vouch is indexed immediately and removed when Telegram rejects.
+    ///
+    /// Refuses a self-vouch before the send rather than after: the ban is a property of the format,
+    /// not of the renderer.
+    func postVouch(node: String, does: String, body: String, channelUsername: String,
+                   ownerUsername: String, ownerTitle: String, ownerPhoto: PhotoRef?) async throws {
+        guard Username.key(node) != Username.key(ownerUsername) else {
+            throw TDFailure(code: 400, message: "You can't vouch for yourself.")
+        }
+        guard let text = VouchCodec.serialise(node: node, does: does, body: body),
+              let parsed = VouchCodec.parse(text) else {
+            throw TDFailure(code: 400, message: "Pick one thing.")
+        }
+        let info = try await nodes.readFeed(username: channelUsername)
+        let content = InputMessageContent.inputMessageText(
+            InputMessageText(clearDraft: true, linkPreviewOptions: NodeRepository.noPreview,
+                             text: FormattedText(entities: [], text: text)))
+        let pending = try await api.sendMessage(chatId: info.chatId, inputMessageContent: content,
+                                                options: nil, replyMarkup: nil, replyTo: nil, topicId: nil)
+        var optimistic = Vouch(channelUsername: channelUsername, chatId: pending.chatId, messageId: pending.id,
+                               date: pending.date, node: parsed.node, does: parsed.does, body: parsed.body,
+                               ownerUsername: ownerUsername, ownerTitle: ownerTitle, ownerPhoto: ownerPhoto,
+                               isPlusOne: false, isMine: true)
+        optimistic.isPending = true
+        vouchIndex[optimistic.nodeKey, default: []].append(optimistic)
+        do {
+            let sent = try await sends.awaitSent(pending.id, seconds: 60)
+            removeVouch(chatId: pending.chatId, messageId: pending.id)
+            let ref = ChannelRef(channelUsername: channelUsername, ownerUsername: ownerUsername,
+                                 ownerTitle: ownerTitle, ownerPhoto: ownerPhoto, isPlusOne: false, isMine: true)
+            if let v = Self.vouch(from: sent, ref: ref),
+               !(vouchIndex[v.nodeKey]?.contains(where: { $0.id == v.id }) ?? false) {
+                vouchIndex[v.nodeKey, default: []].append(v)
+            }
+            persist()
+        } catch {
+            removeVouch(chatId: pending.chatId, messageId: pending.id)
+            persist()
+            throw error
+        }
+    }
+
+    /// Deletes my own vouch (PRODUCT §2.25). The subject has no route to this: the message is in
+    /// the voucher's channel, which is the cost of the guarantee (§10.4).
+    func delete(_ vouch: Vouch) async throws {
+        guard vouch.isMine else { return }
+        try await api.deleteMessages(chatId: vouch.chatId, messageIds: [vouch.messageId], revoke: true)
+        removeVouch(chatId: vouch.chatId, messageId: vouch.messageId)
+        persist()
+    }
+
+    private func removeVouch(chatId: Int64, messageId: Int64) {
+        for (node, list) in vouchIndex {
+            let kept = list.filter { !($0.chatId == chatId && $0.messageId == messageId) }
+            if kept.isEmpty { vouchIndex.removeValue(forKey: node) } else if kept.count != list.count { vouchIndex[node] = kept }
         }
     }
 

@@ -239,13 +239,6 @@ struct CommentComposerModal: View {
     /// Cleared in place by the quote's ×; starts from whatever was selected when this opened.
     @State private var replyCleared = false
 
-    // Channel creation (first comment ever).
-    @State private var channelName = ""
-    @State private var check: NodeRepository.UsernameCheck?
-    @State private var checking = false
-    @State private var creating = false
-    @State private var checkTask: Task<Void, Never>?
-
     private var needsChannel: Bool { model.myCard?.replies == nil }
 
     /// What the comment will point at right now — and the only thing the `re:` line is written from.
@@ -256,69 +249,7 @@ struct CommentComposerModal: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if needsChannel { channelCard } else { composer }
-        }
-        .onAppear {
-            if channelName.isEmpty { channelName = model.suggestedRepliesUsername }
-            if needsChannel { scheduleCheck() }
-        }
-        .onChange(of: channelName) { _, _ in if needsChannel { scheduleCheck() } }
-    }
-
-    // MARK: First comment ever — make the comments channel (§6.1, §6.4)
-
-    private var channelCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HPSectionMark("Your comments channel")
-            HPMuted("Your comments live in a public channel you own. Anyone can read it on Telegram; you can edit or delete anything there.")
-                .padding(.bottom, HPTokens.Space.cardPad)
-            HStack(alignment: .bottom, spacing: HPTokens.Space.rowGap) {
-                HPTextField(nil, text: $channelName, placeholder: model.suggestedRepliesUsername, kind: .text)
-                availabilityPill.padding(.bottom, HPTokens.Space.inputBottom + HPTokens.Space.inputY)
-            }
-            HPButtonRow {
-                HPButton("Make Channel", style: .primary, enabled: !creating && check == .available) {
-                    guard !creating, let name = Username.normalise(channelName) else { return }
-                    creating = true
-                    Task {
-                        _ = await model.makeCommentsChannel(username: name)
-                        creating = false
-                    }
-                }
-            } b: {
-                HPButton("Cancel", style: .ghost) { model.modal = nil }
-            }
-        }
-    }
-
-    @ViewBuilder private var availabilityPill: some View {
-        switch check {
-        case .available: HPPill("Available", tone: .gold)
-        case .taken: HPPill("Taken", tone: .bad)
-        case .invalid: HPPill("Invalid", tone: .bad)
-        case .tooMany: HPPill("Too many", tone: .bad)
-        case .unavailable: HPPill("Unavailable", tone: .bad)
-        case nil: if checking { HPPill("Checking") }
-        }
-    }
-
-    private func scheduleCheck() {
-        checkTask?.cancel()
-        check = nil
-        guard let name = Username.normalise(channelName) else { check = channelName.isEmpty ? nil : .invalid; return }
-        checking = true
-        checkTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            var result = try? await model.nodes.checkUsername(name)
-            // A channel I already own (left over from an attempt whose card write failed) is not
-            // Taken: Make Channel stays enabled and proceeds straight to the card write.
-            if result == .taken, await model.nodes.ownedPublicChannel(username: name) != nil {
-                result = .available
-            }
-            guard !Task.isCancelled else { return }
-            check = result
-            checking = false
+            if needsChannel { CommentsChannelCard() } else { composer }
         }
     }
 
@@ -420,4 +351,82 @@ struct DeleteCommentModal: View {
             }
         }
     }
+}
+
+/// PRODUCT §2.12's `YOUR COMMENTS CHANNEL` card, extracted so §2.25's vouch modal can show THE
+/// SAME one rather than a second card that says nearly the same thing. It is the same channel
+/// (PROTOCOL §6.1, §10.4), so it is the same copy, the same availability pill and the same
+/// `( Make Channel )`.
+struct CommentsChannelCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var channelName = ""
+    @State private var check: NodeRepository.UsernameCheck?
+    @State private var checking = false
+    @State private var creating = false
+    @State private var checkTask: Task<Void, Never>?
+
+    var body: some View {
+        card
+            .onAppear {
+                if channelName.isEmpty { channelName = model.suggestedRepliesUsername }
+                scheduleCheck()
+            }
+            .onChange(of: channelName) { _, _ in scheduleCheck() }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HPSectionMark("Your comments channel")
+            HPMuted("Your comments live in a public channel you own. Anyone can read it on Telegram; you can edit or delete anything there.")
+                .padding(.bottom, HPTokens.Space.cardPad)
+            HStack(alignment: .bottom, spacing: HPTokens.Space.rowGap) {
+                HPTextField(nil, text: $channelName, placeholder: model.suggestedRepliesUsername, kind: .text)
+                availabilityPill.padding(.bottom, HPTokens.Space.inputBottom + HPTokens.Space.inputY)
+            }
+            HPButtonRow {
+                HPButton("Make Channel", style: .primary, enabled: !creating && check == .available) {
+                    guard !creating, let name = Username.normalise(channelName) else { return }
+                    creating = true
+                    Task {
+                        _ = await model.makeCommentsChannel(username: name)
+                        creating = false
+                    }
+                }
+            } b: {
+                HPButton("Cancel", style: .ghost) { model.modal = nil }
+            }
+        }
+    }
+
+    @ViewBuilder private var availabilityPill: some View {
+        switch check {
+        case .available: HPPill("Available", tone: .gold)
+        case .taken: HPPill("Taken", tone: .bad)
+        case .invalid: HPPill("Invalid", tone: .bad)
+        case .tooMany: HPPill("Too many", tone: .bad)
+        case .unavailable: HPPill("Unavailable", tone: .bad)
+        case nil: if checking { HPPill("Checking") }
+        }
+    }
+
+    private func scheduleCheck() {
+        checkTask?.cancel()
+        check = nil
+        guard let name = Username.normalise(channelName) else { check = channelName.isEmpty ? nil : .invalid; return }
+        checking = true
+        checkTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            var result = try? await model.nodes.checkUsername(name)
+            // A channel I already own (left over from an attempt whose card write failed) is not
+            // Taken: Make Channel stays enabled and proceeds straight to the card write.
+            if result == .taken, await model.nodes.ownedPublicChannel(username: name) != nil {
+                result = .available
+            }
+            guard !Task.isCancelled else { return }
+            check = result
+            checking = false
+        }
+    }
+
 }

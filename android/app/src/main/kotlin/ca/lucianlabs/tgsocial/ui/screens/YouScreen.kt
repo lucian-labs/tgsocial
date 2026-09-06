@@ -42,6 +42,7 @@ import ca.lucianlabs.tgsocial.model.FeedSource
 import ca.lucianlabs.tgsocial.model.MyNode
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
 import ca.lucianlabs.tgsocial.protocol.ReportEmail
+import ca.lucianlabs.tgsocial.protocol.WorkFormat
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Screen
 import ca.lucianlabs.tgsocial.ui.Sheet
@@ -119,6 +120,30 @@ fun LazyListScope.YouItems(vm: AppViewModel, me: NodeSnapshot?, node: MyNode?) {
     item(key = "you-compose") {
         Box(Modifier.columnItem().padding(bottom = HPTokens.Space.cardGap)) {
             HPButton("Compose", { vm.openSheet(Sheet.Compose(null)) }, style = HPButtonStyle.PRIMARY, enabled = !card?.feeds.isNullOrEmpty())
+        }
+    }
+    // PRODUCT §2.23 — the only nag in the app. `work.open` expires on its own (PROTOCOL §10.3), and a person
+    // who forgets goes invisible without being told. One row, no badge, no red, no notification; it never
+    // appears on anyone else's screen, and it is dismissed by acting or by ignoring it.
+    val open = card?.work?.open
+    val daysLeft = WorkFormat.daysLeft(open)
+    if (open != null && daysLeft != null && daysLeft <= 7) {
+        val label = WorkFormat.intentLabel(open.intent)
+        if (label != null) item(key = "you-open-reminder") {
+            Row(
+                modifier = Modifier.columnItem().padding(bottom = HPTokens.Space.cardGap),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(HPTokens.Space.rowGap),
+            ) {
+                val text = when {
+                    daysLeft < 0L -> "Your $label has ended."
+                    daysLeft == 0L -> "Your $label ends today."
+                    daysLeft == 1L -> "Your $label ends in 1 day."
+                    else -> "Your $label ends in $daysLeft days."
+                }
+                HPMuted(text, Modifier.weight(1f))
+                HPButton("Edit Card", { vm.openSheet(Sheet.EditCard) }, style = HPButtonStyle.GHOST, size = HPButtonSize.SMALL)
+            }
         }
     }
     item(key = "you-listing-mark") { Box(Modifier.columnItem().padding(bottom = HPTokens.Space.rowGap)) { HPSectionMark("Listing") } }

@@ -322,6 +322,75 @@ enum DemoFixtures {
                     body: "Agreed."),
     ]
 
+    // MARK: Work (PRODUCT §2.26, PROTOCOL §10)
+
+    /// One node's work card. `openDays` is N days after the demo is ENTERED, computed at entry —
+    /// never a literal date. A hardcoded one rots into an expired intent and then §2.24's
+    /// `OPEN NOW` is permanently empty, which is a fixture that tests nothing. Same
+    /// derive-never-recall rule §2.3's relative times follow.
+    struct WorkSpec {
+        let node: String
+        let role: String
+        let does: [String]
+        let intent: WorkIntent?
+        let openDays: Int
+        /// Which of that node's own `feeds:` are work. A channel not in `feeds:` would be dropped
+        /// by the parser (§10.2), which is a rule the fixtures respect rather than test.
+        let feeds: [String]
+    }
+
+    /// Six of the fifteen. The reader carries NONE: the first thing the demo shows about work is
+    /// the empty state on your own card.
+    static let work: [WorkSpec] = [
+        WorkSpec(node: "tgs_demo_wren", role: "Tide clocks, built one at a time",
+                 does: ["electronics", "tide clocks", "bad solder"],
+                 intent: .contract, openDays: 45, feeds: ["demo_wren_bench"]),
+        WorkSpec(node: "tgs_demo_mox", role: "Records rain for a living",
+                 does: ["field recording", "sound design"],
+                 intent: nil, openDays: 0, feeds: ["demo_slow_radio"]),
+        WorkSpec(node: "tgs_demo_juno", role: "Production potter, small kiln",
+                 does: ["ceramics", "glaze chemistry"],
+                 intent: .work, openDays: 20, feeds: ["demo_kiln_log"]),
+        WorkSpec(node: "tgs_demo_pell", role: "Letterpress, one press",
+                 does: ["letterpress", "typesetting"],
+                 intent: .hiring, openDays: 60, feeds: ["demo_press_run"]),
+        WorkSpec(node: "tgs_demo_hask", role: "Fixes the ferry radio",
+                 does: ["marine radio", "antennas"],
+                 intent: .collab, openDays: 8, feeds: ["demo_ferry_net"]),
+        WorkSpec(node: "tgs_demo_ilka", role: "Frame builder",
+                 does: ["frame building", "brazing"],
+                 intent: nil, openDays: 0, feeds: ["demo_frame_jig"]),
+    ]
+
+    /// A vouch fixture. `voucher` is a NODE — the channel it lands in is that node's own `replies:`,
+    /// looked up rather than transcribed, so the two cannot drift.
+    struct VouchSpec {
+        let voucher: String
+        let about: String
+        let does: String
+        let body: String
+        let id: Int64
+        let age: Int
+    }
+
+    /// Five, and the fifth is the point. Between them they paint, one screen each: a claimed tag
+    /// with a vouch, a claimed tag with none, `VOUCHED, NOT CLAIMED` (`kiln repair`, which Juno
+    /// does not claim) — and a SELF-VOUCH that must not render anywhere (PROTOCOL §10.4). It is in
+    /// the fixtures precisely so that a client which forgot that rule fails visibly, on all three
+    /// platforms, without anyone writing a test for it.
+    static let vouches: [VouchSpec] = [
+        VouchSpec(voucher: "tgs_demo_wren", about: "tgs_demo_juno", does: "glaze chemistry",
+                  body: "Fired my clock faces for a year. Nothing cracked.", id: 61, age: 40 * day),
+        VouchSpec(voucher: "tgs_demo_mox", about: "tgs_demo_wren", does: "tide clocks",
+                  body: "Built the clock in my studio. Still right.", id: 62, age: 200 * day),
+        VouchSpec(voucher: "tgs_demo_juno", about: "tgs_demo_wren", does: "bad solder",
+                  body: "I've seen worse. Not much worse.", id: 63, age: 400 * day),
+        VouchSpec(voucher: "tgs_demo_pell", about: "tgs_demo_juno", does: "kiln repair",
+                  body: "Got my kiln lit the night before a show.", id: 64, age: 120 * day),
+        VouchSpec(voucher: "tgs_demo_wren", about: "tgs_demo_wren", does: "tide clocks",
+                  body: "Nobody does this better.", id: 65, age: 10 * day),
+    ]
+
     // MARK: Derived numbers
 
     /// Reactions and views DERIVE from the message id rather than being invented per row, so all

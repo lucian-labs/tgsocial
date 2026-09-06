@@ -2,6 +2,7 @@
 import { h, button, replace, sectionMark } from '../../vendor/house-pour.js';
 import { normaliseUsername, usernameKey } from '../protocol.js';
 import { nodeRow } from './shared.js';
+import { capabilityMatches, capabilityRow } from './work.js';
 import { userMessage } from '../repo.js';
 
 export function render(app) {
@@ -31,9 +32,34 @@ export function render(app) {
   });
   root.append(form);
 
+  /**
+   * PRODUCT §2.24 — the same one search field, now also matching `work.does`
+   * across every card this client has read. It is a local filter over a network
+   * the reader assembled themselves, not search: `searchPublicChats` indexes
+   * usernames and titles, never the contents of a pinned message
+   * (PROTOCOL §10.7.2). The faint line under the section says exactly that,
+   * permanently, because a search box that stays quiet about its reach is a
+   * search box that lies about it.
+   */
+  const capHost = h('div');
+  const paintCapabilities = () => {
+    const q = input.value.trim();
+    if (!q) {
+      replace(capHost);
+      return;
+    }
+    const rows = capabilityMatches(app, q);
+    replace(capHost,
+      sectionMark('What they do'),
+      rows.length ? h('div.card', rows.map((r) => capabilityRow(app, r))) : h('div.card', h('p.muted', 'Nobody you can reach lists that.')),
+      h('p.faint.small.cap-scope', 'Searches the cards you can reach — your network and the directory. There is no global search.'),
+    );
+  };
+  input.addEventListener('input', paintCapabilities);
+
   const nearbyList = h('div.card', h('p.muted', 'Loading…'));
   const dirList = h('div.card', h('p.muted', 'Loading…'));
-  root.append(sectionMark('Nearby'), nearbyList, sectionMark('Directory'), dirList);
+  root.append(capHost, sectionMark('Nearby'), nearbyList, sectionMark('Directory'), dirList);
 
   (async () => {
     const shown = new Set();

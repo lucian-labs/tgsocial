@@ -39,6 +39,14 @@ import {
   entityRuns,
   DEFAULT_INDEX_GROUP,
   parseComment,
+  parseVouch,
+  parseWork,
+  pruneWorkFeeds,
+  serialiseVouch,
+  keepsVouch,
+  openIsCurrent,
+  orderByExpiry,
+  todayUTC,
   serialiseComment,
   targetKey,
   attributionNode,
@@ -54,6 +62,46 @@ const LS = {
 };
 
 const CARD_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The card as this client reads it: §2's parse, then §10's second pass hung on
+ * `card.work` (PROTOCOL §10.6). Every place that turns pinned-message text
+ * into a card goes through here, and that is not a tidiness point — a card
+ * read with `parseCard` alone and written back with `serialiseCard` loses the
+ * work lines, because `serialiseCard` emits them only when it is handed a
+ * `work`. Following somebody rewrites the whole pinned message, so the reader
+ * that forgets §10 is the thing that deletes it.
+ */
+function cardWithWork(text) {
+  const card = parseCard(text);
+  if (!card) return null;
+  const work = parseWork(text);
+  if (work) card.work = work;
+  return card;
+}
+
+/**
+ * PROTOCOL §10.2 — `work.feeds` marks channels `feeds:` already claims, so a
+ * channel that leaves `feeds:` takes its marking with it. Applied to every card
+ * write rather than to the one screen that drops a feed, because `mutate` runs
+ * against the card as it is on Telegram at write time (§4.4): `feeds:` may have
+ * changed on another device since this client last read it, and a marking whose
+ * channel is not in that `feeds:` is a line §10.2 forbids. Readers hide the
+ * dangling entry, which is what makes it latent rather than harmless — it
+ * re-marks the channel as work the moment it is listed again, with nobody
+ * having touched the toggle.
+ */
+function settleWork(card) {
+  if (!card?.work) return card;
+  const work = pruneWorkFeeds(card.work, card.feeds ?? []);
+  if (work === card.work) return card;
+  // §10.2 — a work card with nothing left in it is no work card, the same way
+  // a card whose every work line was malformed has none. Left as an object it
+  // would draw §2.23's `WORK` heading over nothing, and that section is absent
+  // rather than empty.
+  const empty = !work.role && !(work.does ?? []).length && !work.open && !work.feeds.length;
+  return { ...card, work: empty ? null : work };
+}
 
 /** Errors whose message is already product copy (shown without the "Couldn't update your card." prefix). */
 export class PlainError extends Error {
@@ -189,6 +237,8 @@ export class Repo {
     this.comments = loadVersioned(LS.comments, {});
     /** Memoised commentIndex(); dropped on every 'comments' notification. */
     this.commentIndexCache = null;
+    /** Memoised vouchIndex() (PROTOCOL §10.5); dropped with the comment memo — one scan feeds both. */
+    this.vouchIndexCache = null;
     this.chatsById = new Map();
     this.chatIdByUsername = new Map();
     this.userNames = new Map();
@@ -254,7 +304,10 @@ export class Repo {
   notify(what) {
     // a block or a report changes which comments the index may hand out, so it
     // invalidates the memo exactly as a re-scan does (PRODUCT §2.18)
-    if (what === 'comments' || what === 'safety') this.commentIndexCache = null;
+    if (what === 'comments' || what === 'safety') {
+      this.commentIndexCache = null;
+      this.vouchIndexCache = null;
+    }
     for (const fn of this.listeners) {
       try {
         fn(what);
@@ -282,6 +335,7 @@ export class Repo {
     this.prefs = {};
     this.comments = {};
     this.commentIndexCache = null;
+    this.vouchIndexCache = null;
     this.chatsById.clear();
     this.chatIdByUsername.clear();
   }
@@ -384,7 +438,7 @@ export class Repo {
       const chat = await this.chat(chatId);
       if (chat?.type?.['@type'] !== 'chatTypeSupergroup' || !chat.type.is_channel) continue;
       const { id, text } = await this.pinnedText(chatId);
-      const card = parseCard(text);
+      const card = cardWithWork(text);
       if (!card) {
         if (!newer && isNewerCard(text)) {
           const sg = await this.supergroup(chat);
@@ -545,7 +599,7 @@ export class Repo {
       return this.rememberCard(username, { title: null, card: null, newer: false, chatId: null, supergroupId: null, photo: null, description: null, missing: true });
     }
     const { id, text } = await this.pinnedText(chat.id);
-    const card = parseCard(text);
+    const card = cardWithWork(text);
     const newer = !card && isNewerCard(text);
     const description = await this.supergroupDescription(chat);
     const entry = this.rememberCard(username, {
@@ -584,7 +638,7 @@ export class Repo {
     const prevEntry = this.cards[key] ?? null;
     const prevCard = prevEntry?.card ?? null;
     if (prevCard) {
-      const guess = mutate(prevCard);
+      const guess = settleWork(mutate(prevCard));
       this.serialise(guess); // refuse "Card is full." before touching anything
       this.cards[key] = { ...prevEntry, card: guess, fetchedAt: Date.now() };
       this.storeVersioned(LS.cards, this.cards);
@@ -592,7 +646,7 @@ export class Repo {
     }
     try {
       const { messageId, card: fresh } = await this.track('Writing your card', () => this.readMyCardMessage());
-      const next = mutate(fresh);
+      const next = settleWork(mutate(fresh));
       await this.track('Writing your card', () => this.editCardMessage(messageId, this.serialise(next)));
       if ((fresh.bio ?? '') !== (next.bio ?? '')) {
         await this.td.trySend({ '@type': 'setChatDescription', chat_id: this.myNode.chatId, description: nodeDescription(next) });
@@ -632,10 +686,10 @@ export class Repo {
     } catch (e) {
       if (!isNotFound(e)) throw e;
     }
-    let card = msg ? parseCard(messageText(msg)) : null;
+    let card = msg ? cardWithWork(messageText(msg)) : null;
     if (!card && pinnedMessageId && msg?.id !== pinnedMessageId) {
       const known = await this.td.trySend({ '@type': 'getMessage', chat_id: chatId, message_id: pinnedMessageId });
-      const knownCard = known ? parseCard(messageText(known)) : null;
+      const knownCard = known ? cardWithWork(messageText(known)) : null;
       if (knownCard) {
         msg = known;
         card = knownCard;
@@ -674,6 +728,15 @@ export class Repo {
 
   editProfile({ name, bio, link }) {
     return this.writeCard((card) => ({ ...card, name: name || null, bio: bio || null, link: link || null }));
+  }
+
+  /**
+   * PROTOCOL §10.2 — the four `work.` keys, written as one edit. `work` is a
+   * whole work card or null; null clears every key, which is how a person
+   * takes their work card down (`serialiseCard` emits nothing without one).
+   */
+  editWork(work) {
+    return this.writeCard((card) => ({ ...card, work: work ?? null }));
   }
 
   // ── my feeds (PROTOCOL §4.7) ─────────────────────────────────────────────
@@ -743,6 +806,7 @@ export class Repo {
     return this.candidatesInflight;
   }
 
+  /** Dropping a feed drops its `work.feeds` marking with it — see `writeCard` (PROTOCOL §10.2). */
   setFeeds(usernames) {
     return this.writeCard((card) => ({ ...card, feeds: usernames }));
   }
@@ -1040,6 +1104,25 @@ export class Repo {
    * Comments channels in scope: mine, my follows', and my cached +1 nodes'
    * (§6.3 — network-scoped by design). All from the card cache; a node with
    * no `replies:` key contributes nothing.
+   *
+   * A `replies:` line is a claim, and nothing here backs it. A feed has §3's
+   * description backlink; a comments channel's ownership is not checkable from
+   * outside, so the only thing this client knows is which in-scope cards point
+   * at which channel. When two of them point at the same one, at least one is
+   * lying and there is no way to tell which — so the channel is dropped rather
+   * than awarded to whoever the walk reached first.
+   *
+   * That matters past attribution, because §10.4's whole guarantee rests on
+   * this binding: `keepsVouch` drops a vouch a channel wrote about its own
+   * owner, and it can only do that against the owner this map names. Award a
+   * captured channel to the wrong node and the one message the format must
+   * never render — a self-vouch — renders as somebody else's sentence and
+   * counts toward `Vouched by N` on the subject's own work card.
+   *
+   * My own claim is the exception and wins outright: my card is the one card
+   * in this walk I wrote, so somebody else naming my comments channel cannot
+   * take it from me — otherwise the drop would be a way to silence me in my
+   * own client.
    */
   commentChannels() {
     if (!this.myNode) return [];
@@ -1048,16 +1131,21 @@ export class Repo {
       nodes.add(usernameKey(f));
       for (const p of this.cachedCard(f)?.card?.follows ?? []) nodes.add(usernameKey(p));
     }
-    const out = [];
-    const seen = new Set();
+    const mine = usernameKey(this.myNode.username);
+    const claims = new Map();
     for (const node of nodes) {
       const entry = this.cachedCard(node);
       const channel = entry?.card?.replies;
-      if (!channel) continue;
+      if (!channel || !entry.username) continue;
       const k = usernameKey(channel);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({ channel, node: entry.username });
+      if (!claims.has(k)) claims.set(k, { channel, claimants: [] });
+      claims.get(k).claimants.push(entry.username);
+    }
+    const out = [];
+    for (const { channel, claimants } of claims.values()) {
+      // me if I am among them, else the only claimant, else nobody
+      const owner = claimants.find((u) => usernameKey(u) === mine) ?? (claimants.length === 1 ? claimants[0] : null);
+      if (owner) out.push({ channel, node: owner });
     }
     return out;
   }
@@ -1121,11 +1209,20 @@ export class Repo {
           const chat = await this.chatByUsername(channel);
           const msgs = await this.history(chat.id, 0, 100);
           const list = [];
+          const vouches = [];
           for (const m of msgs) {
+            // §10.4 — one channel, two formats. A `re:` line is a comment and a
+            // `vouch:` line is a vouch; neither parser ever claims the other's
+            // message, so one pass over one channel builds both indexes.
             const comment = this.toComment(m, { channel, node });
-            if (comment && comment.targetKey) list.push(comment);
+            if (comment && comment.targetKey) {
+              list.push(comment);
+              continue;
+            }
+            const vouch = this.toVouch(m, { channel, node });
+            if (vouch) vouches.push(vouch);
           }
-          this.comments[k] = { channel, node, comments: list, fetchedAt: Date.now() };
+          this.comments[k] = { channel, node, comments: list, vouches, fetchedAt: Date.now() };
         });
       } catch (e) {
         console.warn('[repo] comments', channel, e.message);
@@ -1247,6 +1344,190 @@ export class Repo {
       const entry = this.comments[k];
       if (entry) {
         entry.comments = entry.comments.filter((c) => c.key !== comment.key);
+        this.storeVersioned(LS.comments, this.comments);
+      }
+      this.notify('comments');
+    });
+  }
+
+  // ── work (PROTOCOL §10) ──────────────────────────────────────────────────
+
+  /**
+   * §2.24's gate: the Feed mode control appears only when at least one node in
+   * my follows, or I, carry a `work.feeds` entry. A reader whose network has
+   * no work in it sees Feed exactly as it is today — the surface is additive
+   * or it is not additive. Cache-only, so asking costs nothing.
+   */
+  hasWorkFeeds() {
+    if (!this.myNode) return false;
+    if (this.myCard?.work?.feeds?.length) return true;
+    return (this.myCard?.follows ?? []).some((u) => (this.cachedCard(u)?.card?.work?.feeds?.length ?? 0) > 0);
+  }
+
+  /**
+   * The work column's sources: the `work.feeds` of me and my follows, merged
+   * by §4.8 exactly as the main feed is. NOT +1 — a post one hop out is not
+   * worth a fetch per channel, and §2.24 says so.
+   */
+  async workSources({ refresh = false } = {}) {
+    if (!this.myNode) return [];
+    await this.readNode(this.myNode.username, { force: refresh || !this.myCard }).catch(() => null);
+    const card = this.myCard;
+    if (!card) return [];
+    await pmap(card.follows, 4, (u) => this.readNode(u, { force: refresh }).catch(() => null));
+    const out = [];
+    const seen = new Set();
+    const take = (entry) => {
+      for (const f of entry?.card?.work?.feeds ?? []) {
+        const k = usernameKey(f);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(f);
+      }
+    };
+    take(this.cachedCard(this.myNode.username));
+    for (const u of card.follows) {
+      if (this.safety?.isBlocked(u)) continue; // §2.18, on this surface too
+      take(this.cachedCard(u));
+    }
+    return out;
+  }
+
+  /**
+   * §2.24's OPEN NOW: current intent (§10.3) from me, my follows, and my +1.
+   *
+   * +1 is included here and nowhere else in the mode. Intent is one structured
+   * line on a card the +1 walk already fetches for Explore and Graph, so the
+   * extra hop is a filter over cards rather than a read per channel — which is
+   * exactly why the work column below stops at my follows.
+   */
+  async openNow({ refresh = false, today = todayUTC() } = {}) {
+    if (!this.myNode) return [];
+    // the walk that reads my follows' cards and my +1's, with §2.18 and
+    // `public: no` already applied to the +1 half (§2.4 is the same walk)
+    const plusOne = await this.nearby({ refresh }).catch(() => []);
+    const rows = [];
+    const seen = new Set();
+    const consider = (entry, isPlusOne) => {
+      if (!entry?.card || seen.has(usernameKey(entry.username))) return;
+      if (this.safety?.isBlocked(entry.username)) return;
+      const work = entry.card.work;
+      if (!openIsCurrent(work?.open, today)) return;
+      seen.add(usernameKey(entry.username));
+      rows.push({ username: entry.username, entry, work, plusOne: isPlusOne });
+    };
+    consider(this.cachedCard(this.myNode.username), false);
+    for (const u of this.myCard?.follows ?? []) consider(this.cachedCard(u), false);
+    for (const r of plusOne) consider(r.entry, true);
+    return orderByExpiry(rows);
+  }
+
+  /**
+   * §10.4 — a vouch, read out of the same message a comment is read out of.
+   * Returns null for anything that is not one, including a vouch a channel
+   * wrote about its own owner: `keepsVouch` is the unforgeability rule, and a
+   * client that renders a self-vouch has given the whole format away.
+   *
+   * The rule is only as good as `node`, which is `commentChannels()`'s answer
+   * to "whose channel is this" — see there for why a channel two in-scope
+   * cards claim is dropped instead of attributed.
+   */
+  toVouch(message, { channel, node }) {
+    const c = message.content ?? {};
+    const formatted = c['@type'] === 'messageText' ? c.text : c.caption;
+    const parsed = parseVouch(formatted?.text ?? '');
+    if (!parsed || !keepsVouch(parsed, node)) return null;
+    const entry = this.cachedCard(node);
+    return {
+      key: `${message.chat_id}:${message.id}`,
+      id: message.id,
+      chatId: message.chat_id,
+      channel,
+      node,
+      name: entry?.card?.name || entry?.title || `@${node}`,
+      avatar: entry?.photo ?? null,
+      date: message.date,
+      subject: parsed.node,
+      does: parsed.does,
+      body: parsed.body,
+      link: deepLink(channel, message.id),
+      mine: !!this.myNode && sameUsername(node, this.myNode.username),
+    };
+  }
+
+  /**
+   * §10.5 — vouches by subject, newest first. Network-scoped for the same
+   * reason comments are, out of the same pass over the same channels: two
+   * readers looking at the same person see different ones, and the complete
+   * number does not exist for anyone.
+   */
+  vouchIndex() {
+    if (this.vouchIndexCache) return this.vouchIndexCache;
+    const bySubject = new Map();
+    for (const entry of Object.values(this.comments)) {
+      for (const v of entry.vouches ?? []) {
+        // §2.18 — a blocked voucher and a reported vouch leave no residue in a
+        // list or in the figure above it. `keepsComment` is the rule verbatim
+        // (blocked node, hidden target key) and a vouch carries both fields.
+        if (!keepsComment(v, this.safety)) continue;
+        const k = usernameKey(v.subject);
+        if (!bySubject.has(k)) bySubject.set(k, []);
+        bySubject.get(k).push(v);
+      }
+    }
+    for (const list of bySubject.values()) list.sort((a, b) => b.date - a.date || b.id - a.id);
+    this.vouchIndexCache = bySubject;
+    return bySubject;
+  }
+
+  vouchesFor(username, tag = null) {
+    const all = this.vouchIndex().get(usernameKey(username)) ?? [];
+    return tag ? all.filter((v) => v.does === tag) : all;
+  }
+
+  /** tag → count, over the vouches this reader can see (§10.5). Insertion order is newest-first. */
+  vouchTags(username) {
+    const counts = new Map();
+    for (const v of this.vouchesFor(username)) counts.set(v.does, (counts.get(v.does) ?? 0) + 1);
+    return counts;
+  }
+
+  /** Have I already said this about them? A second identical vouch is noise (§2.25). */
+  myVouch(username, tag) {
+    if (!this.myNode) return null;
+    return this.vouchesFor(username, tag).find((v) => v.mine) ?? null;
+  }
+
+  /** §10.4 — one vouch, one tag, one message, in my own comments channel. */
+  async postVouch(subject, does, body) {
+    if (!this.myNode) throw new Error('No node.');
+    this.assertOnline();
+    if (sameUsername(subject, this.myNode.username)) throw new PlainError("You can't vouch for yourself.");
+    const channel = this.myCard?.replies;
+    if (!channel) throw new PlainError('Make your comments channel first.');
+    return this.track('Writing a vouch', async () => {
+      const chat = await this.chatByUsername(channel);
+      const msg = await this.sendAndWait(chat.id, inputText(serialiseVouch(subject, does, body)));
+      const vouch = this.toVouch(msg, { channel, node: this.myNode.username });
+      const k = usernameKey(channel);
+      const entry = this.comments[k] ?? { channel, node: this.myNode.username, comments: [], vouches: [], fetchedAt: 0 };
+      if (!entry.vouches) entry.vouches = [];
+      if (vouch) entry.vouches.unshift(vouch);
+      this.comments[k] = entry;
+      this.storeVersioned(LS.comments, this.comments);
+      this.notify('comments');
+      return vouch;
+    });
+  }
+
+  /** Delete my own vouch: the message in my channel is the vouch (§10.4). */
+  async deleteVouch(vouch) {
+    this.assertOnline();
+    return this.track('Deleting your vouch', async () => {
+      await this.td.send({ '@type': 'deleteMessages', chat_id: vouch.chatId, message_ids: [vouch.id], revoke: true });
+      const entry = this.comments[usernameKey(vouch.channel)];
+      if (entry) {
+        entry.vouches = (entry.vouches ?? []).filter((v) => v.key !== vouch.key);
         this.storeVersioned(LS.comments, this.comments);
       }
       this.notify('comments');

@@ -39,6 +39,9 @@ fun LazyListScope.ExploreItems(vm: AppViewModel, explore: ExploreUi, me: NodeSna
             )
         }
     }
+    // PRODUCT §2.24 — above NEARBY, and only while there is a query. PROTOCOL §10.7.2: this reaches the
+    // cards this client has read, not the network, and the section says so permanently.
+    CapabilityItems(vm, explore, me)
     nodeSection(vm, "Nearby", explore.nearby, me, emptyText = if (explore.loading && !explore.loaded) "Loading…" else "Follow someone and their people appear here.", showMutual = true, keyPrefix = "nearby")
     nodeSection(vm, "Directory", explore.directory, me, emptyText = if (explore.loading && !explore.loaded) "Loading…" else "No nodes found. Be the first: make yours public.", showMutual = false, keyPrefix = "directory")
 }

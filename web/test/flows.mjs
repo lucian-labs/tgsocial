@@ -649,12 +649,123 @@ try {
   await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
   await page.fill('#modal input[type="text"] >> nth=0', 'Newbie Lucian');
   await page.fill('#modal input[type="text"] >> nth=1', 'Fresh node.');
+  // PRODUCT §2.23 — NAME / BIO / LINK unchanged, and the work section under
+  // them. ROLE and WHAT YOU DO are the two text fields after LINK.
+  ok(await page.evaluate(() => /WORK\b/.test(document.getElementById('modal').innerText)
+    && /Optional\. All of this is your own claim/.test(document.getElementById('modal').innerText)
+    && /Up to twelve, separated by commas\./.test(document.getElementById('modal').innerText)
+    && /Which of your feeds is work\./.test(document.getElementById('modal').innerText)), 'you: Edit Card grew a WORK section (§2.23)');
+  await page.fill('#modal input[type="text"] >> nth=2', 'Staff product architect at Lucian Labs');
+  // one tag the §10.2 grammar refuses, so the refusal is measured and not assumed
+  await page.fill('#modal input[type="text"] >> nth=3', 'swift, live/sound, product architecture');
+  await page.click('#modal .tabs button:has-text("Contract")');
+  ok(await page.evaluate(() => /FOR/.test(document.getElementById('modal').innerText)
+    && /Ends \d+ \w+ \d{4}\. After that it stops showing\./.test(document.getElementById('modal').innerText)), 'you: OPEN TO reveals FOR and its derived end date (§2.23)');
+  // five items where the kit draws two or three: `Collab` must not be clipped off the end
+  ok(await page.evaluate(() => {
+    const bar = [...document.querySelectorAll('#modal .tabs')].find((t) => /NOTHING/i.test(t.innerText));
+    return !!bar && bar.scrollWidth <= bar.clientWidth + 1 && /COLLAB/i.test(bar.innerText);
+  }), 'you: OPEN TO fits all five items in the column (§2.23)');
   await snap('you-edit');
   await page.click('#modal button.btn.primary');
-  await waitToast(/Card updated\./);
+  await waitToast(/Card saved\./);
+  // §2.23 — `Dropped "live/sound".` and `Twelve at most.` fire only on Save,
+  // into this modal, so a modal that closes on success shows them for the
+  // length of a network round trip and then destroys them: the card saved, the
+  // toast said so, and the reader never learned a capability they typed is not
+  // on it. The save happened (the toast above) and the sentence is still here.
+  // past the modal's 220 ms close animation, so "still open" is measured rather
+  // than caught mid-teardown
+  await page.waitForTimeout(400);
+  ok(await page.evaluate(() => {
+    const card = document.querySelector('#modal .modal-card');
+    return !!card && /Dropped "live\/sound"\. Letters, numbers, spaces, and \+ # \. - only\./.test(card.innerText);
+  }), '§2.23: the dropped-tag refusal outlives the save that caused it');
+  ok(await page.inputValue('#modal input[type="text"] >> nth=3') === 'swift, product architecture',
+    '§2.23: and WHAT YOU DO is rewritten to what actually went on the card');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
   await page.waitForFunction(() => /Newbie Lucian/.test(document.getElementById('view').innerText), null, { timeout: 5000 });
   ok(true, 'you: Edit Card saves name + bio');
+  // PROTOCOL §10.2 — the work lines land AFTER every §2 key, the bad tag is
+  // dropped and the rest of the line stands, and the intent carries its date
+  const cardText = await page.evaluate(() => window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text);
+  ok(/\nwork\.role: Staff product architect at Lucian Labs\nwork\.does: swift, product architecture\nwork\.open: contract until \d{4}-\d{2}-\d{2}$/.test(cardText),
+    '§10.2: the work lines are appended after §2 keys, malformed tag dropped, rest stands');
+  ok(/^tgsocial v1\nname: Newbie Lucian\nbio: Fresh node\.\npublic: yes\nfeeds: /.test(cardText), '§10.2: §2\'s own order and output are unchanged');
+  // §10.6 — the single most important line in §2.23: a follow rewrites the whole
+  // pinned message, and a serialiser that emitted only the keys it knows would
+  // delete somebody's work card. Follow, then look at the wire.
+  await page.evaluate(() => window.__tgsocial.repo.follow('tgs_carol'));
+  await page.waitForFunction(() => /follows: .*tgs_carol/.test(window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text), null, { timeout: 8000 });
+  ok(await page.evaluate(() => /work\.role: Staff product architect at Lucian Labs/.test(window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text)),
+    '§10.6: a follow writes the work lines back instead of deleting them');
+  await page.evaluate(() => window.__tgsocial.repo.unfollow('tgs_carol'));
+  await page.waitForFunction(() => !/tgs_carol/.test(window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text), null, { timeout: 8000 });
   ok(await page.evaluate(() => /Fresh node\./.test(window.__mock.fulls[2000].description)), 'you: description updated with bio');
+  // §10.3 — intent expires so that it has to be re-asserted, and a writer that
+  // recomputes the horizon on every card write re-asserts it for you: opening
+  // Edit Card to fix a typo would push the end date out, which is
+  // `until 2099-01-01` arriving through the writer instead of the reader. Park
+  // a date that is not one of the three offers, then save without going near
+  // the WORK section.
+  const saveBioOnly = async (bio) => {
+    await page.click('#view button.btn:has-text("Edit Card")');
+    await page.waitForSelector('#modal .modal-card', { timeout: 5000 });
+    await page.fill('#modal input[type="text"] >> nth=1', bio);
+    await page.click('#modal button.btn.primary');
+    await waitToast(/Card saved\./);
+    await page.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+  };
+  const parkOpen = (days) => page.evaluate((d) => {
+    const until = new Date(Date.now() + d * 86400000).toISOString().slice(0, 10);
+    return window.__tgsocial.repo
+      .writeCard((c) => ({ ...c, work: { ...c.work, open: { intent: 'contract', until } } }))
+      .then(() => until);
+  }, days);
+  const wire = () => page.evaluate(() => window.__mock.pinned[window.__tgsocial.repo.myNode.chatId].content.text.text);
+
+  const plus45 = await parkOpen(45);
+  await saveBioOnly('Fresh node.');
+  ok((await wire()).includes(`work.open: contract until ${plus45}`),
+    `§10.3: an unrelated save keeps the end date its owner picked (${plus45})`);
+  // the other end of the same arithmetic: an intent a week past is one §10.3
+  // has already retired, and a save that re-bucketed it would hand it back
+  const past = await parkOpen(-7);
+  await saveBioOnly('Fresh node.');
+  ok((await wire()).includes(`work.open: contract until ${past}`),
+    `§10.3: and a save does not resurrect an intent that has already ended (${past})`);
+
+  // §2.24 — the mode is a preference (PROTOCOL §7). `hasWorkFeeds()` answers
+  // from the card cache alone, so before the first sources walk it cannot tell
+  // "my network has no work in it" from "this client has not looked yet" — and
+  // a client that resets the preference on the second reading destroys it for
+  // an ordinary cold start.
+  await page.evaluate(() => window.__tgsocial.repo.writeCard((c) => ({
+    ...c,
+    work: { role: c.work?.role ?? null, does: c.work?.does ?? [], open: null, feeds: [c.feeds[0]] },
+  })));
+  await page.evaluate(() => { location.hash = '#/feed'; });
+  await page.waitForFunction(() => [...document.querySelectorAll('#view .tabs button')].some((b) => b.textContent === 'Work'), null, { timeout: 20000 });
+  await page.click('#view .tabs button:has-text("Work")');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('tgs.prefs') || '{}').feedMode === 'work', null, { timeout: 8000 });
+  ok(true, '§2.24: the mode is remembered between visits');
+  await page.evaluate(() => {
+    // a cold cache: a first render on a new device, or a cache-version bump
+    window.__tgsocial.repo.cards = {};
+    location.hash = '#/explore';
+  });
+  await page.evaluate(() => { location.hash = '#/feed'; });
+  await page.waitForFunction(() => [...document.querySelectorAll('#view .tabs button')].some((b) => b.textContent === 'Work'), null, { timeout: 20000 });
+  ok(await page.evaluate(() => JSON.parse(localStorage.getItem('tgs.prefs') || '{}').feedMode === 'work'
+    && [...document.querySelectorAll('#view .tabs button')].some((b) => b.textContent === 'Work' && b.classList.contains('active'))),
+    '§2.24: a cold card cache hides the control without destroying the preference');
+  await page.click('#view .tabs button:has-text("All")');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('tgs.prefs') || '{}').feedMode === 'all', null, { timeout: 8000 });
+  await page.evaluate(() => window.__tgsocial.repo.writeCard((c) => ({ ...c, work: { ...c.work, feeds: [] } })));
+  await page.evaluate(() => { location.hash = '#/you'; });
+  await waitText(/LISTING/, 15000);
+
   // listing toggle → unlisted disables announce
   await page.click('#view .listing-row .toggle');
   await page.waitForFunction(() => window.__tgsocial.repo.myCard.public === false, null, { timeout: 5000 });
@@ -3588,6 +3699,151 @@ try {
     await dToast(/Links don't open in the demo\./);
     ok(await d.evaluate(() => document.querySelectorAll('#view .post-preview-site')[0]?.textContent === 'example.com'),
       "§2.22.3: the link preview answers `Links don't open in the demo.` (and its host is example.com, RFC 2606)");
+
+    // ── work (PRODUCT §2.23–§2.26, PROTOCOL §10) ─────────────────────────
+    // The six work fixtures exist so every branch of the work layer paints
+    // without a session. The fifth vouch is a self-vouch and MUST NOT render;
+    // it is checked by counting, because a rule nobody counts is a rule that
+    // quietly stops holding.
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_wren'; });
+    await dWait(/Tide clocks, built one at a time/, 20000);
+    const wrenWork = await d.evaluate(() => {
+      const view = document.getElementById('view');
+      const rows = [...view.querySelectorAll('.work-tag')].map((r) => r.innerText.replace(/\s+/g, ' ').trim());
+      return {
+        text: view.innerText,
+        rows,
+        pill: [...view.querySelectorAll('.work-open .pill')].map((p) => p.textContent)[0] ?? null,
+        until: view.querySelector('.work-open .mono-small')?.textContent ?? null,
+        links: [...view.querySelectorAll('.work-tag')].filter((r) => r.classList.contains('work-tag-link')).length,
+      };
+    });
+    ok(/WORK/.test(wrenWork.text) && wrenWork.pill === 'Open to contract' && /^until \d+ \w+/.test(wrenWork.until ?? ''),
+      '§2.23: the work card is a section of the profile, with the one gold intent pill and its derived date');
+    ok(!/VERIFIED/.test(wrenWork.text.split('FEEDS')[0]),
+      "§10.8: no `Verified` anywhere on a work card — that pill means one checkable thing");
+    ok(wrenWork.rows.some((r) => /^tide clocks Vouched by 1/.test(r)),
+      '§10.4: wren vouching for wren is not a vouch — `tide clocks` counts 1, not 2');
+    ok(wrenWork.rows.some((r) => /^electronics$/.test(r)) && wrenWork.links === 2,
+      '§2.23: a tag with no vouches carries no trailing text and is not a control');
+    ok(/VOUCH FOR WREN/.test(wrenWork.text), '§2.23: ( Vouch for Wren ) — the control, on somebody else\'s profile');
+    await snapPage(d, 'demo-work-card');
+
+    // §2.23 — VOUCHED, NOT CLAIMED: how a person finds out what they are known for
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_juno'; });
+    await dWait(/VOUCHED, NOT CLAIMED/, 20000);
+    const junoWork = await d.evaluate(() => {
+      // document order: a `.work-tag` belongs to the section mark above it
+      const out = { WORK: [], 'VOUCHED, NOT CLAIMED': [] };
+      let mark = null;
+      for (const el of document.querySelectorAll('#view h3, #view .work-tag')) {
+        const t = el.innerText.replace(/\s+/g, ' ').trim();
+        if (el.tagName === 'H3') mark = t;
+        else if (out[mark]) out[mark].push(t);
+      }
+      return { claimed: out.WORK, unclaimed: out['VOUCHED, NOT CLAIMED'] };
+    });
+    ok(junoWork.unclaimed.some((r) => /^kiln repair Vouched by 1/.test(r)) && !junoWork.claimed.some((r) => /kiln repair/.test(r))
+      && junoWork.claimed.some((r) => /^glaze chemistry Vouched by 1/.test(r)) && junoWork.claimed.some((r) => /^ceramics$/.test(r)),
+      `§10.4: \`kiln repair\` is vouched and unclaimed, under its own heading — the subject cannot edit it away [claimed: ${junoWork.claimed.join(' / ')} | unclaimed: ${junoWork.unclaimed.join(' / ')}]`);
+
+    // §2.25 — the Vouches screen, and the date that is a month and a year
+    await d.click('#view .work-tag-link:has-text("glaze chemistry")');
+    await dWait(/VOUCHES · 1/, 20000);
+    const vouchScreen = await d.evaluate(() => ({
+      text: document.getElementById('view').innerText,
+      date: document.querySelector('#view .vouch-date')?.textContent ?? '',
+      h1: document.querySelector('#view h1')?.textContent ?? '',
+    }));
+    ok(vouchScreen.h1 === 'glaze chemistry' && /Juno Bell-Okafor/.test(vouchScreen.text) && /Wren Alderiss/.test(vouchScreen.text),
+      '§2.25: the tag is the h1, the subject is under it, and the voucher is the row');
+    ok(/^[A-Z][a-z]{2} \d{4}$/.test(vouchScreen.date),
+      `§2.25: a vouch is dated by month and year, never relatively (${vouchScreen.date})`);
+    ok(/Vouches from your network — you, who you follow, and theirs\./.test(vouchScreen.text),
+      '§10.5: the scope is on the screen, permanently, not in a footnote');
+    await snapPage(d, 'demo-vouches');
+
+    // §2.25 — the vouch sheet, and §2.15's confirm behind it. The button says
+    // `Report Vouch`, so the modal it opens has to ask about a vouch: copy is
+    // shared across the three builds (§3), and a report that asks about "this
+    // post" is one object wearing two names.
+    await longPressTextOn(d, d.locator('#view .vouch .post-body').first());
+    const vouchSheet = await d.evaluate(() => document.getElementById('modal').innerText.replace(/\s+/g, ' ').trim());
+    // the kit small-caps these labels, so the sheet's text is read case-blind
+    ok(/Report Vouch/i.test(vouchSheet) && !/\bMute\b/i.test(vouchSheet),
+      `§2.25: the vouch sheet reads Report Vouch, and carries no Mute [${vouchSheet.slice(0, 160)}]`);
+    await d.click('#modal button.btn:has-text("Report Vouch")');
+    await d.waitForFunction(() => /REPORT/.test(document.getElementById('modal').innerText), null, { timeout: 5000 });
+    ok(await d.evaluate(() => document.querySelector('#modal h2')?.textContent) === 'Report this vouch.',
+      '§2.15: and the confirm asks about a vouch, not about "this post"');
+    await d.click('#modal button.btn.ghost:has-text("Cancel")');
+    await d.waitForFunction(() => !document.querySelector('#modal .modal-card'), null, { timeout: 5000 });
+
+    // §2.24 — finding people by what they do, and saying how far that reaches
+    await d.evaluate(() => { location.hash = '#/explore'; });
+    await dWait(/NEARBY/, 20000);
+    await d.fill('#view input[type="search"]', 'cera');
+    await d.waitForFunction(() => /WHAT THEY DO/.test(document.getElementById('view').innerText), null, { timeout: 8000 });
+    const cap = await dText();
+    ok(/Juno Bell-Okafor/.test(cap) && /ceramics/.test(cap),
+      '§2.24: a query that is not a username matches `work.does` across the cards this client has read');
+    ok(/Searches the cards you can reach — your network and the directory\. There is no global search\./.test(cap),
+      '§10.7.2: the reach is printed on the screen, permanently, and not in a footnote');
+    await d.fill('#view input[type="search"]', 'astrophysics');
+    await d.waitForFunction(() => /Nobody you can reach lists that\./.test(document.getElementById('view').innerText), null, { timeout: 8000 });
+    ok(true, '§2.24: and it says so when it finds nothing, in its own words');
+    await d.fill('#view input[type="search"]', '');
+
+    // §2.23 — absent entirely on a node with no work keys: the reader's own
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_you'; });
+    await dWait(/Demo Reader/, 20000);
+    ok(!/\bWORK\b/.test(await dText()), '§2.23: no work keys, no work section — no empty state, no "not set up"');
+
+    // §2.24 — the mode, and the thing it leads with
+    await d.evaluate(() => { location.hash = '#/feed'; });
+    await d.waitForSelector('#view article.post', { timeout: 20000 });
+    await d.waitForSelector('#view .feed-mode .tabs', { timeout: 20000 });
+    ok(await d.evaluate(() => [...document.querySelectorAll('#view .feed-mode .tabs button')].map((b) => b.textContent).join(' ') === 'All Work'),
+      '§2.24: a two-item mode on Feed, not a fifth tab');
+    await d.click('#view .feed-mode .tabs button:has-text("Work")');
+    await dWait(/OPEN NOW · 4/, 20000);
+    const openNow = await d.evaluate(() => {
+      const card = document.querySelector('#view .card');
+      const rows = [...card.querySelectorAll('.node-row')];
+      return {
+        names: rows.map((r) => r.querySelector('.row-name').textContent),
+        plusOne: rows.map((r) => [...r.querySelectorAll('.pill')].map((p) => p.textContent).join(',')),
+      };
+    });
+    ok(openNow.names.join(' | ') === 'Hask Oyelaran | Juno Bell-Okafor | Wren Alderiss | Pell Nakagawa',
+      `§2.24: OPEN NOW is ordered by end date ascending — soonest first (${openNow.names.join(', ')})`);
+    ok(/\+1/.test(openNow.plusOne[0]) && !/\+1/.test(openNow.plusOne[1]),
+      '§2.24: +1 reaches OPEN NOW and says so — one hop out, on a card already fetched');
+    ok(/Hiring/.test(openNow.plusOne[3]), '§2.24: the four intent strings, verbatim');
+    await d.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await d.waitForFunction(() => /That's everything\./.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    const workColumn = await d.evaluate(() => [...document.querySelectorAll('#view article.post .post-sub')].map((e) => e.textContent));
+    ok(workColumn.length > 0 && !workColumn.some((t) => /Tidewright|Notes/.test(t)) && workColumn.some((t) => /Kiln log/.test(t)),
+      `§2.24: the work column is the marked feeds and nothing else (${[...new Set(workColumn)].join(', ')})`);
+    await snapPage(d, 'demo-work');
+    await d.click('#view .feed-mode .tabs button:has-text("All")');
+    await d.waitForFunction(() => /Tidewright/.test(document.getElementById('view').innerText), null, { timeout: 20000 });
+    ok(!/OPEN NOW/.test(await dText()), '§2.24: the control is in both modes, so the mode is never a trap');
+
+    // §2.22.3 — a vouch is a write, and the demo refuses it in the one string
+    await d.evaluate(() => { location.hash = '#/node/tgs_demo_wren'; });
+    await dWait(/VOUCH FOR WREN/, 20000);
+    await d.click('#view button.btn:has-text("Vouch for Wren")');
+    await d.waitForSelector('#modal .chip-row', { timeout: 5000 });
+    const vouchModal = await d.evaluate(() => document.getElementById('modal').innerText.replace(/\s+/g, ' ').trim());
+    ok(/Say one thing Wren does\./.test(vouchModal) && /Wren can't edit it or take it down\./.test(vouchModal)
+      && /electronics/.test(vouchModal) && /Something else/.test(vouchModal) && !/WHAT WREN DOES/i.test(vouchModal),
+      `§2.25: the vouch modal names the person, offers their own tags, and hides the custom field until asked [${vouchModal.slice(0, 220)}]`);
+    await snapPage(d, 'demo-vouch-modal');
+    await d.click('#modal .chip:has-text("electronics")');
+    await d.click('#modal button.btn.primary:has-text("Post Vouch")');
+    await dToast(/The demo doesn't write to Telegram\./);
+    ok(true, '§2.22.3: Post Vouch stays tappable and answers with the one refusal');
 
     // §2.22.2 — the filter, checkable by counting (§2.18)
     await d.evaluate(() => { location.hash = '#/thread/demo_tidewright/144'; });

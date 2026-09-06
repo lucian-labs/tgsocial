@@ -45,12 +45,14 @@ import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPToastTone
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.tgsocial.model.NodeSnapshot
+import ca.lucianlabs.tgsocial.model.Vouch
 import ca.lucianlabs.tgsocial.protocol.DeepLink
 import ca.lucianlabs.tgsocial.protocol.PublicLink
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.ProfileUi
 import ca.lucianlabs.tgsocial.ui.Screen
 import ca.lucianlabs.tgsocial.ui.Sheet
+import ca.lucianlabs.tgsocial.ui.WorkSection
 import ca.lucianlabs.tgsocial.ui.columnItem
 import ca.lucianlabs.tgsocial.ui.components.EmptyCard
 import ca.lucianlabs.tgsocial.ui.components.FeedRow
@@ -61,8 +63,14 @@ import ca.lucianlabs.tgsocial.ui.components.openLink
 import ca.lucianlabs.tgsocial.ui.components.publicOrigin
 import ca.lucianlabs.tgsocial.ui.components.rememberTdImage
 
-/** PRODUCT §2.5 — node profile. My own profile is the same screen without the Follow button. */
-fun LazyListScope.ProfileItems(vm: AppViewModel, p: ProfileUi, me: NodeSnapshot?) {
+/**
+ * PRODUCT §2.5 — node profile. My own profile is the same screen without the Follow button.
+ *
+ * [vouches] is collected by the caller rather than inside the work items: it decides whether the `WORK`
+ * section exists at all (§2.23), and that is a question about the list's shape, which a state read inside an
+ * item cannot answer.
+ */
+fun LazyListScope.ProfileItems(vm: AppViewModel, p: ProfileUi, me: NodeSnapshot?, vouches: List<Vouch>) {
     val snap = p.snapshot
     if (p.blocked) {
         // PRODUCT §2.16 — the one exception to "a blocked node renders as nothing at all". This screen is
@@ -157,6 +165,14 @@ fun LazyListScope.ProfileItems(vm: AppViewModel, p: ProfileUi, me: NodeSnapshot?
         }
     }
     val card = snap.card ?: return
+    // PRODUCT §2.23 — the work card sits between the bio/link block and FEEDS, and is absent entirely when
+    // there is nothing in it. No empty section, no "not set up yet": the UI is additive because the protocol
+    // is (PROTOCOL §10). It is present when the node claimed something **or** somebody vouched for them —
+    // §10.4 puts a vouch in the voucher's channel, so it can name a node that has claimed nothing at all,
+    // and that vouch has to land somewhere or it is written, indexed, and shown to nobody.
+    if (WorkSection.present(card.work, vouches)) {
+        WorkCardItems(vm, snap, card.work, vouches, isMe = vm.isMe(snap.username))
+    }
     item(key = "profile-feeds-mark") { Box(Modifier.columnItem().padding(bottom = HPTokens.Space.rowGap)) { HPSectionMark("Feeds") } }
     item(key = "profile-feeds") {
         Box(Modifier.columnItem()) {

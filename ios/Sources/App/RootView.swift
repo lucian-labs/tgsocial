@@ -58,6 +58,9 @@ struct RootView: View {
             case .block(let username): BlockModal(username: username)
             case .deleteNode: DeleteNodeModal()
             case .demo: DemoSheetModal()
+            case .vouch(let node): VouchModal(node: node)
+            case .vouchSheet(let vouch): VouchSheetModal(vouch: vouch)
+            case .deleteVouch(let vouch): DeleteVouchModal(vouch: vouch)
             case nil: EmptyView()
             }
         }
@@ -99,6 +102,7 @@ struct RootView: View {
                             case .manageFeeds: ManageFeedsScreen()
                             case .settings: SettingsScreen()
                             case .thread(let post): ThreadScreen(post: post)
+                            case .vouches(let node, let tag): VouchesScreen(node: node, tag: tag)
                             #if targetEnvironment(macCatalyst)
                             case .connectorSources: ConnectorSourcesScreen()
                             case .connectorCustom: ConnectorCustomScreen()

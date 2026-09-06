@@ -323,67 +323,74 @@ export function commentsPanel(app, post) {
  * on success the composer proceeds. `onOptimistic` receives the temporary
  * comment and returns { settle } to remove it.
  */
+/**
+ * PRODUCT §2.12's `YOUR COMMENTS CHANNEL` card, in one place because two
+ * surfaces open it. A vouch (§2.25, PROTOCOL §10.4) lives in the SAME channel
+ * as a comment, so it gets the same card and not a second one that says nearly
+ * the same thing — same copy, same availability pill, same `( Make Channel )`.
+ * `next` runs once the channel exists.
+ */
+export function openChannelCard(app, m, stage, next) {
+  const suggested = `${app.repo.myNode.username}_r`.slice(0, 32);
+  const { wrap, input } = field('Channel name', { type: 'text', autocomplete: 'off', spellcheck: false, value: suggested, maxlength: 32 });
+  const status = h('div.inline-status');
+  const make = button('Make Channel', { style: 'primary', type: 'submit' });
+  const cancel = button('Cancel', { style: 'ghost', onClick: () => m.close() });
+  const form = h('form', wrap, status, make, cancel);
+  replace(stage,
+    sectionMark('Your comments channel'),
+    h('p.muted', 'Your comments live in a public channel you own. Anyone can read it on Telegram; you can edit or delete anything there.'),
+    form,
+  );
+
+  let timer = null;
+  let seq = 0;
+  const check = () => {
+    const u = normaliseUsername(input.value);
+    replace(status);
+    if (!u) return;
+    const mine = ++seq;
+    timer = setTimeout(async () => {
+      try {
+        const r = await app.repo.checkUsername(u);
+        if (mine !== seq) return;
+        if (r === 'available') replace(status, pill('Available', 'gold'));
+        else if (r === 'invalid') replace(status);
+        else replace(status, pill('Taken', 'bad'));
+      } catch {
+        if (mine === seq) replace(status);
+      }
+    }, 350);
+  };
+  input.addEventListener('input', () => {
+    if (timer) clearTimeout(timer);
+    check();
+  });
+  check();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const u = normaliseUsername(input.value);
+    if (!u) {
+      app.toast('Channel names are 5 to 32 letters, digits, or underscores.', 'bad');
+      return;
+    }
+    make.disabled = true;
+    try {
+      await app.repo.createRepliesChannel(u);
+      next();
+    } catch (err) {
+      app.toast(userMessage(err, "Couldn't make the channel."), 'bad');
+      make.disabled = false;
+    }
+  });
+}
+
 export function openComposer(app, target, onOptimistic, { reply = false } = {}) {
   const stage = h('div');
   const m = modal(stage, { label: 'Comment' });
-  if (!app.repo.myCard?.replies) showChannelCard();
+  if (!app.repo.myCard?.replies) openChannelCard(app, m, stage, showComposer);
   else showComposer();
-
-  function showChannelCard() {
-    const suggested = `${app.repo.myNode.username}_r`.slice(0, 32);
-    const { wrap, input } = field('Channel name', { type: 'text', autocomplete: 'off', spellcheck: false, value: suggested, maxlength: 32 });
-    const status = h('div.inline-status');
-    const make = button('Make Channel', { style: 'primary', type: 'submit' });
-    const cancel = button('Cancel', { style: 'ghost', onClick: () => m.close() });
-    const form = h('form', wrap, status, make, cancel);
-    replace(stage,
-      sectionMark('Your comments channel'),
-      h('p.muted', 'Your comments live in a public channel you own. Anyone can read it on Telegram; you can edit or delete anything there.'),
-      form,
-    );
-
-    let timer = null;
-    let seq = 0;
-    const check = () => {
-      const u = normaliseUsername(input.value);
-      replace(status);
-      if (!u) return;
-      const mine = ++seq;
-      timer = setTimeout(async () => {
-        try {
-          const r = await app.repo.checkUsername(u);
-          if (mine !== seq) return;
-          if (r === 'available') replace(status, pill('Available', 'gold'));
-          else if (r === 'invalid') replace(status);
-          else replace(status, pill('Taken', 'bad'));
-        } catch {
-          if (mine === seq) replace(status);
-        }
-      }, 350);
-    };
-    input.addEventListener('input', () => {
-      if (timer) clearTimeout(timer);
-      check();
-    });
-    check();
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const u = normaliseUsername(input.value);
-      if (!u) {
-        app.toast('Channel names are 5 to 32 letters, digits, or underscores.', 'bad');
-        return;
-      }
-      make.disabled = true;
-      try {
-        await app.repo.createRepliesChannel(u);
-        showComposer();
-      } catch (err) {
-        app.toast(userMessage(err, "Couldn't make the channel."), 'bad');
-        make.disabled = false;
-      }
-    });
-  }
 
   function showComposer() {
     const quoteText = snippet(target.text);

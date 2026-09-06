@@ -6,12 +6,18 @@ struct NodeRow: View {
     @Environment(AppModel.self) private var model
     let node: NodeInfo
     let followedBy: Int?
+    /// Replaces the default `@user · N feeds`. Explore's `WHAT THEY DO` (PRODUCT §2.24) names the
+    /// capabilities that matched here, because the matched tag is what tells that section apart
+    /// from `NEARBY` — a feed count would say nothing about why the row is in the list.
+    let subline: String?
     let isLast: Bool
     let showFollow: Bool
     let onOpen: () -> Void
 
-    init(node: NodeInfo, followedBy: Int? = nil, isLast: Bool, showFollow: Bool = true, onOpen: @escaping () -> Void) {
-        self.node = node; self.followedBy = followedBy; self.isLast = isLast; self.showFollow = showFollow; self.onOpen = onOpen
+    init(node: NodeInfo, followedBy: Int? = nil, subline: String? = nil, isLast: Bool,
+         showFollow: Bool = true, onOpen: @escaping () -> Void) {
+        self.node = node; self.followedBy = followedBy; self.subline = subline
+        self.isLast = isLast; self.showFollow = showFollow; self.onOpen = onOpen
     }
 
     var body: some View {
@@ -21,7 +27,7 @@ struct NodeRow: View {
                     NodeAvatar(photo: node.photo, size: HPTokens.Space.avatarRow, initial: node.initial)
                     VStack(alignment: .leading, spacing: 0) {
                         HPBody(node.displayName, strong: true).lineLimit(1)
-                        HPMonoSmall("@\(node.username) \u{00B7} \(node.feedCount) feed\(node.feedCount == 1 ? "" : "s")").lineLimit(1)
+                        HPMonoSmall(subline ?? "@\(node.username) \u{00B7} \(node.feedCount) feed\(node.feedCount == 1 ? "" : "s")").lineLimit(1)
                         if let n = followedBy, n > 0 {
                             HPSmall("Followed by \(n) of yours")
                         }

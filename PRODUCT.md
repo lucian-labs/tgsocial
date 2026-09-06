@@ -854,7 +854,7 @@ Tapping `Report Post` replaces the sheet with the report confirm:
 
 ```
 REPORT                                       (section mark)
-Report this post.                            (h2)     — `Report this comment.` on a comment
+Report this post.                            (h2)     — `Report this comment.` on a comment, `Report this vouch.` on a vouch (§2.25)
 This sends an email from your mail app to    (muted)
 the person who maintains tgsocial, with a
 link to it. It disappears from this device
@@ -1553,6 +1553,427 @@ session either. Both directions matter: a demo block of `@tgs_demo_crate` must
 not turn up in a real account's list, and a real account's blocks are not
 someone's demo to browse.
 
+### 2.23 Work — the card, and where it is edited
+
+`PROTOCOL §10` adds four optional keys to the card. This is the surface they
+get, and the shape of that surface is the same argument the protocol section
+makes: **work is a layer on the network, not a second network.** There is no
+fifth tab, no separate sign-in, no parallel profile. A person who never fills a
+work key never sees any of it, and their profile looks exactly as it does
+today — the UI is additive because the protocol is.
+
+The word is **work**. Never "professional", never "career", never "job" as a
+noun for the surface. The product does not have a second name.
+
+#### The work card on a profile
+
+On the node profile (§2.5), between the bio/link block and `FEEDS`. **Absent
+entirely** when the node has no work keys and no vouches this reader can see —
+no empty section, no "not set up yet", nothing.
+
+The vouch half of that condition is not a hedge, it is `PROTOCOL §10.4`: a
+vouch is the voucher's sentence, written in the voucher's own channel, and the
+subject cannot edit it — **including by editing their own card**. Gate the
+section on `work.` keys alone and clearing your card deletes what somebody else
+wrote about you from every screen, which is the one thing §10.4 exists to
+prevent; worse, the person it is about is the one who cannot see it, and
+`VOUCHED, NOT CLAIMED` is exactly the case that reader is owed. So a node with
+no work keys and at least one vouch in scope renders `WORK`, then
+`VOUCHED, NOT CLAIMED` and its tags, and nothing else — no role line, no intent
+pill, no claimed-tag card, because the node claimed nothing.
+
+```
+WORK                                          (section mark)
+Staff product architect at Lucian Labs        (body)
+[ Open to contract ]  until 1 Dec             (HPPill gold, then HPMonoSmall faint)
+
+┌ card ──────────────────────────────────────┐
+│ live sound                Vouched by 2  ›  │  HPListItem: tag body, count HPSmall muted
+│ swift                                      │  a tag with none carries no trailing text
+│ product architecture      Vouched by 1  ›  │
+└────────────────────────────────────────────┘
+
+VOUCHED, NOT CLAIMED                          (section mark; only when non-empty)
+┌ card ──────────────────────────────────────┐
+│ front of house            Vouched by 1  ›  │
+└────────────────────────────────────────────┘
+
+( Vouch for Ana )                             (btn neutral sm)
+```
+
+- The role line is **body text, undecorated**. No pill, no tick, no badge. It
+  is a self-claim exactly like the bio two lines above it, and it must not
+  borrow the visual language of the `Verified` pill (`PROTOCOL §10.8`).
+- The intent pill is the one gold thing in this card and appears only when
+  `work.open` is current (`PROTOCOL §10.3`). Its four strings, verbatim:
+  `Open to work` · `Open to contract` · `Hiring` · `Open to collaborate`.
+  Beside it, mono faint: `until 1 Dec` — day and month, derived from the date,
+  the year appended only when it is not this one. Expired or over the horizon:
+  the pill and the date are simply not drawn.
+- A tag row with vouches taps through to the Vouches screen (§2.25). A row with
+  none is not a control: no chevron, no hit target, no press state.
+- `VOUCHED, NOT CLAIMED` holds tags nobody claimed but someone vouched
+  (`PROTOCOL §10.4`). It is how a person finds out what they are known for.
+- `Vouch for <name>` is absent on my own profile and on a blocked node's.
+
+Empty states inside a present work card:
+
+- Tags but no vouches anywhere, under the tag card, muted:
+  `No vouches from your network.`
+- **My own work card, no vouches**, under the tag card, muted then faint:
+  ```
+  No vouches from your network yet.
+  Someone may have vouched for you outside it. You'd only see it if you can
+  reach them.
+  ```
+  That second line is uncomfortable and it is true (`PROTOCOL §10.5`). A
+  client that omits it implies a completeness it does not have.
+
+#### Editing: the Edit Card modal grows a section
+
+`( Edit Card )` on You (§2.8). The existing `NAME` / `BIO` / `LINK` fields are
+unchanged; below them:
+
+```
+WORK                                          (section mark)
+Optional. All of this is your own claim, the   (muted)
+same as your bio. Nobody checks it and
+nothing here is verified.
+
+ROLE                                          (field label)
+[ Staff product architect at Lucian Labs ]    (input; hard cap 80)
+80 / 80                                       (faint, right, from 60 characters on)
+
+WHAT YOU DO                                   (field label)
+[ swift, product architecture, live sound ]   (input)
+Up to twelve, separated by commas.            (faint)
+
+OPEN TO                                       (field label)
+[ Nothing  Work  Contract  Hiring  Collab ]   (.tabs, five items)
+FOR                                           (field label; absent while Nothing)
+[ 30 days  60 days  90 days ]                 (.tabs, three items)
+Ends 5 Dec 2026. After that it stops showing.  (faint; the date derived, never typed)
+
+WORK FEEDS                                    (section mark)
+Which of your feeds is work. The rest stay     (muted)
+where they are.
+┌ card: one row per feed on my card, each with an HPToggle ┐
+You have no feeds yet.                        (empty, muted; → §2.2's feeds card)
+
+( Save )                                      (btn primary)
+```
+
+Refusals and toasts, verbatim:
+
+- Pasting a role over 80 characters: the field takes the first 80, faint under
+  it reads `Trimmed to 80.`
+- More than twelve tags on Save: `Twelve at most. The rest were dropped.`
+- A tag the grammar refuses (`PROTOCOL §10.2`), on Save:
+  `Dropped "live/sound". Letters, numbers, spaces, and + # . - only.`
+- The card would pass 4096 characters: the existing refusal, unchanged, plus
+  one muted line under it:
+  ```
+  Card is full.
+  Shorten your bio or drop a tag — your card is one Telegram message.
+  ```
+- Offline: `You're offline.` Save is not attempted.
+- Success: `Card saved.`
+
+A client that writes the card for any other reason — a follow, a feed change —
+writes the work lines back with it (`PROTOCOL §10.6`). This is not visible
+anywhere and it is the single most important line in this section.
+
+#### The reminder, which is the only nag
+
+`work.open` expires on its own, and a person who forgets is invisible without
+being told. On You (§2.8), above `LISTING`, when my own intent has expired or
+expires within seven days:
+
+```
+Your Open to contract ends in 3 days.   ( Edit Card )    (muted row, btn ghost sm)
+Your Open to contract has ended.        ( Edit Card )
+```
+
+One row, no badge, no red, dismissible by acting or by ignoring it. It never
+appears on anyone else's screen and there is no notification.
+
+### 2.24 The work feed
+
+Elijah's ask was "a custom feed, but with different features — more forward to
+the thing, but it's still effectively a social thing." Both halves are product
+decisions and both are made here.
+
+#### It is a mode on Feed, not a tab
+
+Feed (§2.3) grows a two-item `.tabs` control, sticky under the topbar, full
+column width less the side padding, `bg2` track, **no shadow** — the floating
+tab bar (§1) is the raised pill on this screen and there is only one of those:
+
+```
+[ All   Work ]
+```
+
+Why a mode and not a fifth tab: a tab would say there are two networks, and
+there is one. The same nodes, the same follows, the same cards, read two ways —
+which is the whole claim `PROTOCOL §10` is built to prove. A tab also implies a
+place to go and be seen; a mode implies a way to look. The second is what this
+is.
+
+**The control appears only when at least one node in my `follows:`, or I,
+carry a `work.feeds` entry.** A reader whose network has no work in it sees
+Feed exactly as it is today. Same rule as the profile: the surface is additive
+or it is not additive.
+
+The mode is remembered (`PROTOCOL §7`, UI preferences) and the control is
+visible in both modes, so it is never a state someone is stuck in.
+
+#### What Work mode shows
+
+Two things, in this order, and the first is the reason the mode exists.
+
+**1. Open now.** Current intent (`PROTOCOL §10.3`) from me, my follows, **and
+my +1**:
+
+```
+OPEN NOW · 3                                  (section mark, serif count)
+┌ card ──────────────────────────────────────┐
+│ (avatar) Ana Iliovic     [ Open to work ] › │  NodeRow shape; pill gold
+│          until 1 Dec · live sound, swift    │  mono faint · muted, first three tags
+│ (avatar) Bly Toussaint   [ Hiring ]  +1   › │  neutral +1 pill, as §2.12 uses
+│          until 12 Nov · night sky           │
+└────────────────────────────────────────────┘
+```
+
+Ordered by end date **ascending** — soonest first — ties broken by username
+ascending. Specified because three platforms otherwise produce three orders,
+and because "what expires first" is the only ranking this app has ever needed:
+it is derived from the data, not scored.
+
++1 is included here and nowhere else in this mode. Intent is a small structured
+line on a card the client already fetched for Explore and Graph (§2.4, §2.7), so
+reaching one hop further costs nothing; walking +1's feed history would cost a
+fetch per channel. A hiring notice one hop out is exactly the case worth the
+extra hop, and a post one hop out is not.
+
+Empty: `Nobody in your network is open right now.` And when I follow fewer than
+five nodes, one more faint line under it:
+`Your network is small. This reads the people you follow, and theirs.`
+
+**2. The work column.** Post cards (§2.3, unchanged — same card, same
+attribution, same long-press sheet) from the `work.feeds` of me and my
+follows, merged newest-first exactly as §4.8 merges. Not +1.
+
+Suppressed: every post from a feed nobody marked as work. That is the entire
+filter. There is no scoring, no promotion, no "relevant to you".
+
+Empty: h2 `No work posts yet.` muted `Mark one of your feeds as work, or follow
+someone who has.` `( Edit Card )` btn accent.
+
+#### A work post is an ordinary post, and this was the decision
+
+Two ways to build this, and the cheap one is also the right one.
+
+**Marking posts** would need a new post format — a magic first line the way
+`re:` is one — which puts protocol scaffolding in front of every plain-Telegram
+reader of that channel, asks the author to classify each post as they write it,
+cannot be applied to the six years of posts already in the channel, and cannot
+be corrected later without editing every message.
+
+**Marking feeds** costs one card line, is reversible in a toggle, applies
+backwards and forwards at once, and needs no post format at all — which is why
+a client that has never heard of `PROTOCOL §10` still shows every one of these
+posts, in All, correctly attributed, today. It also runs with the grain of the
+substrate: Telegram users already sort their output by channel, because a
+channel is the thing you subscribe to.
+
+The cost, stated: a person who posts work and life in one channel gets
+all-or-nothing. The answer is a second channel, which on Telegram is free and
+ordinary, and which the app already knows how to list (§2.2). We take that
+cost.
+
+#### Finding people by what they do
+
+Explore (§2.4) keeps its one search field. A query that is not a username now
+also matches `work.does` across every card the client has read — my follows, my
++1, and the directory (`PROTOCOL §10.7`). A new section, above `NEARBY`, shown
+only when the query matched something:
+
+```
+WHAT THEY DO                                  (section mark)
+(avatar) Ana Iliovic             ( Follow )
+         @tgs_ana · live sound · Followed by 3 of yours
+Searches the cards you can reach — your        (faint, always, under the section)
+network and the directory. There is no
+global search.
+```
+
+That last line is permanent, not an empty state. It is the honest description
+of `PROTOCOL §10.7` and it is on the screen rather than in a footnote, because
+a search box that stays quiet about its reach is a search box that lies about
+it.
+
+Empty: `Nobody you can reach lists that.`
+
+The safety filter (§2.18) applies to every surface in this section without
+exception: a blocked node is absent from `OPEN NOW`, from `WHAT THEY DO`, and
+from the work column, and leaves no gap and no residue in a count.
+
+### 2.25 Vouching
+
+A vouch is one person saying one thing another person can do
+(`PROTOCOL §10.4`). It lives in the voucher's comments channel, so the subject
+cannot write it, edit it, or take it down — which is the only reason it is
+worth anything.
+
+#### Writing one
+
+`( Vouch for Ana )` on the work card (§2.23) opens a modal:
+
+```
+VOUCH                                         (section mark)
+Say one thing Ana does.                       (h2)
+This goes in your comments channel, under      (muted)
+your name. Ana can't edit it or take it down.
+
+WHAT ANA DOES                                 (field label)
+[ live sound ] [ swift ] [ product architecture ]   (pills, single-select, 40pt targets)
+[ Something else ]                            (pill; selecting it reveals the input below)
+[ front of house              ]               (input, hidden until Something else)
+
+[ textarea, 4 rows, placeholder "Why." ]
+
+( Post Vouch )   ( Cancel )                   (btn-row: primary + ghost)
+People who follow you will see it, and the     (faint)
+people who follow them.
+```
+
+- The field label uses the subject's name, not a pronoun the app does not know:
+  `WHAT ANA DOES`. It is set from the node's display name, uppercased by the
+  section-mark style, and falls back to `WHAT THEY DO` when the card has no
+  `name`.
+- The chips are the subject's own `work.does`, in card order, plus
+  `Something else`. A node with no `work.does` shows only `Something else`,
+  with the input already revealed — you can vouch for someone who has claimed
+  nothing.
+- The body is optional. `Why.` is the placeholder and the whole of the prompt.
+
+Refusals, verbatim:
+
+- Nothing selected: `Post Vouch` is disabled, faint under the row:
+  `Pick one thing.`
+- A custom tag the grammar refuses: inline faint under the input,
+  `Letters, numbers, spaces, and + # . - only.`; the button stays disabled.
+- Already vouched them for that thing: the chip reads `Vouched` in the ghost
+  style and is not selectable, faint under the row:
+  `You already vouched Ana for live sound.` A second identical vouch is noise,
+  and the count it would inflate is not a count anyone should trust anyway.
+- On my own profile the control does not exist. Reached by deep link anyway:
+  toast `You can't vouch for yourself.` and the modal does not open.
+- **No comments channel yet**: the modal first shows §2.12's
+  `YOUR COMMENTS CHANNEL` card, verbatim and unchanged — same copy, same
+  availability pill, same `( Make Channel )`. It is the same channel
+  (`PROTOCOL §10.4`), so it is the same card, not a second one that says
+  nearly the same thing.
+- Offline: `You're offline.`
+
+Success: toast `Vouched.` The vouch is optimistic in the subject's work card
+the same way a comment is (§2.12), settling or rolling back.
+
+#### Reading them
+
+Tapping a tag row pushes the **Vouches screen**:
+
+```
+‹ Back                                          [Synced]
+
+live sound                                    (h1 — the tag, as written)
+Ana Iliovic                                   (mono muted — who it is about)
+
+VOUCHES · 2                                   (section mark, serif count)
+┌ card ──────────────────────────────────────┐
+│ (avatar) Bob Vance              Mar 2026   │  name body → profile; date mono faint
+│ Ran front of house for two years. Never    │  body; empty bodies render the row alone
+│ missed a cue.                              │
+│                                            │
+│ (avatar) Wren Alderiss     +1   Aug 2024   │  neutral +1 pill for nodes I don't follow
+│ Ran sound for the ferry sessions.          │
+└────────────────────────────────────────────┘
+Vouches from your network — you, who you       (faint, under the card, always)
+follow, and theirs.
+```
+
+**The date is a month and a year, not a relative time.** Everywhere else in
+this app time is relative (§2.3) because a post's recency is what matters. A
+vouch is the opposite: `2y ago` buries exactly the thing a reader is weighing,
+which is whether this was last year or half a career ago. Ordered newest first.
+
+Long-press a vouch (web: long-press or right-click) opens the **vouch sheet** —
+§2.12's comment sheet with two strings changed: `Feed` names the voucher's
+comments channel, and `SAFETY` reads `Report Vouch` and `Block @tgs_bob`. No
+`Mute`. On my own vouch the sheet carries `Delete` instead of `Report Vouch`,
+with the confirm modal `Delete this vouch?` `Report Vouch` opens §2.15's report
+confirm unchanged, with its h2 reading `Report this vouch.` — a button that
+names the thing and a modal that asks about "this post" is two names for one
+object.
+
+**A vouch someone wrote about me, that I do not want.** It is in their channel
+and I cannot reach it. The sheet, on my own work card, carries one muted line
+above the `SAFETY` block:
+
+```
+You can't remove a vouch someone wrote. Report it or block them.
+```
+
+This is not a new exposure: §6 already lets anyone point at my post from their
+own channel, and §2.15–§2.17 are already the answer — report it, hide it here,
+block the node. `PROTOCOL §10.8` is why the format has no negative vouch to
+make this worse.
+
+Empty (reachable only when the last vouch was deleted between renders):
+`No vouches from your network.` muted `You see vouches written by people you
+can reach — you, who you follow, and theirs.`
+
+### 2.26 Work in the demo
+
+§2.22's fixture world gains work data, so a reviewer who never signs in still
+sees every branch of §2.23–§2.25. Six of the fifteen nodes carry it; the
+reader, `@tgs_demo_you`, carries **none** — the first thing the demo shows about
+work is the empty state on your own card.
+
+| Node | `work.role` | `work.does` | `work.open` | `work.feeds` |
+| --- | --- | --- | --- | --- |
+| `@tgs_demo_wren` | Tide clocks, built one at a time | electronics, tide clocks, bad solder | `contract` +45 d | `@demo_wren_bench` |
+| `@tgs_demo_mox` | Records rain for a living | field recording, sound design | — | `@demo_slow_radio` |
+| `@tgs_demo_juno` | Production potter, small kiln | ceramics, glaze chemistry | `work` +20 d | `@demo_kiln_log` |
+| `@tgs_demo_pell` | Letterpress, one press | letterpress, typesetting | `hiring` +60 d | `@demo_press_run` |
+| `@tgs_demo_hask` | Fixes the ferry radio | marine radio, antennas | `collab` +8 d | `@demo_ferry_net` |
+| `@tgs_demo_ilka` | Frame builder | frame building, brazing | — | `@demo_frame_jig` |
+
+`+N d` is **N days after the demo is entered, computed at entry** — never a
+literal date in a fixture file. A hardcoded date rots into an expired intent and
+then §2.24's `OPEN NOW` is permanently empty, which is a fixture that tests
+nothing. This is the same derive-never-recall rule §2.3's relative times follow.
+
+`OPEN NOW` therefore paints, in order: Hask (+8, a +1 node — the pill is
+exercised), Juno (+20), Wren (+45), Pell (+60, `Hiring`).
+
+Five vouch fixtures, and the fifth is the point:
+
+| In | About | `does:` | Body |
+| --- | --- | --- | --- |
+| `@tgs_demo_wren_r` | `@tgs_demo_juno` | glaze chemistry | Fired my clock faces for a year. Nothing cracked. |
+| `@tgs_demo_mox_r` | `@tgs_demo_wren` | tide clocks | Built the clock in my studio. Still right. |
+| `@tgs_demo_juno_r` | `@tgs_demo_wren` | bad solder | I've seen worse. Not much worse. |
+| `@tgs_demo_pell_r` | `@tgs_demo_juno` | kiln repair | Got my kiln lit the night before a show. |
+| `@tgs_demo_wren_r` | `@tgs_demo_wren` | tide clocks | Nobody does this better. |
+
+Which exercises, in one screen each: a claimed tag with a vouch, a claimed tag
+with none (`swift`-shaped rows on Juno and Wren), `VOUCHED, NOT CLAIMED`
+(`kiln repair`, which Juno does not claim), and — the fifth row — a **self-vouch
+that MUST NOT render anywhere** (`PROTOCOL §10.4`). It is in the fixtures
+precisely so that a client which forgot that rule fails visibly, on all three
+platforms, without anyone writing a test for it.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -1562,9 +1983,19 @@ meant to feel (follow counts in section marks) are serif.
 
 Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`,
-`demo` (§2.22 — never "sandbox", "sample", "test mode", "fake").
+`demo` (§2.22 — never "sandbox", "sample", "test mode", "fake"),
+`work`, `work card`, `work feed`, `vouch`, `open to` (§2.23–§2.25).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
+
+And never, on the work surfaces: "professional", "career", "job", "skill",
+"endorse", "endorsement", "recommendation", "recruiter", "résumé", "CV",
+"connection". Two reasons, and both are the same reason. The borrowed words
+carry a second product's promises — a directory, a verifier, a score — and this
+one has none of them (`PROTOCOL §10.8`). And naming it "the professional
+network" would name a second network, which is exactly what §2.24 decided it is
+not. `Verified` is reserved for the feed backlink (`PROTOCOL §3`) and appears
+nowhere on a work card.
 
 ## 4. Behaviour rules
 

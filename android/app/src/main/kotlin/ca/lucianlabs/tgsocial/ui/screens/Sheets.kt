@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -19,13 +20,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ca.lucianlabs.housepour.HPBody
 import ca.lucianlabs.housepour.HPButton
 import ca.lucianlabs.housepour.HPButtonRow
 import ca.lucianlabs.housepour.HPButtonSize
 import ca.lucianlabs.housepour.HPButtonStyle
+import ca.lucianlabs.housepour.HPCard
 import ca.lucianlabs.housepour.HPFieldKind
+import ca.lucianlabs.housepour.HPFieldLabel
 import ca.lucianlabs.housepour.HPH2
 import ca.lucianlabs.housepour.HPHitTarget
 import ca.lucianlabs.housepour.HPListItem
@@ -37,6 +41,7 @@ import ca.lucianlabs.housepour.HPSectionMark
 import ca.lucianlabs.housepour.HPTabs
 import ca.lucianlabs.housepour.HPText
 import ca.lucianlabs.housepour.HPTextField
+import ca.lucianlabs.housepour.HPToggle
 import ca.lucianlabs.housepour.HPTokens
 import ca.lucianlabs.tgsocial.demo.DemoCopy
 import ca.lucianlabs.tgsocial.model.Comment
@@ -46,6 +51,8 @@ import ca.lucianlabs.tgsocial.protocol.Format
 import ca.lucianlabs.tgsocial.protocol.ReplyTarget
 import ca.lucianlabs.tgsocial.protocol.ReportSubject
 import ca.lucianlabs.tgsocial.protocol.SafetyFilter
+import ca.lucianlabs.tgsocial.protocol.Username
+import ca.lucianlabs.tgsocial.protocol.WorkFormat
 import ca.lucianlabs.tgsocial.ui.AppViewModel
 import ca.lucianlabs.tgsocial.ui.Availability
 import ca.lucianlabs.tgsocial.ui.Sheet
@@ -83,15 +90,73 @@ fun ColumnScope.ComposeSheet(vm: AppViewModel) {
     )
 }
 
-/** PRODUCT §2.8 — Edit Card modal: NAME, BIO, LINK, Save. */
+/**
+ * PRODUCT §2.8 — Edit Card modal: NAME, BIO, LINK, Save. §2.23 grows the `WORK` section below them, and the
+ * three existing fields are untouched — the modal is additive the same way the card is (PROTOCOL §10).
+ */
 @Composable
 fun ColumnScope.EditCardSheet(vm: AppViewModel) {
     val e by vm.editCard.collectAsStateWithLifecycle()
+    val me by vm.me.collectAsStateWithLifecycle()
     HPH2("Edit card")
     Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPTextField(e.name, { vm.setEditCard(name = it) }, label = "Name", kind = HPFieldKind.Text)
     HPTextField(e.bio, { vm.setEditCard(bio = it) }, label = "Bio", kind = HPFieldKind.Text)
     HPTextField(e.link, { vm.setEditCard(link = it) }, label = "Link", kind = HPFieldKind.Url, placeholder = "https://")
+
+    HPSectionMark("Work")
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    // The one sentence that has to be here: nothing on this card is checked by anybody (PROTOCOL §10.8).
+    HPMuted("Optional. All of this is your own claim, the same as your bio. Nobody checks it and nothing here is verified.")
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    HPTextField(e.role, vm::setEditRole, label = "Role", kind = HPFieldKind.Text, gapBelow = false)
+    // The counter appears from 60 characters on, so it is a warning rather than a permanent nag.
+    if (e.role.length >= 60) {
+        HPText("${e.role.length} / ${WorkFormat.ROLE_MAX}", HPTokens.Type.small, HPTokens.Colors.faint, maxLines = 1)
+    }
+    if (e.roleTrimmed) HPText("Trimmed to ${WorkFormat.ROLE_MAX}.", HPTokens.Type.small, HPTokens.Colors.faint, maxLines = 1)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPTextField(e.does, vm::setEditDoes, label = "What you do", kind = HPFieldKind.Text, gapBelow = false)
+    HPText("Up to twelve, separated by commas.", HPTokens.Type.small, HPTokens.Colors.faint)
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPFieldLabel("Open to")
+    // `Nothing` is index 0 and is the state of every card written before PROTOCOL §10 existed.
+    val intents = listOf<String?>(null) + WorkFormat.INTENTS
+    HPTabs(
+        items = listOf("Nothing", "Work", "Contract", "Hiring", "Collab"),
+        selected = intents.indexOf(e.openIntent).coerceAtLeast(0),
+        onSelect = { vm.setEditOpenIntent(intents[it]) },
+    )
+    if (e.openIntent != null) {
+        Spacer(Modifier.height(HPTokens.Space.rowGap))
+        HPFieldLabel("For")
+        HPTabs(
+            items = WorkFormat.HORIZONS.map { "$it days" },
+            selected = WorkFormat.HORIZONS.indexOf(e.openDays).coerceAtLeast(0),
+            onSelect = { vm.setEditOpenDays(WorkFormat.HORIZONS[it]) },
+        )
+        // PROTOCOL §10.3 — the end date is derived from the horizon, never typed, and says what expiry means.
+        WorkFormat.endsLabel(e.endsOn)?.let { HPText(it, HPTokens.Type.small, HPTokens.Colors.faint) }
+    }
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
+    HPSectionMark("Work feeds")
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    HPMuted("Which of your feeds is work. The rest stay where they are.")
+    Spacer(Modifier.height(HPTokens.Space.rowGap))
+    val feeds = me?.card?.feeds.orEmpty()
+    if (feeds.isEmpty()) {
+        HPMuted("You have no feeds yet.")
+    } else {
+        HPCard(padding = PaddingValues(horizontal = HPTokens.Space.cardPad, vertical = 0.dp)) {
+            feeds.forEachIndexed { i, f ->
+                val on = Username.key(f) in e.workFeeds
+                HPListItem(isLast = i == feeds.lastIndex, trailing = { HPToggle(on, { vm.toggleWorkFeed(f, it) }, label = "@$f is work") }) {
+                    HPBody("@$f", Modifier.weight(1f), maxLines = 1)
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(HPTokens.Space.cardGap))
     HPButtonRow(
         first = { m -> HPButton("Save", vm::saveEditCard, modifier = m, style = HPButtonStyle.PRIMARY, enabled = !e.saving) },
         second = { m -> HPButton("Cancel", vm::closeSheet, modifier = m, style = HPButtonStyle.GHOST) },

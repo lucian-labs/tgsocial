@@ -70,6 +70,8 @@ final class LocalStore {
     // Keys
     static let myNode = "myNode"
     static let myCard = "myCard"
+    /// PROTOCOL §10.2: my work card, cached beside my card so §10.6's write-back survives a relaunch.
+    static let myWork = "myWork"
     static let myTitle = "myTitle"
     static let nodeCache = "nodes"
     static let feedCache = "feeds"
@@ -77,6 +79,10 @@ final class LocalStore {
     static let setupSkipped = "setupSkipped"
     static let feedCandidates = "candidates"
     static let commentIndex = "comments"
+    /// PROTOCOL §10.4: built by the same scan as the comment index, stored beside it.
+    static let vouchIndex = "vouches"
+    /// PROTOCOL §7: a UI preference, not a cache. Feed's All / Work mode (PRODUCT §2.24).
+    static let feedMode = "feedMode"
     /// PROTOCOL §7.1: stored apart from every cache and never versioned with them — a cache bump
     /// discards caches and must never discard a block list.
     static let moderation = "moderation"

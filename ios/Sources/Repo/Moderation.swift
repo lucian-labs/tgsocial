@@ -129,6 +129,13 @@ extension SafetyLists {
         return kept
     }
 
+    /// Vouches (PRODUCT §2.25). No transitive pass: a vouch points at a node, never at another
+    /// vouch, so there is no chain for a dropped one to orphan.
+    func filtered(vouches: [Vouch]) -> [Vouch] {
+        guard !blocked.isEmpty || !hidden.isEmpty else { return vouches }
+        return vouches.filter { !isBlocked($0.ownerUsername) && !isHidden(key: Moderation.key(vouch: $0)) }
+    }
+
     /// Explore rows, both graph lists, the +1 walk (PRODUCT §2.16).
     func filtered(nodes: [NodeInfo]) -> [NodeInfo] {
         blocked.isEmpty ? nodes : nodes.filter { !isBlocked($0.username) }
@@ -191,6 +198,10 @@ enum Moderation {
 
     static func key(comment: Comment) -> String {
         key(channel: comment.channelUsername, serverMessageId: DeepLink.serverMessageId(comment.messageId))
+    }
+
+    static func key(vouch: Vouch) -> String {
+        key(channel: vouch.channelUsername, serverMessageId: DeepLink.serverMessageId(vouch.messageId))
     }
 
     /// The date Settings shows on a hidden row (PRODUCT §2.20: `Spam · reported 2026-09-04`). The
