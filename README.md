@@ -1,9 +1,11 @@
 # tgsocial
 
-A social network with no server: the graph lives on Telegram, and tgsocial is
-the protocol for reading and writing it. Sign in with the Telegram you already
-have, pick which of your channels post as you, follow people, and read
-everyone's feeds in one chronological column.
+Make your own social media client, and they all talk to each other.
+
+The graph lives on Telegram, and tgsocial is the protocol for reading and
+writing it — so there is no server to run and no one to ask. Sign in with the
+Telegram you already have, pick which of your channels post as you, follow
+people, and read everyone's feeds in one chronological column.
 
 Your **node** is a public channel, its pinned message is your **card** (name,
 feeds, follows), and following someone is a line on that card. Every one of
