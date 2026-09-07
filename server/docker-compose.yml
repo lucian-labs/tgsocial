@@ -1,0 +1,22 @@
+# server/docker-compose.yml — one container, nothing kept.
+#
+#   cp ../web/config.json.example ../web/config.json   # your own api_id (docs/HOSTING.md §3)
+#   docker compose up                                  # http://localhost:8080
+#
+# There are no persistent volumes because there is nothing to persist: the
+# bundle is read from ../web, the preview cache lives in RAM for sixty
+# seconds, and the container can be deleted without anyone losing anything.
+
+services:
+  tgsocial:
+    image: nginx:alpine
+    ports:
+      - "${PORT:-8080}:8080"        # PORT=9000 docker compose up
+    volumes:
+      # the bundle, read-only: nginx serves it and never writes to it
+      - ../web:/var/www/tgsocial:ro
+      # the complete nginx.conf beside this file (it includes ../web/nginx-public.conf)
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    tmpfs:
+      # the 60-second preview cache, in memory, gone with the container
+      - /var/cache/nginx/tgpreview

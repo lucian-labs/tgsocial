@@ -27,14 +27,20 @@ form, with the reasoning, is `web/nginx-public.conf`:
 
 ```
 location /tg/s/ {
+    if ($request_method !~ "^(GET|HEAD)$") { return 405; }
     if ($args !~ "^(before=[0-9]+)?$") { return 404; }
 
     proxy_pass https://t.me/s/;
     proxy_set_header Host t.me;
     proxy_set_header User-Agent "tgsocial/1.0 (+https://github.com/lucian-labs/tgsocial)";
+    proxy_set_header Cookie "";
+    proxy_set_header Referer "";
+    proxy_set_header Authorization "";
 
     proxy_ignore_headers Set-Cookie Cache-Control Expires;
     proxy_hide_header Set-Cookie;
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header Location;
 
     proxy_cache tgpreview;
     proxy_cache_valid 200 60s;          # a page is a lens, not an archive
@@ -55,12 +61,25 @@ location /tg/s/ {
 
 Rules this proxy obeys, and why:
 
-- **Only `/s/`, only a bare channel.** It proxies the preview path and nothing
-  else — not `t.me/` join pages, not the API. A path that is not a bare
-  channel is refused by the regex location beside this one; a query string
-  that is not `?before=<digits>` is refused by the `if` above, because nginx
-  matches locations against the URI with the arguments stripped and a location
-  regex therefore cannot see the query at all.
+- **Only `/s/`, only a bare channel, only a read.** It proxies the preview
+  path and nothing else — not `t.me/` join pages, not the API. A path that is
+  not a bare channel is refused by the regex location beside this one; a query
+  string that is not `?before=<digits>` is refused by the second `if` above,
+  because nginx matches locations against the URI with the arguments stripped
+  and a location regex therefore cannot see the query at all. Any method but
+  `GET` (and `HEAD`) is a 405, never forwarded.
+- **Nothing about the reader goes up.** Telegram sees your address and your
+  User-Agent, never which reader on which page: `Cookie`, `Referer` and
+  `Authorization` are emptied before the request leaves, and nginx adds no
+  `X-Forwarded-*` or `Via` of its own. A proxy that does — Caddy, Traefik,
+  HAProxy, all by default — has to be told not to; `server/Caddyfile` shows
+  where.
+- **Nothing of t.me's policy comes down.** `Strict-Transport-Security` is
+  Telegram's HSTS for `t.me`; passed through under your domain it enrols the
+  domain for a year. `Location` on the 302 t.me sends for a name that is not a
+  channel points at `t.me` itself, and the page fetches with
+  `redirect: 'follow'`, so it is hidden and the 302 stays a dead end — the
+  empty card, not a trip to Telegram from the reader's own browser.
 - **The body is data, not a document.** What comes back is Telegram's HTML,
   scripts and all. The parser reads it as a *string*, so it is relabelled
   `text/plain` and sandboxed on the way out: opening `/tg/s/<channel>` in a

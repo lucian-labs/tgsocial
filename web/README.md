@@ -249,10 +249,12 @@ Nothing in this repo applies it — there is no deploy step here to apply it
 the instructions. Until it is in place the public pages degrade to the §2.6
 empty card rather than a blank page. Nothing in
 `npm test` exercises that file — `test/smoke.mjs` runs the dev proxy, a second
-implementation of the same rules — so its header carries a `docker run
-nginx:alpine` recipe for checking the real thing, and the four promises worth
-checking: text/plain out, no `Set-Cookie`, `X-Cache: HIT` on a repeat, and 404
-for any query that is not `?before=<digits>`.
+implementation of the same rules — so its header points at `server/` for
+checking the real thing, and lists the promises worth checking: text/plain
+out, no `Set-Cookie` and no `Strict-Transport-Security`, `X-Cache: HIT` on a
+repeat, 404 for any query that is not `?before=<digits>`, 405 for anything but
+a read, no `Location` on t.me's 302, and nothing about the reader forwarded
+upstream.
 
 **Public links are opt-in.** `publicOrigin` is optional and stays unset unless
 you put it in `config.json`; while it is unset, the `Copy Link` on a person,

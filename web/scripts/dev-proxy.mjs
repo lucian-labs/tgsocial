@@ -10,7 +10,8 @@
  *
  * It is the development stand-in for web/nginx-public.conf and obeys the same
  * rules (PUBLIC.md §1): only `/s/`, only a bare channel with an optional
- * `?before=<id>`, the same User-Agent, a 60-second cache, one upstream fetch
+ * `?before=<id>`, only GET/HEAD, the same User-Agent, nothing about the reader
+ * sent upstream, no Location sent down, a 60-second cache, one upstream fetch
  * per key. It is not a deploy artefact; production is nginx.
  *
  * `--fixtures <dir>` serves `<dir>/<channel>.html` instead of reaching
@@ -124,6 +125,12 @@ const server = createServer(async (req, res) => {
     if (!target) {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('not found');
+      return;
+    }
+    // PUBLIC §1: a read, or nothing. nginx and Caddy answer 405 here; so does this.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { 'content-type': 'text/plain' });
+      res.end('method not allowed');
       return;
     }
     const { status, body } = await preview(target);

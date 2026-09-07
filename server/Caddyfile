@@ -1,0 +1,109 @@
+# server/Caddyfile — the same contract as nginx.conf, in Caddy, so that
+# "use whatever you run" is a worked example and not a promise. `root` is
+# relative to the working directory, so run it from this folder:
+#
+#   caddy run                                            # http://localhost:8080
+#
+# or with no Caddy installed (the image's working directory is /srv):
+#
+#   docker run --rm -p 8080:8080 \
+#     -v $PWD/Caddyfile:/etc/caddy/Caddyfile:ro -v $PWD/../web:/web:ro caddy:2-alpine
+#
+# TWO LINES OF THE CONTRACT ARE MISSING HERE, and this file does not pretend
+# otherwise:
+#
+#   cache       Stock Caddy has no response cache. Every reader is one fetch
+#               of t.me from your address; nginx's sixty-second memory is what
+#               turns a hundred simultaneous readers into one upstream
+#               request, and there is no X-Cache header because there is no
+#               cache. Build with a cache plugin (caddyserver/cache-handler)
+#               or put a cache in front before a domain goes on this.
+#   rate limit  Stock Caddy has no rate limiter. Same fix (mholt/caddy-ratelimit
+#               via xcaddy), same warning: without one this is an open proxy
+#               onto t.me, and the address that gets blocked is yours.
+#
+# Everything else — the root, the SPA fallback, the exact path, query and
+# method refusal, Host, User-Agent, the reader-header strip going up, the
+# cookie / HSTS / Location strip and every header rewrite coming down — is
+# here and was checked against caddy:2-alpine (see README.md).
+
+:8080 {
+	root * ../web
+
+	# A host holds nothing, including who read what (docs/HOSTING.md §1).
+	# Caddy logs no requests unless told to; leave it that way, or say so.
+
+	handle /tg/* {
+		# "A bare channel, optionally ?before=<digits>, or 404." Caddy's path
+		# matchers never see the query, so the query is a separate check —
+		# the same split nginx-public.conf makes between its regex location
+		# and its `if ($args …)`.
+		@preview {
+			path_regexp ^/tg/s/[A-Za-z0-9_]{4,32}/?$
+			expression `{http.request.uri.query} == "" || {http.request.uri.query}.matches("^before=[0-9]+$")`
+		}
+		handle @preview {
+			# Only GET and HEAD are reads; anything else is refused, not proxied.
+			# `respond` sits before `reverse_proxy` in Caddy's directive order, so
+			# a matched write ends here.
+			@write not method GET HEAD
+			respond @write 405
+
+			uri strip_prefix /tg
+			reverse_proxy https://t.me {
+				header_up Host t.me
+				# A real User-Agent with a contact URL — scraping anonymously is
+				# how you get blocked, deservedly.
+				header_up User-Agent "tgsocial/1.0 (+https://github.com/lucian-labs/tgsocial)"
+
+				# Nothing that identifies the reader goes upstream. Caddy adds the
+				# first four to every proxied request by default (nginx adds none),
+				# so without these lines t.me sees the reader's address, your
+				# hostname and your scheme on every fetch. The last three are the
+				# browser's: the app fetches with credentials omitted, but a
+				# basic-auth wall or anything else on the origin puts them back,
+				# and Referer is the instance page the reader is on.
+				header_up -X-Forwarded-For
+				header_up -X-Forwarded-Host
+				header_up -X-Forwarded-Proto
+				header_up -Via
+				header_up -Cookie
+				header_up -Referer
+				header_up -Authorization
+
+				# A Telegram session cookie has no business on your origin. Its
+				# HSTS is policy for t.me, and passed through behind a TLS
+				# terminator it enrols YOUR domain for a year. Its 302 for a name
+				# that is not a channel points at t.me itself; with the Location
+				# gone the browser stays put and the page shows the empty card.
+				header_down -Set-Cookie
+				header_down -Strict-Transport-Security
+				header_down -Location
+
+				# The body is Telegram's HTML, scripts and all; the parser reads
+				# it as a string. Relabel it text and sandbox it so opening
+				# /tg/s/<channel> in a tab yields characters, never Telegram's
+				# page executing on the origin that holds the reader's TDLib
+				# session. `header_down <field> <value>` replaces, which is the
+				# point — t.me's own Content-Type and CSP must not survive.
+				header_down Content-Type "text/plain; charset=utf-8"
+				header_down X-Content-Type-Options nosniff
+				header_down Content-Security-Policy "sandbox; default-src 'none'"
+				header_down -X-Frame-Options
+
+				header_down Access-Control-Allow-Origin "*"
+			}
+		}
+		# Nothing under /tg/ other than a bare channel exists.
+		handle {
+			respond 404
+		}
+	}
+
+	# Everything else is the bundle. /u/, /f/, /n/ are routes inside
+	# index.html, not files, so a missing path gets the page.
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

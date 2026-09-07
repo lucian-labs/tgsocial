@@ -42,7 +42,9 @@ tmpfs /var/cache/nginx/tgpreview tmpfs size=256m,mode=0700,uid=www-data 0 0
 
 Nothing else is written. There is no log of who read what unless you configure
 nginx to keep one, and the default `access_log` is worth thinking about before
-you claim otherwise in a privacy policy.
+you claim otherwise in a privacy policy. Nor does who-read-what go to Telegram:
+the proxy forwards no reader header — not the address, not the cookie, not the
+page they were on (`PUBLIC.md §1`).
 
 ## 2. What you DO become responsible for
 
@@ -55,7 +57,10 @@ Be honest with yourself about these before you put a domain on it.
   `web/nginx-public.conf` ships a `limit_req` at 5r/s with a burst of 10 —
   above a reader paging back through a channel, well below anything using your
   host as free Telegram egress. Declaring the zone is part of the install, and
-  the location will not load without it.
+  the location will not load without it. The limit keys on the TCP peer: with
+  TLS terminated in front, that peer is your terminator and every reader shares
+  one bucket, so key it on the address the terminator forwards
+  (`server/nginx.conf` has the `real_ip` lines, commented).
 - **What your instance renders.** You are not storing the content, but you are
   displaying it, and in most jurisdictions and every app store that is enough to
   make it your problem. The reader-side controls (`PRODUCT §2.15`–`§2.20`) are
