@@ -118,6 +118,9 @@ export function serialiseCard(card) {
   // absent for a client that does not implement §10, and then this is §2's
   // serialiser unchanged, character for character.
   for (const line of workLines(card.work, feeds)) lines.push(line);
+  // §11.2: the private extension's lines come last, after §10's, by the same
+  // argument — absent `privateId` / `private`, this is the serialiser above.
+  for (const line of privateLines(card)) lines.push(line);
   const text = lines.join('\n');
   if (text.length > CARD_MAX) throw new RangeError('Card is full.');
   return text;
@@ -386,6 +389,124 @@ export function workLines(work, feeds = []) {
   if (open) lines.push(`work.open: ${serialiseWorkOpen(open)}`);
   const marked = parseUsernameList((pruned.feeds ?? []).map((u) => `@${String(u).replace(/^@/, '')}`).join(' '));
   if (marked.length) lines.push(`work.feeds: ${marked.map((u) => `@${u}`).join(' ')}`);
+  return lines;
+}
+
+// ── PROTOCOL §11, the private extension ─────────────────────────────────────
+
+/** §11.2 — an invite link's hash: base64url, and Telegram has issued 16- and 22-character ones. */
+export const INVITE_HASH_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const PRIVATE_KEYS = new Set(['private.node', 'private.feeds']);
+
+/**
+ * `https://t.me/+HASH`, `t.me/joinchat/HASH`, `tg://join?invite=HASH` → the
+ * canonical `https://t.me/+HASH`; anything else → null. The hash keeps its
+ * case: it is a token, not a username, and §11.2 compares it byte for byte.
+ */
+export function normaliseInviteLink(input) {
+  if (typeof input !== 'string') return null;
+  const s = input.trim();
+  let hash = null;
+  let m = /^tg:\/\/join\?invite=([^&\s]+)$/i.exec(s);
+  if (m) hash = m[1];
+  if (!hash) {
+    m = /^(?:https?:\/\/)?(?:www\.)?t\.me\/(?:\+|joinchat\/)([^/?#\s]+)\/?$/i.exec(s);
+    if (m) hash = m[1];
+  }
+  if (!hash || !INVITE_HASH_RE.test(hash)) return null;
+  return `https://t.me/+${hash}`;
+}
+
+/** The hash alone — what §7.2's pending list and the safety lists key on. */
+export function inviteHash(link) {
+  const l = normaliseInviteLink(link);
+  return l ? l.slice('https://t.me/+'.length) : null;
+}
+
+/** Whitespace-separated invite links; invalid dropped, duplicates collapse to the first (§11.2). */
+export function parseInviteList(value) {
+  const out = [];
+  const seen = new Set();
+  for (const token of String(value ?? '').split(/\s+/)) {
+    const link = normaliseInviteLink(token);
+    if (!link || seen.has(link)) continue;
+    seen.add(link);
+    out.push(link);
+  }
+  return out;
+}
+
+function privateRaw(text, keys) {
+  const raw = {};
+  const lines = text.split(/\r?\n/);
+  for (let i = 1; i < lines.length; i += 1) {
+    const colon = lines[i].indexOf(':');
+    if (colon < 0) continue;
+    const key = lines[i].slice(0, colon).trim().toLowerCase();
+    const value = lines[i].slice(colon + 1).trim();
+    if (!keys.has(key)) continue;
+    raw[key] = raw[key] === undefined ? value : `${raw[key]} ${value}`;
+  }
+  return raw;
+}
+
+/**
+ * The §11 pass over a PRIVATE card's text: `{ node, feeds }` or null.
+ *
+ * `private.node` is what makes a pinned message a private card — a card
+ * without it is a card (§2 decides that alone) but not a private one, and a
+ * reader that found it in a private channel has found nothing §11 can use.
+ * `feeds` are invite links, never usernames: nothing here has a username.
+ */
+export function parsePrivate(text) {
+  const card = parseCard(text);
+  if (!card) return null;
+  const raw = privateRaw(text, PRIVATE_KEYS);
+  const node = parseUsernameList(raw['private.node'])[0] ?? null;
+  if (!node) return null;
+  return { node, feeds: parseInviteList(raw['private.feeds']) };
+}
+
+/**
+ * The one §11 key a PUBLIC card carries: the private node's supergroup id,
+ * as a string of digits (the number in a `t.me/c/<id>/…` link). Not a
+ * capability — nothing can be joined or read with it — which is why it is
+ * the thing that may be published (§11.3). Absent or malformed → null.
+ */
+export function privateIdOf(text) {
+  if (!parseCard(text)) return null;
+  const raw = privateRaw(text, new Set(['private.id']));
+  const v = String(raw['private.id'] ?? '').trim().split(/\s+/)[0] ?? '';
+  return /^[1-9]\d{0,19}$/.test(v) ? v : null;
+}
+
+/**
+ * §11.3 — is this private card the private half of the node it names?
+ *
+ * Only the direction public → private is provable: the public card is the
+ * one message only that node's owner can write, so the check is that the
+ * public card of the node the private card names carries the private
+ * channel's own id. The private card's claim on its own is worth nothing.
+ */
+export function privateVerified(privateText, supergroupId, publicText, publicNode) {
+  const priv = parsePrivate(privateText);
+  if (!priv || !publicNode || !sameUsername(priv.node, publicNode)) return false;
+  const id = privateIdOf(publicText);
+  return id !== null && id === String(supergroupId);
+}
+
+/** The §11 lines, in §11.2 order, for `serialiseCard` to append after the §10 lines. */
+export function privateLines(card) {
+  const lines = [];
+  const id = String(card?.privateId ?? '').trim();
+  if (/^[1-9]\d{0,19}$/.test(id)) lines.push(`private.id: ${id}`);
+  const priv = card?.private;
+  const node = priv ? normaliseUsername(`@${String(priv.node ?? '').replace(/^@/, '')}`) : null;
+  if (node) {
+    lines.push(`private.node: @${node}`);
+    const feeds = parseInviteList((priv.feeds ?? []).join(' '));
+    if (feeds.length) lines.push(`private.feeds: ${feeds.join(' ')}`);
+  }
   return lines;
 }
 

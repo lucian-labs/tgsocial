@@ -12,7 +12,8 @@ struct ComposeModal: View {
     @State private var photoPath: String?
     @State private var posting = false
 
-    private var feeds: [String] { model.myCard?.feeds ?? [] }
+    /// PRODUCT §2.28: my public feeds, then my private channels — each private tab says so.
+    private var feeds: [String] { model.composeTargets }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,7 +22,11 @@ struct ComposeModal: View {
                 HPMuted("No feeds to post to. Manage your feeds first.")
                     .padding(.bottom, HPTokens.Space.rowPad)
             } else {
-                HPTabs(items: feeds, selected: $feed) { name in model.feedInfo(name)?.title ?? name }
+                HPTabs(items: feeds, selected: $feed) { name in model.composeLabel(name) }
+                // A person posting sees where it is going (§2.28).
+                if model.isPrivateTarget(feed) {
+                    HPPill("Private", tone: .neutral).padding(.bottom, HPTokens.Space.rowGap)
+                }
             }
             HPTextField(nil, text: $text, placeholder: "Say it.", kind: .multiline(rows: HPMetric.composeRows))
             HStack(spacing: HPTokens.Space.rowGap) {

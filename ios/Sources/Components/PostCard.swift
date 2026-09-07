@@ -62,11 +62,15 @@ struct PostCard: View {
                    // Unattributed posts fall back to the channel itself: channel photo + title,
                    // no subheading (PRODUCT §2.3 "Attribution").
                    channel: post.authorUsername == nil ? nil : post.sourceTitle,
+                   pill: post.isPrivate ? PrivatePostRules.pill : nil,
                    date: post.date,
                    shareURL: DeepLink.url(post.deepLink),
-                   onShareRefused: model.isDemo ? { model.refuseShareInDemo() } : nil,
+                   // §2.32: Share on a private post copies the `t.me/c/` link and says who can
+                   // open it; there is no public address to hand a share sheet.
+                   onShareRefused: model.isDemo ? { model.refuseShareInDemo() }
+                       : post.isPrivate ? { model.copyPrivateLink(post) } : nil,
                    onOpenName: { openHeader() },
-                   onOpenChannel: { onOpenFeed(post.sourceUsername) }) {
+                   onOpenChannel: { onOpenFeed(post.sourceKey) }) {
             NodeAvatar(photo: headerPhoto, size: HPTokens.Space.avatarRow, initial: headerInitial)
         }
     }
@@ -75,7 +79,7 @@ struct PostCard: View {
         if let author = post.authorUsername {
             model.path.append(.profile(username: author))
         } else {
-            onOpenFeed(post.sourceUsername)
+            onOpenFeed(post.sourceKey)
         }
     }
 
@@ -90,27 +94,32 @@ struct PostCard: View {
                 HPMonoSmall("\u{00B7}", color: HPTokens.Colors.faint)
             }
             // Same dual wiring as the body text: tap → thread, long-press → post sheet,
-            // so a long-press over the counts still reaches the sheet (§2.3).
-            HPMonoSmall(commentsText, color: HPTokens.Colors.faint)
-                .lineLimit(1)
-                .frame(minHeight: HPTokens.Space.touchMin)
-                .contentShape(Rectangle())
-                .onTapGesture { openThread() }
-                .onLongPressGesture { model.modal = .postSheet(post) }
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Open thread, \(commentsText)")
-                .accessibilityAction { openThread() }
-                .accessibilityAction(named: "Post details") { model.modal = .postSheet(post) }
+            // so a long-press over the counts still reaches the sheet (§2.3). Absent on a private
+            // post (§2.32): no comments count, no thread.
+            if PrivatePostRules.commentsAllowed(post) {
+                HPMonoSmall(commentsText, color: HPTokens.Colors.faint)
+                    .lineLimit(1)
+                    .frame(minHeight: HPTokens.Space.touchMin)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openThread() }
+                    .onLongPressGesture { model.modal = .postSheet(post) }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Open thread, \(commentsText)")
+                    .accessibilityAction { openThread() }
+                    .accessibilityAction(named: "Post details") { model.modal = .postSheet(post) }
+            }
             Spacer(minLength: HPTokens.Space.rowGap)
-            if !inThread {
+            if !inThread, PrivatePostRules.commentsAllowed(post) {
                 HPButton("Comment", style: .ghost, size: .small) { model.startComment(on: post) }
             }
         }
         .padding(.top, HPTokens.Space.rowGap)
     }
 
+    /// PRODUCT §2.32: on a private post tapping the text does nothing; long-press still opens the
+    /// post sheet.
     private func openThread() {
-        guard !inThread else { return }
+        guard !inThread, PrivatePostRules.commentsAllowed(post) else { return }
         model.path.append(.thread(post: post))
     }
 
@@ -197,7 +206,8 @@ struct PostSheetModal: View {
             HPSectionMark("Post")
             row("Posted", PostTime.exact(unix: post.date))
             row("Views", CompactCount.format(post.views))
-            row("Feed", "\(post.sourceTitle) \u{00B7} @\(post.sourceUsername)", isLast: true)
+            // §2.32: `Elijah · private · Private` — the pill again, in mono, for a private post.
+            row("Feed", PrivatePostRules.feedLine(post), isLast: true)
             HPButton("Open in Telegram", style: .neutral) {
                 model.modal = nil
                 model.openInTelegram(post.deepLink)
@@ -213,20 +223,22 @@ struct PostSheetModal: View {
     private var subject: ReportSubject { ReportSubject(post: post) }
 
     /// §2.15: absent when the post is unattributed — there is no node to block — and on my own.
+    /// On a private post that is exactly "present only when the card is verified" (§2.32).
     private var blockRow: (label: String, run: () -> Void)? {
-        guard let username = post.authorUsername, !model.isMe(username) else { return nil }
+        guard let username = PrivatePostRules.blockTarget(post), !model.isMe(username) else { return nil }
         return ("Block @\(username)", { model.modal = .block(username: username) })
     }
 
-    /// The source channel, named by its title (§2.17). Reads `Unmute` once it is muted, so the row
-    /// is the same one tap back.
+    /// The source channel, named by its title (§2.17) and keyed by username — or by `c/<id>` for
+    /// a private channel (§2.32, PROTOCOL §7.2). Reads `Unmute` once it is muted, so the row is
+    /// the same one tap back.
     private var muteRow: (label: String, run: () -> Void)? {
-        let username = post.sourceUsername
+        let key = Moderation.muteKey(post: post)
         let title = post.sourceTitle
-        if model.isMuted(feed: username) {
-            return ("Unmute \(title)", { model.modal = nil; model.unmute(feed: username, title: title) })
+        if model.isMuted(sourceKey: key) {
+            return ("Unmute \(title)", { model.modal = nil; model.unmute(sourceKey: key, title: title) })
         }
-        return ("Mute \(title)", { model.modal = nil; model.mute(feed: username, title: title) })
+        return ("Mute \(title)", { model.modal = nil; model.mute(sourceKey: key, title: title) })
     }
 
     private func row(_ label: String, _ value: String, isLast: Bool = false) -> some View {
@@ -238,4 +250,30 @@ struct PostSheetModal: View {
                 .accessibilityLabel("\(label): \(value)")
         }
     }
+}
+
+/// What is different about a private post on screen (PRODUCT §2.32), in one place so the card,
+/// the sheet, the carousel and the tests read the same rules. Pure: a `Post` in, an answer out.
+enum PrivatePostRules {
+    /// The pill's one word. Never "encrypted", "secure", "secret" (PROTOCOL §11.9).
+    static let pill = "Private"
+
+    /// PROTOCOL §11.5: no tgsocial comments on private posts — a `re:` in a public channel would
+    /// publish the post. No Comment button, no count, no thread, no carousel toggle.
+    static func commentsAllowed(_ post: Post) -> Bool { !post.isPrivate }
+
+    /// The post sheet's `Feed` row: `<title> · @<username>` for a public post, `<title> · Private`
+    /// for a private one — the pill again, in mono.
+    static func feedLine(_ post: Post) -> String {
+        post.isPrivate ? "\(post.sourceTitle) \u{00B7} \(pill)" : "\(post.sourceTitle) \u{00B7} @\(post.sourceUsername)"
+    }
+
+    /// Who `Block` names: the attributed node. On a private post attribution exists only when the
+    /// card is verified (§11.5), so an unverified channel's post offers no block — there is no
+    /// node to name, and naming the one it claims would hand that name to whoever made the channel.
+    static func blockTarget(_ post: Post) -> String? { post.authorUsername }
+
+    /// What `Share` puts on the clipboard: the post's only link. For a private post that is the
+    /// `t.me/c/` link, which opens for members and nobody else.
+    static func shareLink(_ post: Post) -> String { post.deepLink }
 }

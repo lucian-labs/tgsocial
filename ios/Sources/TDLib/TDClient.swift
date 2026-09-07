@@ -160,7 +160,11 @@ struct TDFailure: Swift.Error, Equatable {
     let message: String
 
     init(_ error: Swift.Error) {
-        if let e = error as? TDLibKit.Error { code = e.code; message = e.message }
+        // One of our own passes through unchanged: `perform` re-wraps whatever it catches, and a
+        // `TDFailure` thrown by a repository ("Card is full.", "Only the owner can delete it.")
+        // would otherwise reach the toast as its own debug description.
+        if let f = error as? TDFailure { self = f }
+        else if let e = error as? TDLibKit.Error { code = e.code; message = e.message }
         else { code = -1; message = String(describing: error) }
     }
 

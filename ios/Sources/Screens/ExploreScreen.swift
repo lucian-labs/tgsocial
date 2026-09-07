@@ -46,6 +46,9 @@ struct ExploreScreen: View {
                 }
             }
 
+            // PRODUCT §2.31: the requests I have out, above NEARBY; absent when there are none.
+            if !model.isDemo { WaitingSection() }
+
             HPSectionMark("Nearby")
             if nearby.isEmpty {
                 HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "Follow someone and their people appear here.") }
@@ -81,6 +84,12 @@ struct ExploreScreen: View {
         guard !searching, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         searching = true
         Task {
+            // PRODUCT §2.31: the field takes an invite link as well as a username.
+            if InviteLink.normalise(query) != nil {
+                if await model.openInvite(query) { query = "" }
+                searching = false
+                return
+            }
             if let node = await model.lookupNode(query) {
                 query = ""
                 model.path.append(.profile(username: node.username))

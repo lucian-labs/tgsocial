@@ -164,10 +164,10 @@ final class ConnectorScopeTests: XCTestCase {
     func testSummaryIsTheScreenCopyWithTheLiveCount() {
         let graph = ScopeResolver.resolve(preset: .graph, inputs: ConnectorFixture.inputs)
         XCTAssertEqual(graph.summary,
-                       "6 sources \u{2014} your feeds and the feeds of the nodes you follow. Private chats are never included.")
+                       "6 sources \u{2014} your feeds and the feeds of the nodes you follow. Private chats and private channels are never included.")
         let custom = ScopeResolver.resolve(preset: .custom, inputs: ConnectorFixture.inputs)
         XCTAssertEqual(custom.summary,
-                       "1 source \u{2014} exactly the usernames you list. Private chats are never included.")
+                       "1 source \u{2014} exactly the usernames you list. Private chats and private channels are never included.")
     }
 
     func testNoPresetAdmitsAUsernameThatIsInNoCard() {

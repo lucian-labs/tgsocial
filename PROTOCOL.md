@@ -170,7 +170,8 @@ Candidate feeds = channels (`chatTypeSupergroup` with `isChannel`) where my
 the supergroup has a username. Discover via `getCreatedPublicChats` plus a
 scan of `getChats(chatListMain, 200)`. Private channels are listed disabled
 with the hint "Needs a public link." Toggling a feed rewrites `feeds:` (§4.4)
-and offers the backlink (§3).
+and offers the backlink (§3). A private channel becomes a **private feed** by
+§11.4.2, never through this list.
 
 ### 4.8 Main feed
 
@@ -185,7 +186,8 @@ response is empty.
 Merge: k-way by `message.date` descending. Keep a per-source cursor (oldest
 `message.id` fetched). "Load more" refills the source whose buffer is empty
 and whose last-known item was newest, then continues the merge. Reading
-public channel history does not require joining.
+public channel history does not require joining. Private sources (§11.5)
+merge in the same loop and require membership.
 
 Ignore service messages (`messagePinMessage`, `messageChatChangePhoto`, etc.)
 and the card itself. Render `messageText`, `messagePhoto`, `messageVideo`
@@ -214,7 +216,8 @@ size ≥ the display width. Cache by `file.remote.uniqueId`.
 ### 4.11 Delete my node
 
 Removes the two channels the client created (`PRODUCT §2.21`). Order is
-fixed: comments channel, then node channel.
+fixed: comments channel, then node channel. A client that implements §11
+removes the private channels first (§11.4.12), then continues here.
 
 1. If the card carries `replies: @<username>`, `searchPublicChat` it and check
    `chat.canBeDeletedForAllUsers`. False → stop, nothing deleted, report "not
@@ -253,6 +256,9 @@ Three modalities; clients implement all three and union the results.
 A directory entry shows the node's name, username, feed count, and — for +1
 results — "Followed by N of yours".
 
+Private nodes, private feeds and private follows (§11) are outside all three
+modalities by construction and MUST NOT be surfaced by any of them (§11.5).
+
 ## 6. Comments and replies
 
 Comments live in the commenter's own channel, not the author's — the same
@@ -289,6 +295,9 @@ Nice one. The bass is huge.
   5 and show deeper replies flattened.
 - One comment targets one post. Editing/deleting the message on Telegram
   edits/deletes the comment.
+- The target is a public post. A `t.me/c/<id>/<n>` link (a private post,
+  §11.4.8) is not in the grammar, is not a comment, and MUST NOT be written
+  (§11.5).
 
 ### 6.3 Reading comments — network-scoped by design
 
@@ -334,6 +343,7 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - The comment index (§6.3): comments-channel → parsed pointers (discardable).
 - UI preferences.
 - The **safety lists** below.
+- The **private record** (§7.2), if the client implements §11.
 
 Signing out (`logOut`) clears all of it except the safety lists.
 
@@ -402,6 +412,33 @@ thing that ever leaves is the report email in `PRODUCT §2.15`, which the
 reader's own mail client sends and which carries a link, a reason, and
 nothing about any list.
 
+### 7.2 The private record
+
+What a client implementing §11 keeps, and every field but one is recoverable
+from Telegram (§11.4.9):
+
+```json
+{
+  "v": 1,
+  "privateNode": { "chatId": -1002481234567, "supergroupId": 2481234567, "pinnedMessageId": 1048576, "invite": "https://t.me/+AbCdEfGh12345678" },
+  "privateFeeds": [ { "chatId": -1002481234568, "supergroupId": 2481234568, "invite": "https://t.me/+ZyXwVuTs87654321" } ],
+  "pending": [ { "invite": "https://t.me/+QqQqQqQqQqQqQqQq", "title": "Ana · private", "askedAt": "2026-09-07T18:40:00Z" } ]
+}
+```
+
+- `pending` is the one thing Telegram does not hold for the requester
+  (§11.4.7). It is keyed by the canonical invite link, one entry per link, and
+  an entry is cleared when `checkChatInviteLink` answers with a chat id.
+- Sign out clears the record. It is discardable in the §7 sense: the worst a
+  lost record costs is one re-scan and one repeated request.
+- The §7.1 safety lists grow a key grammar, not a field: `mutedFeeds` and
+  `hidden[].key` MAY hold `c/<supergroupId>` and `c/<supergroupId>/<serverMessageId>`
+  for channels with no username (§11.5). The record's `v` is unchanged — an
+  older client compares those tokens against usernames and never matches,
+  which is the correct result.
+- Nothing in it is published, and it never holds an invite link the owner did
+  not create or was not handed.
+
 ## 8. What v1 deliberately does not do
 
 Most of this is a decision the clients in this repo made rather than a rule the
@@ -410,7 +447,7 @@ format imposes. What is normative is the compatibility contract in
 backlink, ownership semantics — and a client that keeps those four can order a
 feed however it likes and still be on this network. Two of the items below are
 the substrate rather than the choice: private feeds, because §1 defines a feed
-as a public channel, and the followers count, because nothing in Telegram
+as a public channel (§11 adds a different object beside it, additively), and the followers count, because nothing in Telegram
 indexes an edge in reverse — its bullet says what would have to exist before a
 client could show one. The rest is listed so a fork disagrees on purpose.
 
@@ -420,7 +457,8 @@ client could show one. The rest is listed so a fork disagrees on purpose.
   them. (tgsocial's own comment threads are §6 and are in-app.)
 - No followers count. There is no reverse index without a server; a future
   version may compute it from the index group.
-- No private feeds. A feed is a public channel.
+- No private feeds. A feed is a public channel. The private layer (§11) is a
+  separate object with its own keys, and it leaves this sentence true.
 - No DMs. Telegram has them.
 
 ## 9. Versioning
@@ -428,7 +466,8 @@ client could show one. The rest is listed so a fork disagrees on purpose.
 The marker carries the version. A v2 card will start with `tgsocial v2` and
 v1 clients MUST treat it as "Newer card. Update the app." rather than
 silently ignoring it. Keys added to v1 later are ignored by older clients by
-rule; keys removed or renamed require a version bump.
+rule; keys removed or renamed require a version bump. §10 and §11 are the two
+extensions added under that rule.
 
 ## 10. Extension: work
 
@@ -703,3 +742,501 @@ otherwise would be worse than the absence.
   takedown path anywhere in the design, is a harassment tool. The `does:` line
   makes a vouch a statement of capability and there is no grammar here for its
   negation.
+
+## 11. Extension: private
+
+A private layer, built the way §10 was built: new keys under a prefix, nothing
+existing repurposed, no server. §8 said "no private feeds" because §1 defines a
+feed as a public channel, and that definition is not touched — a private feed is
+a different object, below, and a v1 client that has never heard of it parses
+every card in this section into exactly the card it parsed before (the two
+vectors naming §11 in the `parse` block of
+[`docs/card-vectors.json`](./docs/card-vectors.json) are that sentence as a
+test, run by the same loop every client already has).
+
+**What "private" means here, exactly.** The access control is Telegram channel
+membership and nothing else. A private channel has no username, cannot be found
+by search, and cannot be read by anyone who is not a member; the owner admits
+members one at a time by approving join requests; Telegram enforces all of it
+on its servers. That is the whole promise. It is not end-to-end encryption:
+Telegram can read a private channel the same as a public one. It does not
+survive a member's screenshot, forward, copy, or second account. It does not
+hide the *existence* of the channel from Telegram, from a court, or — if the
+owner chooses §11.3's verification — from anyone reading the public card. A
+client MUST say this in the copy the owner reads when they make one
+(`PRODUCT §2.27`), not only here.
+
+Three properties, checkable:
+
+- **Additive.** §2's parser is unchanged. The marker stays `tgsocial v1`; §9 is
+  not touched. The private card is a §2 card that happens to carry `private.`
+  keys, and the public card gains at most one `private.` line.
+- **Ownership unchanged.** A person writes only their own channels. The private
+  node is theirs; the private card is a claim on it; the one thing that verifies
+  the claim is written on the public node, which is also theirs (§11.3).
+  Following privately writes nothing anywhere — it is membership, which
+  Telegram records and nobody publishes.
+- **No server.** No index, no directory, no verifier, no relay for invites. An
+  invite link travels the way the owner carries it.
+
+### 11.1 Objects
+
+| Term | What it is on Telegram |
+| --- | --- |
+| **Private node** | A private channel (no username; §4.3's `setSupergroupUsername` is never called on it) the person owns. Its pinned message is the **private card**. Posts in it are the person's first **private feed** — approval into the node is approval into something worth reading. |
+| **Private card** | The pinned message of the private node. A §2 card carrying `private.node:` (§11.2). Names the public node it belongs to and any further private feeds. |
+| **Private feed** | A private channel the owner administers, admitted by join-approval invite link, listed on the private card by that link. The private node itself is always one and is not listed. |
+| **Private follow** | Being an approved member of someone's private node. That is the whole edge. It is not written on any card, anywhere, by either side. |
+| **Invite** | A Telegram invite link created with `creates_join_request: true`. A bearer token (§11.7). |
+
+A Telegram user owns at most one private node, and a private node belongs to
+exactly one public node: the private layer is a layer on an identity, not a
+second identity. A person with no public node has nothing for a private card to
+point at and cannot make one.
+
+### 11.2 The keys
+
+Every key is prefixed `private.`, for §10.1's reason. Two cards carry them and
+they carry different ones; a key on the wrong card is dropped by readers and
+MUST NOT be written.
+
+**On the public card** (the §2 node card):
+
+| Key | Value | Cap |
+| --- | --- | --- |
+| `private.id` | The private node's **supergroup id** — the digits TDLib reports as `supergroup.id`, the same number that appears in a `t.me/c/<id>/<message>` link. | one |
+
+That number is not a capability. Nothing can be joined, read, or previewed with
+it; `t.me/c/<id>` opens for members and for nobody else. It is on the public
+card for one purpose, §11.3, and it is the only thing the public card says about
+the private layer. Optional: an owner MAY omit it (`PRODUCT §2.33`), at the cost
+§11.3 names.
+
+**On the private card** (the pinned message of the private node):
+
+| Key | Value | Cap |
+| --- | --- | --- |
+| `private.node` | One node username with a leading `@`: the public node this is the private half of. **Required** — a card without it is a §2 card, not a private card, and a client that finds one in a private channel has found nothing this section can use. | one |
+| `private.feeds` | Whitespace-separated **invite links** of further private feeds, each `https://t.me/+<hash>`. Order is the owner's preferred display order. | fits the card |
+
+- An **invite link** is `https://t.me/+<hash>`; readers also accept
+  `t.me/+<hash>`, `https://t.me/joinchat/<hash>` and `tg://join?invite=<hash>`
+  and normalise to the first form. `<hash>` is `[A-Za-z0-9_-]{8,64}`, compared
+  **byte for byte** — it is a token, not a username, and case is part of it.
+  A token that is not an invite link (a username, a `t.me/c/` link, a post link)
+  is dropped. Duplicates collapse to the first.
+- **Nothing here has a username**, so `feeds:` cannot name a private feed
+  (§2 drops the token) and this key exists instead. The invite link is the only
+  handle a not-yet-member can act on: a chat id is meaningless to a client that
+  has never seen the chat (`checkChatInviteLink` reports `chat_id: 0` to a
+  non-member — `td_api.tl` 2653), and a member who can already read the channel
+  has no need of a handle at all. So the reference in the card is the thing you
+  hand to someone, and resolving it is §11.4.6.
+- **Malformed values are dropped, never fatal**, on §10.2's terms. A `private.id`
+  that is not a positive integer is absent. A `private.node` that is not a
+  username is absent, and the card is then not a private card. A malformed line
+  never invalidates the card; §2 decides what a card is, alone.
+- Repetition follows §2: a repeated `private.` key concatenates with a space.
+- A private card MAY carry `name`, `bio` and the rest of §2; readers of this
+  section ignore them. Identity comes from the public node it points at
+  (§11.3), and a private card that says `name: Elijah` proves as much as any
+  channel titled "Elijah".
+
+**There is no `private.follows`, and that is the design.** A public follow is
+a public line because the network is the lines. A private follow is
+membership, and membership is already recorded — by Telegram, on the owner's
+side (`getSupergroupMembers`, which channel admins alone can call) and in the
+follower's own chat list — so a card line would record nothing new and would
+publish something: as invite links, it would republish every private node's
+bearer token to every member of every member (§11.7); as usernames, it would
+tell the follower's forty members who else the follower is inside, which none
+of those forty were told by the person it is about. A client recovers its
+private follows from its chat list (§11.4.9) and needs no line. There is
+therefore no private +1 walk (§11.5), which is the other half of the point.
+
+Serialisation: §11 lines come **after** every §2 and §10 key, in the order
+`private.id, private.node, private.feeds`, each omitted when empty;
+`private.feeds` is written in canonical form, space-separated. A public card
+written before this section and one written after differ by one appended line;
+§2's own order and output are unchanged. The 4096-character cap is §2's.
+Shared vectors are the `private` block of `docs/card-vectors.json`.
+
+### 11.3 The backlink, and which direction is provable
+
+§3's backlink runs from the feed to the node: the node claims the feed, and the
+feed's description — which only the feed's admins can write — points back. The
+proof is that the thing being claimed agrees.
+
+Here the private card claims "I am the private half of `@tgs_elijah`". A private
+channel is the cheapest object on Telegram to make, and a hostile one can pin
+that line as easily as the real one. Nothing about the private channel itself
+can settle it: a member of a channel cannot see who created it, cannot see its
+admins, and — §3 already concedes this for public nodes — cannot learn the
+creator of the public node either. Both channels are opaque about their owner
+to everyone but the owner.
+
+So the only direction that proves anything is the one in which **the node being
+claimed does the claiming**: the public card is the one message on Telegram
+that only `@tgs_elijah`'s owner can write, and if *it* names the private
+channel, the private channel is theirs. That is `private.id`. A reader
+verifies a private card in chat `C` (supergroup id `S`) claiming
+`private.node: @N` by reading `@N`'s public card (§4.5) and checking that its
+`private.id` is `S`. Match → **verified**, and the private card's posts are
+attributed to `@N` — name, avatar, profile, block list, all of it (§11.5).
+No match — `private.id` absent, or naming some other channel — → **unverified**:
+the client MUST NOT attribute anything in `C` to `@N`; it renders the channel
+as itself (its own title and photo, no person link) and tells the reader in
+words that the channel says it is `@N`'s and nothing confirms it
+(`PRODUCT §2.31`). The check is the `verify` block of `docs/card-vectors.json`,
+and its cases include the two that matter: a hostile channel naming a real node
+whose card names a different id, and a real channel whose owner's public card
+was rewritten by a §2-only client and lost the line (§11.6).
+
+Why not put the invite link on the public card instead, and be done? Because
+the link is the capability (§11.7) and the public card is public; publishing
+it publishes the thing being protected. The id is what remains of a pointer
+once every capability is stripped from it — enough to be checked against,
+useless to act on. Its one cost is that the public card now says a private
+node *exists*, and an owner who would rather it did not can withhold the line
+and accept that their members' clients cannot confirm them. `PRODUCT §2.33`
+gives them that switch and says the cost aloud.
+
+What this does not verify: that the person who handed you the link is the
+owner. A verified private card proves the channel belongs to the node; who
+sent you the link is between you and them.
+
+### 11.4 Operations (TDLib)
+
+Function names are TDLib's; every one below was checked against the `td_api.tl`
+shipped in this repo's TDLibKit (1.8.66) and the Swift surface TDLibKit
+generates from it. Line numbers are `td_api.tl`'s.
+
+#### 11.4.1 Create my private node
+
+Requires a public node (§4.2). Nothing here is done without an explicit confirm
+that carries the promise and the non-promises of this section's preamble.
+
+1. `createNewSupergroupChat(title, isForum=false, isChannel=true,
+   description="tgsocial v1 private · @<node>", …)` (13136). **Never**
+   `setSupergroupUsername` on it: a private channel is private because it has
+   no username, and this is the one channel the client creates that must stay
+   that way. The title is the client's choice; the reference client uses
+   `<name> · private`.
+2. `sendMessage(chatId, inputMessageText(privateCard))` with
+   `disable_notification`, then `pinChatMessage(chatId, messageId,
+   disableNotification=true)`. The card is `tgsocial v1`, `name:`, `public: no`,
+   `private.node: @<node>` — §11.2.
+3. `createChatInviteLink(chatId, name="tgsocial", expirationDate=0,
+   memberLimit=0, createsJoinRequest=true)` (13896: "Pass true if users
+   joining the chat via the link need to be approved by chat administrators.
+   In this case, member_limit must be 0"). Store `chatInviteLink.invite_link`
+   in the §7.2 record. This is the only kind of link the client ever shows the
+   owner.
+4. Unless the owner has withheld it (`PRODUCT §2.33`), add
+   `private.id: <supergroup.id>` to the public card and write it (§4.4).
+5. Optionally `setChatPhoto` from the public node's photo.
+
+**Telegram's own primary link is a hole, and the client covers what it can.**
+Every channel has a primary invite link
+(`supergroupFullInfo.invite_link`, 2767: "For chat administrators with
+can_invite_users right only"), it joins **without approval**, and
+`editChatInviteLink` cannot change that: it "edits a non-primary invite link"
+(13905). Only the owner can see the primary link, so the exposure is the owner
+sharing the wrong one from plain Telegram. The client MUST NOT display or
+copy the primary link anywhere, MUST call `replacePrimaryChatInviteLink(chatId)`
+(replaces the primary with a fresh one) at creation so any primary Telegram
+showed the owner in the meantime is dead, and MUST tell the owner, in the copy
+(`PRODUCT §2.29`), to share only the link the app gives them — a link
+Telegram's own UI labels as requiring admin approval is the same kind and is
+fine; the plain "invite link" Telegram offers first is not.
+
+#### 11.4.2 Create a private feed
+
+Same as 11.4.1 steps 1 and 3 with description `tgsocial v1 private feed ·
+@<node>`, no card, no pin; then append the new link to `private.feeds` on the
+private card and write it (§4.4 against the private node's pinned message).
+The private node's own link is never listed: it is the channel the reader is
+already in when they read the card.
+
+#### 11.4.3 Share an invite
+
+Hand out the stored link. If the §7.2 record is empty (fresh device),
+`getChatInviteLinks(chatId, creatorUserId=me, isRevoked=false, offsetDate=0,
+offsetInviteLink="", limit=100)` (13937) and take the first with
+`creates_join_request == true`; if there is none, create one (11.4.1 step 3).
+A link with `creates_join_request == false` is never offered, whoever made it.
+
+#### 11.4.4 Revoke and reissue
+
+`revokeChatInviteLink(chatId, link)` (13951) kills the link; members already
+approved stay members — revocation is about who can *ask* next, not who is in.
+Then 11.4.1 step 3 for a fresh one, and if the revoked link was listed in
+`private.feeds`, rewrite the private card with the new one. Revocation does
+not touch anyone's membership; removing a member is 11.4.10.
+
+#### 11.4.5 Pending requests, owner's side
+
+`chat.pending_join_requests` (3596; `chatJoinRequestsInfo total_count
+user_ids`, 2676 — the count and at most three newest user ids) on every
+private channel the owner administers, kept live by
+`updateChatPendingJoinRequests` (10450). That count is what the `Requests`
+row shows. `updateNewChatJoinRequest` (11086) is **"for bots only"** and is not
+used.
+
+To list: `getChatJoinRequests(chatId, inviteLink="", query="",
+offsetRequest=null, limit=50)` (13973), paging by passing the last
+`chatJoinRequest` back as `offsetRequest`. Each request is `chatJoinRequest
+user_id date bio` (2670); `getUser(userId)` (11374) gives name, usernames and
+photo. **Telegram does not tie a user to a channel**, so the requester's
+tgsocial node is not knowable from this. A client MAY guess by §4.3's
+convention — `searchPublicChat("tgs_" + username)` and, if that resolves to a
+card, show it labelled as a guess (`PRODUCT §2.30`) — and MUST NOT present the
+guess as the requester's identity or compute "mutual follows" from it.
+
+To decide: `processChatJoinRequest(chatId, userId, approve)` (13976), one
+request at a time. `processChatJoinRequests(chatId, inviteLink, approve)`
+(13982) decides every pending request on a link at once; the reference client
+does not expose it — approving people is the point, and a button that approves
+everyone is a button that stops the owner looking.
+
+#### 11.4.6 Join by link, requester's side
+
+1. `getInternalLinkType(text)` (13059) on whatever was pasted or opened;
+   proceed only on `internalLinkTypeChatInvite { invite_link }` (9338).
+2. `checkChatInviteLink(link)` (13962) → `chatInviteLinkInfo` (2666): `title`,
+   `photo`, `description`, `member_count`, `creates_join_request`, `is_public`,
+   and `chat_id`, which is **`0` if the user has no access to the chat before
+   joining** (2653). This is the preview — the requester sees what they are
+   asking into before they ask. `is_public: true` means the link is a public
+   channel's; the client reads it as any public channel and none of the rest of
+   this applies.
+3. `joinChatByInviteLink(link)` (13965) → `ChatJoinResult` (2565):
+   - `chatJoinResultRequestSent` — the normal case for a link from 11.4.1: "the
+     join request was sent and have to be approved by administrators". Record
+     it in the §7.2 `pending` list.
+   - `chatJoinResultSuccess { chat_id }` — the link did not require approval
+     (someone shared a Telegram primary link, 11.4.1). The reader is in. The
+     client proceeds as 11.4.8 and says nothing about approval, because none
+     happened.
+   - `chatJoinResultGuardBotApprovalRequired` / `chatJoinResultDeclined` — a
+     guard bot, which nothing in this section creates. Surface `PRODUCT §2.31`'s
+     line and stop; the client does not open bot web apps.
+   - Any error surfaces TDLib's text verbatim, including a duplicate request.
+
+#### 11.4.7 Waiting, and how the answer arrives
+
+There is no requester-side "pending" state in this API: `getChatMember(chat,
+me)` on a chat you cannot yet see is not available, `supergroup.status`
+(2728) is `chatMemberStatusLeft` until it is not, and a decline sends the
+requester **nothing** — no update, no message, no error. So the client keeps
+its own `pending` record (§7.2) and on every feed refresh re-runs
+`checkChatInviteLink(link)` for each entry: a non-zero `chat_id` means the
+request was approved (the same call, 2653, and no other), at which point the
+entry is cleared and the chat is read as 11.4.8. Approval also arrives as
+`updateNewChat` (10377) with a `messageChatJoinByRequest` (5277) service
+message and an `updateSupergroup` (10617) whose `status` is
+`chatMemberStatusMember`, either of which MAY be used to refresh sooner. A
+declined request looks exactly like an unanswered one, forever; the copy says
+so (`PRODUCT §2.31`), and `Ask Again` is 11.4.6 step 3 over again.
+
+#### 11.4.8 Read a private channel
+
+Exactly §4.5 and §4.8 with the chat id in place of the username: `getChat
+(chatId)` (11395), `getChatPinnedMessage(chatId)` (11421), `getChatHistory
+(chatId, fromMessageId, offset, limit, onlyLocal)` (11689), the same
+repeat-until-filled loop, the same merge. These calls key on the chat id and
+never asked whether the chat had a username. The differences are that
+§4.8's "reading public channel history does not require joining" is false
+here — membership is the read right — and that a channel has no
+hide-history mode in this API (`toggleSupergroupIsAllHistoryAvailable`, 14990,
+is defined for supergroups that are not channels), so an approved member reads
+everything ever posted, back to the first message. Owners are told this
+(`PRODUCT §2.27`).
+
+Private posts have a deep link, `https://t.me/c/<supergroupId>/
+<serverMessageId>` with §4.8's `id >> 20`, which opens for members and for
+nobody else. It is not a `t.me/<username>/…` link, so §6.2 does not accept it
+(§11.5).
+
+#### 11.4.9 Find my private things
+
+On a fresh device the §7.2 record is empty and everything in it is
+recoverable: `getChats(chatListMain, 200)` (11476) → every
+`chatTypeSupergroup` with `is_channel` and empty `usernames.active_usernames`
+(2354) → `getChatPinnedMessage` → §11.2's parse. A private card whose
+`private.node` is my node, in a chat where `getChatMember(chat, me)` is
+`chatMemberStatusCreator`, is my private node; any other private card is a
+private follow (verified or not, §11.3); a private channel with no private
+card is not tgsocial's and is left alone. My private feeds are the links on my
+private card, each resolved through `checkChatInviteLink` (a creator has
+access, so `chat_id` is non-zero). The pending list is the one thing not
+recoverable, and losing it costs a person one repeated request.
+
+#### 11.4.10 Remove a member
+
+`getSupergroupMembers(supergroupId, supergroupMembersFilterRecent, offset,
+limit)` (15037; channel admins only — a private node's owner is its creator) is
+the member list. `banChatMember(chatId, messageSenderUser(userId),
+bannedUntilDate=0, revokeMessages=false)` (13404) removes: "the user will not
+be able to return to the group on their own using invite links, etc., unless
+unbanned first", which is what the owner means by removing someone from a
+channel they were approved into. Reversal is `setChatMemberStatus(chatId,
+messageSenderUser(userId), chatMemberStatusLeft)` (13391), after which the
+person may ask again through the link and is approved again or not. Removal
+from the private node does not remove from private feeds; each channel is its
+own membership and the client offers both (`PRODUCT §2.33`).
+
+#### 11.4.11 Leave
+
+`leaveChat(chatId)` (13371) on the member's side, then §11.8. Leaving the
+private node does not leave its owner's private feeds; the client offers to
+leave all of them together.
+
+#### 11.4.12 Delete my node, extended
+
+§4.11's order grows at the front. The private channels go first because the
+thing that verifies them is about to be deleted, and a private channel
+outliving its public node is a channel every member's client can no longer
+attribute (§11.3): private feeds (each, `chat.canBeDeletedForAllUsers` then
+`deleteChat`), then the private node, then §4.11 steps 1–3 as written. If a
+private channel refuses, stop before touching anything public and report it
+by name. If the private node went and the public node later fails, strip
+`private.id` from the public card and write it, the same repair §4.11 step 2
+makes for `replies:`. `deleteChat` on a private channel removes it for every
+member at once — there is no notice, no grace, and no copy left on Telegram.
+Their devices are §11.8.
+
+### 11.5 What every existing section says about private objects
+
+- **§1, §2.** A private node is not a node — a node has a username — and a
+  private card is a card with empty `feeds:` and `follows:`. A public card
+  MUST NOT carry `private.node` or `private.feeds`, and a private card MUST NOT
+  carry `private.id`; readers drop the misplaced key.
+- **§3.** A private feed's description SHOULD carry `tgsocial: @<node>` like
+  any feed, for a person reading it on Telegram; a client does not need it,
+  because the reader can only be in the channel through the private card that
+  listed it, and the card is verified as a whole by §11.3. The `Verified` pill
+  on a private card means §11.3's check and nothing softer.
+- **§4.7.** "Private channels are listed disabled with the hint `Needs a public
+  link.`" stands for `feeds:`. A private channel becomes a private feed by
+  §11.4.2, never by that list.
+- **§4.8.** Sources grow by: my private node, my private feeds, every private
+  node I am an approved member of, and every private feed listed on those
+  cards that I am an approved member of. Attribution (`PRODUCT §2.3`) for a
+  post from a verified private card's channel is the public node the card
+  names; from an unverified one, the channel itself. Every private post is
+  marked as private in the render (`PRODUCT §2.32`) — there is no mode in
+  which a private post looks like a public one, because the reader about to
+  forward it needs to know.
+- **§5.** Private objects are outside discovery by construction — no username
+  to prefix-search, no index announcement (a `node:` line naming a private
+  channel is impossible; it has no `@`), and no walk: `private.node` on a
+  private card is a claim of ownership, not a follow edge, and membership is
+  not a line anywhere. **A private follow MUST NOT appear in anyone's +1**, and
+  the owner — who alone can enumerate members — MUST NOT publish that list in
+  any form.
+- **§6.** There are no tgsocial comments on private posts in this version. A
+  comment lives in a public channel (§6.1); a `re:` line pointing at a private
+  post would publish the post's existence and the reply's content to everyone,
+  which is the one thing the post's owner arranged not to happen. §6.2's link
+  form already excludes `t.me/c/…` (the `comment.parse` vectors say so), and a
+  client MUST NOT write one. The Comment control is absent on a private post
+  (`PRODUCT §2.32`). A private comments channel — membership-scoped, indexed
+  per reader — is possible and is deliberately not here: it is a second
+  membership per relationship, and this section is already two.
+- **§7.** Local state gains §7.2. The §7.1 safety lists work on private
+  content unchanged in shape: `blocked` names the verified public node, so
+  blocking a person removes their private posts with their public ones;
+  `mutedFeeds` and `hidden[].key` take a second key grammar for channels
+  without usernames — `c/<supergroupId>` and `c/<supergroupId>/<serverMessageId>`,
+  the `t.me/c/` path without the host — which no username can collide with
+  and which an older client's username comparison simply never matches.
+  Nothing here is published, as before.
+- **§8.** "No private feeds. A feed is a public channel." — still true of a
+  *feed*. This section is the other object.
+- **§10.** Work keys on a private card are ignored. A vouch names a public
+  node; there is no private vouch.
+- **The public reader** (`PRODUCT §2.13`) shows nothing private and cannot:
+  it reads `t.me/s/<channel>`, which exists for public channels only, and its
+  reader is anonymous, which is the one kind of reader membership excludes by
+  definition.
+- **The Connector** (`PRODUCT §2.14`, `CONNECTOR.md §3`) never exposes a
+  private source under any preset, including `custom`, which lists usernames
+  and so cannot name one. A member consented to read a friend's private
+  channel; that is not consent to pipe it to an assistant, and there is no
+  toggle in this version.
+
+### 11.6 Writing, and the one thing that can go wrong
+
+§10.6 applies word for word: a client that implements this section MUST write
+back `private.id` when it rewrites the public card, and `private.node` /
+`private.feeds` when it rewrites the private one. A §2-only client that
+follows somebody drops `private.id` from the public card, correctly, and every
+member's client then sees the private card as unverified until a §11 client
+writes the line back. The loss is one line, on the owner's own node, restored
+on the owner's next card write by any client that implements this section —
+which MUST repair a missing or mismatched `private.id` on its own when it
+holds a private node and the owner has not withheld the line (`PRODUCT §2.33`).
+The `§11.6` test in the web suite holds both halves.
+
+### 11.7 The invite link is a bearer token
+
+Say it plainly, because the word "private" invites the wrong picture: **the
+link is the key, and whoever holds it can use it.** Anyone who has it can ask
+to join — the person you sent it to, and anyone they forward it to, and anyone
+who reads it over their shoulder. Join-approval is what makes that survivable:
+holding the link gets you to the door, and the owner opens it or does not, one
+person at a time, seeing who is asking. That is the *reason* approval is not
+optional in this section rather than a setting. Forwarding the link therefore
+costs the owner exactly one thing — an unwanted request in their inbox, which
+they decline — and never a member they did not choose. Revoking a link (11.4.4)
+closes the door to further requests without touching anyone inside.
+
+What the link does not do: it does not carry the content, it does not identify
+the sender, and it does not expire on its own (the client creates links with
+`expiration_date: 0`; an owner who wants a short-lived one can revoke).
+
+The client makes the owner understand this by saying it where they copy the
+link, every time, in the same words (`PRODUCT §2.29`), and by never putting the
+link anywhere the owner did not put it: not on a card, not in a post, not in a
+share sheet the app opens on its own, not in the Connector.
+
+### 11.8 Leaving, removing, and what happens to copies
+
+- **A member leaves** (11.4.11): the chat leaves their chat list; the client
+  drops the source from the merge, discards that source's feed cursors and
+  cached pages, and removes its entries from the §7.2 record. The safety lists
+  keep their keys (a hidden private post stays hidden if the person is later
+  re-approved).
+- **The owner removes a member** (11.4.10): Telegram stops serving the channel
+  to them at once; their client sees `updateSupergroup` with
+  `chatMemberStatusBanned` and does the same cleanup as leaving. The member is
+  not told by the app — there is no notification to send — and the channel is
+  simply gone from their feed.
+- **The owner deletes a private channel** (11.4.12): gone for every member at
+  once, same cleanup on every client.
+
+**What the app can promise about copies, and what it cannot.** A client MUST
+discard its own caches for a source it can no longer read. It cannot promise
+more: TDLib keeps its own database of messages it has fetched, and this
+section does not specify purging it; the member may have screenshots,
+forwards, exports; and Telegram keeps what Telegram keeps. "They lose read"
+means they cannot fetch anything new and the app shows nothing old. The copy
+says this (`PRODUCT §2.33`).
+
+### 11.9 What this section deliberately does not do
+
+- **Encryption.** None. Telegram can read a private channel. A client MUST
+  NOT use the words "encrypted", "secure" or "secret" for this feature.
+- **A private +1.** §11.5. No walk, no line to walk.
+- **Comments on private posts.** §11.5.
+- **Private vouches, private work.** §10 is public by construction.
+- **Hiding existence** from someone who reads the public card by hand when
+  `private.id` is present. The owner can withhold the line; the cost is
+  §11.3's.
+- **Anonymous membership.** The owner sees every requester's Telegram account
+  and every member's. That is Telegram's model for channels and it is the
+  right one for approval to mean anything.
+- **Bulk approval.** 11.4.5.
+- **The public reader, the Connector, the demo** (`PRODUCT §2.34`) touching
+  any of it.

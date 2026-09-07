@@ -49,6 +49,12 @@ enum Route: Hashable {
     case thread(post: Post)
     /// PRODUCT §2.25: one capability's vouches for one node.
     case vouches(node: String, tag: String)
+    /// PRODUCT §2.28: my private node — invite, requests, feeds, members.
+    case privateNode
+    /// PRODUCT §2.30: the requests inbox, every private channel I own.
+    case privateRequests
+    /// PRODUCT §2.28, §2.31: a private channel's screen, keyed by chat id — it has no username.
+    case privateChannel(chatId: Int64)
     #if targetEnvironment(macCatalyst)
     /// PRODUCT §2.14: "the answer to 'what can it see' is always one tap away".
     case connectorSources
@@ -86,6 +92,20 @@ enum Modal: Equatable {
     case vouchSheet(Vouch)
     /// PRODUCT §2.25: `Delete this vouch?`, on my own.
     case deleteVouch(Vouch)
+    /// PRODUCT §2.27: the one place the private promise is spelled out in full.
+    case makePrivateNode
+    /// PRODUCT §2.28: `Add a private feed.`
+    case addPrivateFeed
+    /// PRODUCT §2.29: the invite sheet, with §11.7's warning every time.
+    case privateInvite(chatId: Int64, title: String)
+    /// PRODUCT §2.29: `Revoke this invite?`
+    case revokeInvite(chatId: Int64, title: String)
+    /// PRODUCT §2.28: `Remove Ana Iliovic?`
+    case removeMember(PrivateMember, chatId: Int64)
+    /// PRODUCT §2.31: the invite preview — `Ask to Join`.
+    case invitePreview(InvitePreview)
+    /// PRODUCT §2.33: `Leave Ana · private?`
+    case leavePrivate(PrivateFollow)
 }
 
 /// How `deleteMyNode` ended (PRODUCT §2.21, PROTOCOL §4.11). Every case but `.deleted` names what
@@ -100,6 +120,17 @@ enum DeleteNodeResult: Equatable {
     case commentsFailed(username: String, error: String)
     /// The node failed after the comments channel went; `replies:` has been stripped from the card.
     case nodeFailed(username: String, error: String)
+    /// PRODUCT §2.33: a private channel refused. Nothing public was touched.
+    case privateFailed(title: String, error: String)
+    /// PRODUCT §2.33: the private channels went and the comments channel then refused. `private.id`
+    /// has been stripped from the card; the comments channel and the node are both still there.
+    /// Not `.commentsFailed` — that one says `Nothing was deleted.`, and by this step the private
+    /// channels are gone for every member, which is the one thing the modal must not deny.
+    case commentsFailedAfterPrivate(username: String, replies: String, error: String)
+    /// PRODUCT §2.33: the private channels went and the public node then failed; `private.id` has
+    /// been stripped from the card. `commentsWent` is whether the comments channel went between
+    /// them, in which case `replies:` was stripped too and the copy names both losses.
+    case nodeFailedAfterPrivate(username: String, commentsWent: Bool, error: String)
 }
 
 /// The fields of a supergroup that decide feed candidacy (PRODUCT §2.2): its usernames, the
@@ -146,9 +177,15 @@ final class AppModel {
     /// PROTOCOL §10.6 is a claim about what the writer is HANDED on an ordinary follow, and the
     /// only place that can be observed is where TDLib stands (`WorkLivePathTests`).
     @ObservationIgnored var cardWriter: CardWriting!
+    /// Where Delete My Node's `deleteChat`s go — `nodes` in the app. A seam for the same reason
+    /// `cardWriter` is: PRODUCT §2.21 and §2.33's outcomes are claims about which channels went
+    /// before one refused, observable only where TDLib stands (`PrivateTests`).
+    @ObservationIgnored var chatDeleter: ChatDeleting!
     @ObservationIgnored private(set) var feed: FeedRepository!
     @ObservationIgnored private(set) var discovery: DiscoveryRepository!
     private(set) var comments: CommentRepository!
+    /// PROTOCOL §11.4: every TDLib call the private layer makes.
+    @ObservationIgnored private(set) var privateLayer: PrivateRepository!
     #if targetEnvironment(macCatalyst)
     /// CONNECTOR.md: the local bridge and the switches that govern it. Mac only.
     private(set) var connector: ConnectorService!
@@ -209,6 +246,10 @@ final class AppModel {
     var feedLoading = false
     var feedLoadingMore = false
     var feedReady = false
+    /// A refresh was asked for while one was in flight. `refreshFeed` runs one at a time; the
+    /// in-flight run makes exactly one more pass when it finishes, so a source that appeared
+    /// mid-run is still read and a burst of callers never becomes a burst of `getChatHistory`.
+    @ObservationIgnored var feedRefreshWanted = false
     /// The last refresh was skipped (offline) or reached no source; the cache is on screen and the next
     /// reconnect refreshes again (PRODUCT §4).
     var feedStale = false
@@ -223,6 +264,47 @@ final class AppModel {
     var direct: [NodeInfo] = []
     var edges: [String: [String]] = [:]
     var exploreLoading = false
+
+    // The private layer (PROTOCOL §11, PRODUCT §2.27–§2.34)
+    /// The §7.2 record, mirrored from the repository for the views.
+    var privateRecord = PrivateRecord()
+    /// Every private node I am an approved member of, verified or not (§11.4.9).
+    var privateFollows: [PrivateFollow] = []
+    /// `chat.pending_join_requests.total_count` per channel I own, kept live by
+    /// `updateChatPendingJoinRequests` (§11.4.5).
+    var pendingRequestCounts: [Int64: Int] = [:]
+    var joinRequests: [JoinRequest] = []
+    var requestsLoading = false
+    /// Members per private channel I own (§11.4.10), keyed by chat id.
+    var privateMembers: [Int64: [PrivateMember]] = [:]
+    /// Live chat facts for my private channels — title and member count — keyed by chat id.
+    var privateChannelInfo: [Int64: FeedInfo] = [:]
+    var privateMemberCounts: [Int64: Int] = [:]
+    /// PRODUCT §2.33 `Confirm on public card`. On by default.
+    var confirmPrivateOnCard = true {
+        didSet { if confirmPrivateOnCard != oldValue { store.save(confirmPrivateOnCard ? nil : true, LocalStore.privateConfirmOff) } }
+    }
+    /// How many requests screens are on screen; the inbox re-queries live only while one is up.
+    @ObservationIgnored var requestsSurfaces = 0
+    /// PROTOCOL §11.4.7's `updateNewChat` signal, debounced. TDLib replays that update for every
+    /// chat it knows on each start and again as the list loads, so with a request out one arrival
+    /// is a burst of them; a new arrival cancels the armed pass and re-arms it, the shape
+    /// `candidatesRefreshTask` has for the same reason.
+    @ObservationIgnored var privateArrivalTask: Task<Void, Never>?
+    /// How many coalesced arrival passes have run — the measurable side of that debounce.
+    @ObservationIgnored var privateArrivalPasses = 0
+    /// My private node died outside the app — deleted from Telegram's own client — and the public
+    /// card still names it. Set where the death is seen (an `updateSupergroup`, or a refresh), and
+    /// cleared by the one card write that strips `private.id`, which `refreshPrivate` makes; the
+    /// update stream never writes a card itself.
+    @ObservationIgnored var privateIdStale = false
+    /// A private feed of mine died outside the app and my private card still lists its link.
+    /// Cleared by the private card rewrite `refreshPrivate` makes.
+    @ObservationIgnored var privateCardStale = false
+    /// Delete My Node is in flight. The channels it deletes announce themselves gone on the update
+    /// stream like any other loss; nothing reacts to those with a card write while the run — which
+    /// makes its own — is still going.
+    @ObservationIgnored private(set) var deletingNode = false
 
     // Feed candidates (Setup / Manage)
     var candidates: [FeedCandidate] = []
@@ -275,9 +357,13 @@ final class AppModel {
         spectrograms = SpectrogramStore(byteLimit: stripBudget)
         nodes = NodeRepository(td: td, store: store, sends: sends, activity: activity)
         cardWriter = nodes
+        chatDeleter = nodes
         feed = FeedRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         discovery = DiscoveryRepository(td: td, nodes: nodes)
         comments = CommentRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
+        privateLayer = PrivateRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
+        privateRecord = privateLayer.record
+        confirmPrivateOnCard = store.load(Bool.self, LocalStore.privateConfirmOff) != true
         myNode = store.load(MyNode.self, LocalStore.myNode)
         myCard = store.load(Card.self, LocalStore.myCard)
         myWork = store.load(Work.self, LocalStore.myWork)
@@ -459,6 +545,7 @@ final class AppModel {
         feedReady = true
         feedLoading = false
         feedLoadingMore = false
+        feedRefreshWanted = false
         feedStale = false
         lastFeedRefresh = world.startedAt
 
@@ -583,10 +670,19 @@ final class AppModel {
         // itself whether anything actually changed; only then does a re-query get scheduled.
         case .updateNewChat(let u):
             note(newChat: u.chat)
+            // PROTOCOL §11.4.5 / §11.4.7: a chat arriving with pending requests, or a private
+            // channel arriving at all while a request of mine is out, is the earlier signal.
+            notePrivate(newChat: u.chat)
         case .updateChatPosition(let u):
             note(chatId: u.chatId, position: u.position)
         case .updateSupergroup(let u):
             note(supergroup: u.supergroup)
+            // PROTOCOL §11.8: membership lost — removed, or the channel gone — drops the source.
+            notePrivate(supergroup: u.supergroup)
+        // PROTOCOL §11.4.5: the requests count, live, not polled. This is what the `Requests`
+        // row shows; the inbox re-lists while it is open.
+        case .updateChatPendingJoinRequests(let u):
+            notePendingRequests(chatId: u.chatId, info: u.pendingJoinRequests)
         default:
             break
         }
@@ -629,6 +725,30 @@ final class AppModel {
         let next = SupergroupCandidacy(sg)
         guard let previous = supergroupCandidacy.updateValue(next, forKey: sg.id), previous != next else { return }
         scheduleCandidateRefresh()
+    }
+
+    // MARK: Private-layer signals (PROTOCOL §11.4.5, §11.4.7, §11.8) — TDLib shapes to app facts
+
+    private func notePrivate(newChat chat: Chat) {
+        if let info = chat.pendingJoinRequests {
+            notePendingRequests(chatId: chat.id, info: ChatJoinRequestsInfoFacts(totalCount: info.totalCount, userIds: info.userIds))
+        }
+        // The supergroup's usernames are not on the chat; the check is cheap and gated on a
+        // request being out, so every channel arrival counts as the signal.
+        notePrivateArrival(isChannel: Mapping.isChannel(chat), hasUsername: false)
+    }
+
+    private func notePrivate(supergroup sg: Supergroup) {
+        let isMember: Bool
+        switch sg.status {
+        case .chatMemberStatusLeft, .chatMemberStatusBanned: isMember = false
+        default: isMember = true
+        }
+        notePrivateMembership(supergroupId: sg.id, isMember: isMember)
+    }
+
+    private func notePendingRequests(chatId: Int64, info: ChatJoinRequestsInfo?) {
+        notePendingRequests(chatId: chatId, info: info.map { ChatJoinRequestsInfoFacts(totalCount: $0.totalCount, userIds: $0.userIds) })
     }
 
     /// Per-session memory (Android clears it on every client attach): a new TDLib client re-announces
@@ -742,6 +862,8 @@ final class AppModel {
             await refreshMyCard()
         }
         nodeLookupDone = true
+        // PROTOCOL §11.4.9: before the feed, because the private sources are part of its merge.
+        await refreshPrivate()
         await refreshFeed()
         await refreshDiscovery()
     }
@@ -754,6 +876,8 @@ final class AppModel {
             let info = try await perform { try await self.nodes.readNode(username: node.username, force: true) }
             if info.state != .notANode { adopt(node: node, info: info) }
             myCardFetchedAt = info.fetchedAt
+            // PROTOCOL §11.6: a §2-only client rewrote the card and dropped `private.id`; put it back.
+            await repairPrivateId(found: info.privateId)
         } catch {
             if !isOffline { showToast(TDFailure(error).message, tone: .bad) }
         }
@@ -829,11 +953,26 @@ final class AppModel {
         guard auth == .ready else { return }
         // Offline, reads serve cache: the cached posts are already on screen; refresh again when the network returns.
         if isOffline { feedStale = true; feedReady = true; posts = feed.posts; return }
+        // One refresh at a time. A caller that lands while one is in flight — an arrival pass, a
+        // reconnect, a pull, a follow — does not start a second `resolveSources` + `getChatHistory`
+        // burst on top of the first; it asks for one more pass, and the in-flight run makes exactly
+        // one when it finishes. Without this a burst of callers was a burst of full refreshes.
+        if feedLoading { feedRefreshWanted = true; return }
         feedLoading = true
-        defer { feedLoading = false; feedReady = true }
+        await refreshFeedOnce()
+        feedLoading = false
+        feedReady = true
+        if feedRefreshWanted { feedRefreshWanted = false; await refreshFeed() }
+    }
+
+    /// One pass of the refresh: pending requests, sources, the merge, the comment index.
+    private func refreshFeedOnce() async {
+        // PROTOCOL §11.4.7: every feed refresh re-checks the requests I have out.
+        await checkPendingApprovals()
         do {
             try await perform {
-                try await self.feed.resolveSources(me: self.myNode?.username, myFeeds: self.myCard?.feeds ?? [], follows: self.myCard?.follows ?? [])
+                try await self.feed.resolveSources(me: self.myNode?.username, myFeeds: self.myCard?.feeds ?? [],
+                                                   follows: self.myCard?.follows ?? [], privateSources: self.privateSources)
                 try await self.feed.refresh()
             }
             feedStale = false
@@ -981,7 +1120,8 @@ final class AppModel {
         myCard = next
         store.save(next, LocalStore.myCard)
         do {
-            let updated = try await perform { try await self.cardWriter.writeCard(next, work: self.myWork, node: node) }
+            // `myPrivateId` rides on every write (PROTOCOL §11.6), the way `myWork` does (§10.6).
+            let updated = try await perform { try await self.cardWriter.writeCard(next, work: self.myWork, privateId: self.myPrivateId, node: node) }
             myNode = updated
             store.save(updated, LocalStore.myNode)
             return true
@@ -1204,8 +1344,14 @@ final class AppModel {
     func post(text: String, photoPath: String?, to feedUsername: String) async -> Bool {
         if refuseDemoWrite() { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
-        var resolved = feed.sources[Username.key(feedUsername)] ?? nodes.cachedFeed(feedUsername)
-        if resolved == nil { resolved = try? await nodes.readFeed(username: feedUsername) }
+        // PRODUCT §2.28: a private target is a `c/<id>` key, resolved through the record — it has
+        // no username to look up.
+        var resolved = feed.sources[Username.key(feedUsername)]
+        if resolved == nil, let id = PrivateLink.supergroupId(fromSourceKey: feedUsername) {
+            resolved = privateChatId(supergroupId: id).flatMap { privateChannel(chatId: $0) }
+        }
+        if resolved == nil, !isPrivateTarget(feedUsername) { resolved = nodes.cachedFeed(feedUsername) }
+        if resolved == nil, !isPrivateTarget(feedUsername) { resolved = try? await nodes.readFeed(username: feedUsername) }
         guard let info = resolved else { showToast("Feed not found.", tone: .bad); return false }
         do {
             _ = try await activity.run("Posting") {
@@ -1273,7 +1419,7 @@ final class AppModel {
     func commentTargets(for post: Post) -> [String] {
         var links = [post.deepLink]
         for id in post.albumMessageIds where id != post.messageId {
-            links.append(DeepLink.post(username: post.sourceUsername, messageId: id))
+            links.append(post.itemLink(messageId: id))
         }
         return links
     }
@@ -1327,6 +1473,9 @@ final class AppModel {
     /// here: the composer opens against whatever is selected right now.
     func startComment(on post: Post, itemLink: String? = nil) {
         if refuseDemoWrite() { return }
+        // PROTOCOL §11.5: no comments on a private post — a `re:` line in a public channel would
+        // publish the post. The control is absent (PRODUCT §2.32); this is the guard behind it.
+        guard !post.isPrivate else { return }
         guard myNode != nil else { showToast("Make your node first.", tone: .bad); return }
         modal = .comment(targeting: targeting(for: post, itemLink: itemLink))
     }
@@ -1431,6 +1580,8 @@ final class AppModel {
 
     func isBlocked(_ username: String) -> Bool { moderation.isBlocked(username) }
     func isMuted(feed username: String) -> Bool { moderation.isMuted(feed: username) }
+    /// A source key as the post carries it — a username key or `c/<id>` (PROTOCOL §7.2).
+    func isMuted(sourceKey: String) -> Bool { moderation.lists.isMuted(sourceKey: sourceKey) }
 
     /// PRODUCT §2.16. The card is never touched: rewriting `follows:` to enforce a block would
     /// publish the block, which is the one thing this feature promises to keep private.
@@ -1455,6 +1606,29 @@ final class AppModel {
     func unmute(feed username: String, title: String) {
         moderation.unmute(feed: username)
         showToast("Unmuted \(title).")
+    }
+
+    /// PRODUCT §2.32: a private channel is muted by title and keyed by id (PROTOCOL §7.2).
+    func mute(sourceKey: String, title: String) {
+        moderation.mute(sourceKey: sourceKey)
+        showToast("Muted \(title).")
+    }
+
+    func unmute(sourceKey: String, title: String) {
+        moderation.unmute(sourceKey: sourceKey)
+        showToast("Unmuted \(title).")
+    }
+
+    /// The channel behind a post's subheading: a feed channel screen for a public source, the
+    /// private channel screen for a private one (PRODUCT §2.28). One door, so no surface can push
+    /// a username route for a channel that has none.
+    func openFeed(sourceKey: String) {
+        if let id = PrivateLink.supergroupId(fromSourceKey: sourceKey) {
+            guard let chatId = privateChatId(supergroupId: id) else { return }
+            path.append(.privateChannel(chatId: chatId))
+        } else {
+            path.append(.feedChannel(username: sourceKey))
+        }
     }
 
     func unhide(_ item: HiddenItem) {
@@ -1530,41 +1704,63 @@ final class AppModel {
         }
         guard let node = myNode else { return .deleted }
         if isOffline { showToast("You're offline.", tone: .bad); return .offline }
+        deletingNode = true
+        defer { deletingNode = false }
         let repliesUsername = myCard?.replies
-        var repliesChat: Chat?
+        var repliesChat: (chatId: Int64, canDeleteForAll: Bool)?
         if let repliesUsername {
             do {
                 // A card pointing at a channel that is already gone has nothing to delete; that is
                 // step one being skipped, not a failure.
-                repliesChat = try await nodes.publicChat(username: repliesUsername)
+                repliesChat = try await chatDeleter.publicChannel(username: repliesUsername)
             } catch {
                 return .commentsFailed(username: repliesUsername, error: TDFailure(error).message)
             }
-            if let chat = repliesChat, !chat.canBeDeletedForAllUsers {
+            if let chat = repliesChat, !chat.canDeleteForAll {
                 return .notOwner(username: repliesUsername)
             }
         }
         do {
-            let nodeChat = try await perform { try await self.td.api.getChat(chatId: node.chatId) }
-            guard nodeChat.canBeDeletedForAllUsers else { return .notOwner(username: node.username) }
+            let owned = try await perform { try await self.chatDeleter.canDeleteForAll(chatId: node.chatId) }
+            guard owned else { return .notOwner(username: node.username) }
         } catch {
             // Nothing has been deleted yet, so this reads as the first failure it is.
             return .commentsFailed(username: node.username, error: TDFailure(error).message)
         }
+        // PROTOCOL §11.4.12: the private channels go first — feeds, then the node — because the
+        // thing that verifies them is about to be deleted. After the ownership checks above, so
+        // §2.21's "not the owner means nothing was deleted" still holds; a private refusal stops
+        // before anything public is touched.
+        let privateOutcome = await deletePrivateChannels()
+        if case .failed(let result) = privateOutcome { return result }
+        let privateWent = privateOutcome == .deleted
         if let chat = repliesChat, let repliesUsername {
-            do { try await perform { _ = try await self.td.api.deleteChat(chatId: chat.id) } }
-            catch { return .commentsFailed(username: repliesUsername, error: TDFailure(error).message) }
+            do { try await perform { try await self.chatDeleter.deleteChat(chatId: chat.chatId) } }
+            catch {
+                let message = TDFailure(error).message
+                guard privateWent else { return .commentsFailed(username: repliesUsername, error: message) }
+                // The private channels are gone for every member, irreversibly (§11.4.12): the card
+                // must stop naming one, and the modal must not say nothing was deleted — so this
+                // is its own outcome, not `.commentsFailed`.
+                if let card = myCard { await writeCard(card) }
+                return .commentsFailedAfterPrivate(username: node.username, replies: repliesUsername, error: message)
+            }
         }
         do {
-            try await perform { _ = try await self.td.api.deleteChat(chatId: node.chatId) }
+            try await perform { try await self.chatDeleter.deleteChat(chatId: node.chatId) }
         } catch {
             let message = TDFailure(error).message
             // The comments channel is gone; the card must stop pointing at it (PROTOCOL §4.4).
-            if repliesChat != nil, var next = myCard {
-                next.replies = nil
+            // The private node is gone too, so `private.id` goes with it (§11.4.12) — `myPrivateId`
+            // is already nil, and this write is what strips the line.
+            if repliesChat != nil || privateWent, var next = myCard {
+                if repliesChat != nil { next.replies = nil }
                 await writeCard(next)
             }
-            return .nodeFailed(username: node.username, error: message)
+            // PRODUCT §2.33: whatever went before the node refused is named, all of it.
+            return privateWent
+                ? .nodeFailedAfterPrivate(username: node.username, commentsWent: repliesChat != nil, error: message)
+                : .nodeFailed(username: node.username, error: message)
         }
         // PROTOCOL §4.11 step 3: everything §7 calls discardable goes, the session stays authorized,
         // and the client is nodeless — no logOut. The safety lists survive (LocalStore.clear).
@@ -1585,6 +1781,7 @@ final class AppModel {
         setupSkipped = false; inSetup = false; feedMode = .all
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
         feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
+        clearPrivateState()
         path = []; tab = .feed
         feedReady = false; feedStale = false; feedExhausted = false
         lastFeedRefresh = nil; myCardFetchedAt = nil

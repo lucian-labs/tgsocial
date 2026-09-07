@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text. `work` cases: PROTOCOL §10, the additive work extension — parsed by a second pass, so §2's own cases above are untouched by it.",
+  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text. `work` cases: PROTOCOL §10, the additive work extension — parsed by a second pass, so §2's own cases above are untouched by it. `private` cases: PROTOCOL §11, the private extension — the same second-pass shape as `work`; the two §2 parse cases naming §11 are the additivity claim run through §2's own loop.",
   "parse": [
     {
       "name": "full card",
@@ -196,6 +196,36 @@
         "feeds": [
           "waveloop_devlog",
           "tresbuchet"
+        ],
+        "follows": [
+          "tgs_ana"
+        ],
+        "replies": "tgs_elijah_r"
+      }
+    },
+    {
+      "name": "a private card is an ordinary card to the v1 parser — no feeds, no follows (PROTOCOL §11)",
+      "text": "tgsocial v1\nname: Elijah Lucian\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321",
+      "expect": {
+        "name": "Elijah Lucian",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [],
+        "follows": [],
+        "replies": null
+      }
+    },
+    {
+      "name": "private.id on a public card is an unknown key to the v1 parser (PROTOCOL §11)",
+      "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+      "expect": {
+        "name": "Elijah Lucian",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog"
         ],
         "follows": [
           "tgs_ana"
@@ -453,6 +483,10 @@
       },
       {
         "in": "vouch: https://t.me/tgs_elijah\ndoes: live sound\nRan front of house for two years.",
+        "out": null
+      },
+      {
+        "in": "re: https://t.me/c/2481234567/12\nA reply to a private post is not a comment (PROTOCOL §11.5).",
         "out": null
       }
     ],
@@ -859,6 +893,306 @@
           }
         ]
       }
+    }
+  },
+  "private": {
+    "$comment": "PROTOCOL §11 — the private extension. `parse` cases: private card text → parsePrivate(text), the second pass ({node, feeds} or null). `publicId` cases: public card text → privateIdOf(text) (digits string or null). `invite` cases: normaliseInviteLink(input) → canonical https://t.me/+HASH or null. `serialise` cases: card (+ privateId | private) → exact expected text, §11 lines last. `verify` cases: privateVerified(privateText, supergroupId, publicText, publicNode) → boolean — only public → private is provable (§11.3).",
+    "parse": [
+      {
+        "name": "full private card",
+        "text": "tgsocial v1\nname: Elijah Lucian\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321",
+        "expect": {
+          "node": "tgs_elijah",
+          "feeds": [
+            "https://t.me/+AbCdEfGh12345678",
+            "https://t.me/+ZyXwVuTs87654321"
+          ]
+        }
+      },
+      {
+        "name": "private.node alone is a private card with no extra feeds",
+        "text": "tgsocial v1\nprivate.node: @tgs_elijah",
+        "expect": {
+          "node": "tgs_elijah",
+          "feeds": []
+        }
+      },
+      {
+        "name": "no private.node is not a private card, whatever else it carries",
+        "text": "tgsocial v1\nname: Elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678",
+        "expect": null
+      },
+      {
+        "name": "not a card at all",
+        "text": "join my private channel: https://t.me/+AbCdEfGh12345678",
+        "expect": null
+      },
+      {
+        "name": "a public card with private.id has no private card in it",
+        "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+        "expect": null
+      },
+      {
+        "name": "feeds: usernames are not invite links and are dropped; joinchat and tg:// forms normalise; duplicates collapse; hash case is kept",
+        "text": "tgsocial v1\nprivate.node: @tgs_elijah\nprivate.feeds: @waveloop_devlog https://t.me/joinchat/AbCdEfGh12345678 tg://join?invite=AbCdEfGh12345678 t.me/+QqQqQqQqQqQqQqQq https://t.me/+abcdefgh12345678",
+        "expect": {
+          "node": "tgs_elijah",
+          "feeds": [
+            "https://t.me/+AbCdEfGh12345678",
+            "https://t.me/+QqQqQqQqQqQqQqQq",
+            "https://t.me/+abcdefgh12345678"
+          ]
+        }
+      },
+      {
+        "name": "an invalid private.node is no private.node",
+        "text": "tgsocial v1\nprivate.node: @abc\nprivate.feeds: https://t.me/+AbCdEfGh12345678",
+        "expect": null
+      },
+      {
+        "name": "a repeated private key concatenates like any other (§2)",
+        "text": "tgsocial v1\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678\nprivate.feeds: https://t.me/+ZyXwVuTs87654321",
+        "expect": {
+          "node": "tgs_elijah",
+          "feeds": [
+            "https://t.me/+AbCdEfGh12345678",
+            "https://t.me/+ZyXwVuTs87654321"
+          ]
+        }
+      }
+    ],
+    "publicId": {
+      "cases": [
+        {
+          "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "out": "2481234567"
+        },
+        {
+          "text": "tgsocial v1\nname: Bob",
+          "out": null
+        },
+        {
+          "text": "tgsocial v1\nprivate.id: -1002481234567",
+          "out": null
+        },
+        {
+          "text": "tgsocial v1\nprivate.id: https://t.me/+AbCdEfGh12345678",
+          "out": null
+        },
+        {
+          "text": "tgsocial v1\nprivate.id: 0",
+          "out": null
+        },
+        {
+          "text": "hello\nprivate.id: 2481234567",
+          "out": null
+        }
+      ]
+    },
+    "invite": {
+      "cases": [
+        {
+          "in": "https://t.me/+AbCdEfGh12345678",
+          "out": "https://t.me/+AbCdEfGh12345678"
+        },
+        {
+          "in": "t.me/+AbCdEfGh12345678/",
+          "out": "https://t.me/+AbCdEfGh12345678"
+        },
+        {
+          "in": "https://t.me/joinchat/AAAAAEkk2WdoYEXWKlTkHA",
+          "out": "https://t.me/+AAAAAEkk2WdoYEXWKlTkHA"
+        },
+        {
+          "in": "tg://join?invite=AbCdEfGh12345678",
+          "out": "https://t.me/+AbCdEfGh12345678"
+        },
+        {
+          "in": "  https://t.me/+AbCdEfGh12345678  ",
+          "out": "https://t.me/+AbCdEfGh12345678"
+        },
+        {
+          "in": "https://t.me/tgs_elijah",
+          "out": null
+        },
+        {
+          "in": "@tgs_elijah",
+          "out": null
+        },
+        {
+          "in": "https://t.me/+",
+          "out": null
+        },
+        {
+          "in": "https://t.me/+ab",
+          "out": null
+        },
+        {
+          "in": "https://t.me/+has/slash12345",
+          "out": null
+        },
+        {
+          "in": "https://t.me/c/2481234567/12",
+          "out": null
+        },
+        {
+          "in": "",
+          "out": null
+        }
+      ]
+    },
+    "serialise": [
+      {
+        "name": "private.id is the last line of a public card, after every §2 and §10 key",
+        "card": {
+          "name": "Elijah Lucian",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [
+            "waveloop_devlog"
+          ],
+          "follows": [
+            "tgs_ana"
+          ],
+          "replies": "tgs_elijah_r",
+          "work": {
+            "role": "Staff product architect",
+            "does": [],
+            "open": null,
+            "feeds": []
+          },
+          "privateId": "2481234567"
+        },
+        "expect": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nwork.role: Staff product architect\nprivate.id: 2481234567"
+      },
+      {
+        "name": "a private card: marker, name, public no, then the §11 lines in key order",
+        "card": {
+          "name": "Elijah Lucian",
+          "bio": null,
+          "link": null,
+          "public": false,
+          "feeds": [],
+          "follows": [],
+          "replies": null,
+          "private": {
+            "node": "@tgs_elijah",
+            "feeds": [
+              "https://t.me/+AbCdEfGh12345678",
+              "t.me/joinchat/ZyXwVuTs87654321"
+            ]
+          }
+        },
+        "expect": "tgsocial v1\nname: Elijah Lucian\npublic: no\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321"
+      },
+      {
+        "name": "no §11 fields is §2's serialiser, unchanged",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [],
+          "follows": [],
+          "replies": null
+        },
+        "expect": "tgsocial v1\nname: Bob\npublic: yes"
+      },
+      {
+        "name": "a malformed privateId never reaches the wire",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [],
+          "follows": [],
+          "replies": null,
+          "privateId": "-1002481234567"
+        },
+        "expect": "tgsocial v1\nname: Bob\npublic: yes"
+      },
+      {
+        "name": "private.feeds without a private.node is nothing",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [],
+          "follows": [],
+          "replies": null,
+          "private": {
+            "node": "",
+            "feeds": [
+              "https://t.me/+AbCdEfGh12345678"
+            ]
+          }
+        },
+        "expect": "tgsocial v1\nname: Bob\npublic: yes"
+      }
+    ],
+    "verify": {
+      "$comment": "supergroupId is the private channel's own supergroup.id as the reader's TDLib reports it; publicNode is the username the reader resolved private.node through (searchPublicChat), so a private card naming @tgs_elijah is checked against @tgs_elijah's card and no other.",
+      "cases": [
+        {
+          "name": "the public card names this channel — verified",
+          "privateText": "tgsocial v1\nname: Elijah Lucian\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321",
+          "supergroupId": 2481234567,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": true
+        },
+        {
+          "name": "username case does not matter on either side",
+          "privateText": "tgsocial v1\nprivate.node: @TGS_Elijah",
+          "supergroupId": 2481234567,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": true
+        },
+        {
+          "name": "the public card names a different private channel — a stale or a hostile claim",
+          "privateText": "tgsocial v1\nname: Elijah Lucian\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321",
+          "supergroupId": 2481234568,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": false
+        },
+        {
+          "name": "the public card carries no private.id — the owner opted out, or a §2-only client rewrote it (§10.6)",
+          "privateText": "tgsocial v1\nname: Elijah Lucian\nprivate.node: @tgs_elijah\nprivate.feeds: https://t.me/+AbCdEfGh12345678 https://t.me/+ZyXwVuTs87654321",
+          "supergroupId": 2481234567,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes",
+          "publicNode": "tgs_elijah",
+          "out": false
+        },
+        {
+          "name": "a private card that names somebody else is not checked against this node",
+          "privateText": "tgsocial v1\nprivate.node: @tgs_ana",
+          "supergroupId": 2481234567,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": false
+        },
+        {
+          "name": "a hostile channel claiming @tgs_elijah, whose card points at the real one",
+          "privateText": "tgsocial v1\nprivate.node: @tgs_elijah",
+          "supergroupId": 9999999999,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": false
+        },
+        {
+          "name": "not a private card",
+          "privateText": "tgsocial v1\nname: Elijah",
+          "supergroupId": 2481234567,
+          "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+          "publicNode": "tgs_elijah",
+          "out": false
+        }
+      ]
     }
   }
 }

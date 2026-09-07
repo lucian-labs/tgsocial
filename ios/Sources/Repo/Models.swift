@@ -26,6 +26,11 @@ struct NodeInfo: Codable, Equatable, Identifiable {
     /// versioned. Decoded with `decodeIfPresent`, so a cache written before this field existed
     /// still loads.
     var work: Work? = nil
+    /// The §11 pass over the same pinned message: the `private.id` line, as digits, or nil for
+    /// every card that carries none (PROTOCOL §11.2). It is the one thing a public card says
+    /// about the private layer, and it exists to be compared against (§11.3) — never to be acted
+    /// on. Decoded with `decodeIfPresent` like `work`, so an older cache still loads.
+    var privateId: String? = nil
     var state: CardState
     var photo: PhotoRef?
     var fetchedAt: Date
@@ -37,7 +42,10 @@ struct NodeInfo: Codable, Equatable, Identifiable {
     var feedCount: Int { card?.feeds.count ?? 0 }
 }
 
-/// A feed channel: public channel with a username.
+/// A feed channel: public channel with a username — or, under PROTOCOL §11, a private channel
+/// with none. A private source carries an empty `username` and its `privateSupergroupId`; its key
+/// is §7.2's `c/<supergroupId>` grammar, which no username can collide with, so the merge, the
+/// safety lists and the compose tabs all key it the same way without a second code path.
 struct FeedInfo: Codable, Equatable, Identifiable {
     var username: String
     var chatId: Int64
@@ -45,9 +53,15 @@ struct FeedInfo: Codable, Equatable, Identifiable {
     var description: String
     var photo: PhotoRef?
     var fetchedAt: Date
+    /// Set only for a private channel (PROTOCOL §11.1). Nil is every public feed.
+    var privateSupergroupId: Int64? = nil
 
-    var id: String { Username.key(username) }
-    var key: String { Username.key(username) }
+    var isPrivate: Bool { privateSupergroupId != nil }
+    var id: String { key }
+    var key: String {
+        if let id = privateSupergroupId { return PrivateLink.sourceKey(supergroupId: id) }
+        return Username.key(username)
+    }
     func isVerified(for node: String) -> Bool { Backlink.verifies(description: description, node: node) }
 }
 
@@ -168,9 +182,25 @@ struct Post: Codable, Equatable, Hashable, Identifiable, FeedEntry {
     /// The node card's `name`, falling back to `@username`.
     var authorName: String?
     var authorPhoto: PhotoRef?
+    /// PROTOCOL §11: the source channel's supergroup id when the source is a private channel, nil
+    /// for every public feed. Everything that makes a private post different on screen — the
+    /// `Private` pill, the `t.me/c/` link, no comments, the `c/<id>` safety keys — hangs off this
+    /// one field, so there is no mode in which a private post looks like a public one (§11.5).
+    var privateSupergroupId: Int64? = nil
 
+    var isPrivate: Bool { privateSupergroupId != nil }
     var id: String { "\(chatId):\(messageId)" }
-    var deepLink: String { DeepLink.post(username: sourceUsername, messageId: messageId) }
+    /// `https://t.me/<username>/<n>` for a public post; `https://t.me/c/<id>/<n>` for a private
+    /// one, which opens for members and for nobody else (PROTOCOL §11.4.8).
+    var deepLink: String {
+        if let id = privateSupergroupId { return PrivateLink.post(supergroupId: id, messageId: messageId) }
+        return DeepLink.post(username: sourceUsername, messageId: messageId)
+    }
+    /// The link of one album item — the same shape as `deepLink`, for the item's own message.
+    func itemLink(messageId: Int64) -> String {
+        if let id = privateSupergroupId { return PrivateLink.post(supergroupId: id, messageId: messageId) }
+        return DeepLink.post(username: sourceUsername, messageId: messageId)
+    }
 }
 
 /// One row in Explore / Graph (PROTOCOL §5).
@@ -364,7 +394,7 @@ struct ViewerRequest: Equatable {
         for (i, media) in post.media.enumerated() {
             guard isViewable(media) else { continue }
             let messageId = album ? post.albumMessageIds[i] : post.messageId
-            out.append(DeepLink.post(username: post.sourceUsername, messageId: messageId))
+            out.append(post.itemLink(messageId: messageId))
         }
         return out
     }

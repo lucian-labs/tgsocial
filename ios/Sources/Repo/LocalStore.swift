@@ -47,8 +47,9 @@ final class LocalStore {
 
     /// A page cached by an earlier build must not paint: the persisted payload carries a schema
     /// version and a mismatch discards it. Bump on any change to the cached models or their
-    /// ordering rules. 2: attribution fields on Post, relative-time card redesign.
-    static let schemaVersion = 2
+    /// ordering rules. 2: attribution fields on Post, relative-time card redesign. 3: private
+    /// sources (PROTOCOL §11) — `privateSupergroupId` on Post and FeedInfo, `privateId` on NodeInfo.
+    static let schemaVersion = 3
 
     private struct Versioned<T: Codable>: Codable {
         var schemaVersion: Int
@@ -83,6 +84,13 @@ final class LocalStore {
     static let vouchIndex = "vouches"
     /// PROTOCOL §7: a UI preference, not a cache. Feed's All / Work mode (PRODUCT §2.24).
     static let feedMode = "feedMode"
+    /// PROTOCOL §7.2: the private record — my private node, my private feeds, and the pending
+    /// requests Telegram does not hold for the requester. Discardable: everything but `pending`
+    /// is recovered from the chat list (§11.4.9), and losing `pending` costs one repeated request.
+    static let privateRecord = "private"
+    /// PRODUCT §2.33: `Confirm on public card`. A preference, on by default; stored only when the
+    /// owner turns it off, so its absence reads as on.
+    static let privateConfirmOff = "privateConfirmOff"
     /// PROTOCOL §7.1: stored apart from every cache and never versioned with them — a cache bump
     /// discards caches and must never discard a block list.
     static let moderation = "moderation"

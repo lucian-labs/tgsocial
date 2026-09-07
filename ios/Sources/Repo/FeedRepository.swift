@@ -26,6 +26,10 @@ final class FeedRepository {
     private var myUsername: String?
     private var myFeeds: [String] = []
     private var follows: [String] = []
+    /// PROTOCOL §11.5: the private sources' attribution, keyed by `c/<id>`. A verified private
+    /// card's channel is attributed to the public node it names; my own private channels to me;
+    /// an unverified one to nobody — the channel itself.
+    private var privateOwners: [String: PrivateSource] = [:]
 
     init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
@@ -52,10 +56,23 @@ final class FeedRepository {
     /// Sources = my feeds ∪ feeds of every node I follow. Resolves channel info (cached). Throws only on FLOOD_WAIT.
     /// A node or channel that cannot be read live (offline, transient Telegram error) falls back to its cached
     /// record however stale it is, so the merge keeps every source it knew about (PRODUCT §4: reads serve cache).
-    func resolveSources(me: String?, myFeeds: [String], follows: [String]) async throws {
+    ///
+    /// `privateSources` is §11.5's extension of §4.8's source list — my private node, my private
+    /// feeds, every private node I am an approved member of and every listed feed I am in. They
+    /// join the same merge under `c/<id>` keys; nothing about the merge changes.
+    func resolveSources(me: String?, myFeeds: [String], follows: [String], privateSources: [PrivateSource] = []) async throws {
         myUsername = me
         self.myFeeds = myFeeds
         self.follows = follows
+        privateOwners = [:]
+        for p in privateSources {
+            // §11.3 protects attribution, and a listed link can open onto a channel that carries
+            // its own private card — another person's node, which the reader is in by THAT owner's
+            // approval — or onto one of mine. Such a channel is attributed by its own entry; a card
+            // that merely lists its invite never overwrites it, whichever order they arrive in.
+            if p.isListed, privateOwners[p.info.key] != nil { continue }
+            privateOwners[p.info.key] = p
+        }
         var usernames = myFeeds
         var followed: [String: NodeInfo] = [:]
         for n in try await nodes.readNodes(follows) { followed[n.key] = n }
@@ -70,9 +87,13 @@ final class FeedRepository {
         for u in unique where next[Username.key(u)] == nil {
             if let cached = nodes.cachedFeed(u) ?? sources[Username.key(u)] { next[cached.key] = cached }
         }
+        for p in privateSources { next[p.info.key] = p.info }
         sources = next
         merger.setSources(Array(next.keys))
     }
+
+    /// The private sources in the current merge — what Compose lists under `POST TO` for my own.
+    var privateSources: [PrivateSource] { Array(privateOwners.values) }
 
     // MARK: Attribution (PRODUCT §2.3)
 
@@ -88,6 +109,21 @@ final class FeedRepository {
     /// Name = the node card's `name`, falling back to `@username`; avatar = the node's photo.
     func stamped(_ post: Post) -> Post {
         var p = post
+        if post.isPrivate {
+            // §11.5: verified → the node the card names; mine → me; unverified → the channel.
+            let owner = privateOwners[post.sourceKey]
+            let username = owner?.isMine == true ? myUsername : owner?.owner
+            guard let username else {
+                p.authorUsername = nil; p.authorName = nil; p.authorPhoto = nil
+                return p
+            }
+            let node = nodes.cachedNode(username)
+            let cardName = node?.card?.name
+            p.authorUsername = username
+            p.authorName = (cardName?.isEmpty == false ? cardName : nil) ?? "@" + username
+            p.authorPhoto = node?.photo
+            return p
+        }
         guard let username = attributionNode(forFeed: post.sourceUsername) else {
             p.authorUsername = nil; p.authorName = nil; p.authorPhoto = nil
             return p
@@ -150,7 +186,7 @@ final class FeedRepository {
     private func refill(_ key: String) async throws {
         guard let source = sources[key] else { merger.add([], to: key, exhausted: true); return }
         let cursor = merger.cursor(for: key)
-        let page = try await activity.run("Loading @\(source.username)") {
+        let page = try await activity.run(Self.loadingLabel(source)) {
             try await self.fetchPage(source: source, fromMessageId: cursor)
         }
         let stuck = cursor != 0 && page.oldestId >= cursor
@@ -238,9 +274,26 @@ final class FeedRepository {
 
     /// Newest first, like every list of posts (PRODUCT §2.3).
     func channelPosts(_ source: FeedInfo, fromMessageId: Int64 = 0) async throws -> (posts: [Post], oldestId: Int64, exhausted: Bool) {
-        try await activity.run("Loading @\(source.username)") {
+        try await activity.run(Self.loadingLabel(source)) {
             try await self.fetchPage(source: source, fromMessageId: fromMessageId)
         }
+    }
+
+    /// The Status sheet's pending line names a public feed by username and a private one by title
+    /// — a private channel has no username to name, and the title is what its members know it by.
+    static func loadingLabel(_ source: FeedInfo) -> String {
+        source.isPrivate ? "Loading \(source.title)" : "Loading @\(source.username)"
+    }
+
+    /// PROTOCOL §11.8: a source the reader can no longer read — left, removed, deleted — drops
+    /// from the merge with its cursor and its cached page. The safety lists keep their keys.
+    func drop(sourceKey: String) {
+        guard sources[sourceKey] != nil else { return }
+        sources.removeValue(forKey: sourceKey)
+        privateOwners.removeValue(forKey: sourceKey)
+        merger.setSources(Array(sources.keys))
+        posts.removeAll { $0.sourceKey == sourceKey }
+        persist()
     }
 
     // MARK: Live updates

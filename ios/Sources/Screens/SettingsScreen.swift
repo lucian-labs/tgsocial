@@ -19,6 +19,8 @@ struct SettingsScreen: View {
             blocked
             muted
             hidden
+            // PRODUCT §2.33: between HIDDEN and CONTACT, present only when there is a private layer.
+            if !model.isDemo { PrivateSettingsSection() }
             contact
 
             // §2.22.3: `Sign Out` is not in the demo at all — there is no session to leave.
@@ -80,14 +82,21 @@ struct SettingsScreen: View {
             HPCard { HPMuted("No muted feeds.") }
         } else {
             HPListCard {
-                ForEach(Array(list.enumerated()), id: \.element) { i, username in
-                    let feed = model.feedInfo(username)
-                    let title = feed?.title ?? "@" + username
+                ForEach(Array(list.enumerated()), id: \.element) { i, key in
+                    // PRODUCT §2.32: a private channel shows its title with a `Private` pill in
+                    // place of a username; its key is `c/<id>` (PROTOCOL §7.2).
+                    let privateId = PrivateLink.supergroupId(fromSourceKey: key)
+                    let privateInfo = privateId.flatMap { model.privateChatId(supergroupId: $0) }.flatMap { model.privateChannel(chatId: $0) }
+                    let feed = privateId == nil ? model.feedInfo(key) : privateInfo
+                    let title = feed?.title ?? (privateId == nil ? "@" + key : "Private channel")
                     HPListItem(isLast: i == list.count - 1) {
-                        Button { model.path.append(.feedChannel(username: username)) } label: {
+                        Button { model.openFeed(sourceKey: key) } label: {
                             VStack(alignment: .leading, spacing: 0) {
-                                HPBody(title).lineLimit(1)
-                                HPMonoSmall("@" + username).lineLimit(1)
+                                HStack(spacing: HPTokens.Space.rowGap) {
+                                    HPBody(title).lineLimit(1)
+                                    if privateId != nil { HPPill("Private", tone: .neutral) }
+                                }
+                                if privateId == nil { HPMonoSmall("@" + key).lineLimit(1) }
                             }
                             .frame(minHeight: HPTokens.Space.touchMin, alignment: .leading)
                             .contentShape(Rectangle())
@@ -95,7 +104,7 @@ struct SettingsScreen: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Open feed \(title)")
                     } trailing: {
-                        HPButton("Unmute", style: .ghost, size: .small) { model.unmute(feed: username, title: title) }
+                        HPButton("Unmute", style: .ghost, size: .small) { model.unmute(sourceKey: key, title: title) }
                     }
                 }
             }
@@ -130,12 +139,27 @@ struct SettingsScreen: View {
     }
 
     /// `WaveLoop devlog · 144` — the channel's title where it is known, its username where it is not.
+    /// A private post's key is `c/<id>/<n>` (PROTOCOL §7.2); its row reads the channel title with
+    /// the key column `c/<id> · <n>` (PRODUCT §2.32), never a username it does not have.
     static func hiddenTitle(_ item: HiddenItem, model: AppModel) -> String {
+        if let (sourceKey, n) = Self.privateParts(item.key) {
+            let title = PrivateLink.supergroupId(fromSourceKey: sourceKey)
+                .flatMap { model.privateChatId(supergroupId: $0) }
+                .flatMap { model.privateChannel(chatId: $0)?.title } ?? "Private channel"
+            return "\(title) \u{00B7} \(sourceKey) \u{00B7} \(n)"
+        }
         let parts = item.key.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
         let channel = String(parts.first ?? "")
         let id = parts.count > 1 ? String(parts[1]) : ""
         let title = model.feedInfo(channel)?.title ?? "@" + channel
         return id.isEmpty ? title : "\(title) \u{00B7} \(id)"
+    }
+
+    /// `c/<id>/<n>` → (`c/<id>`, `<n>`); nil for a username key.
+    static func privateParts(_ key: String) -> (String, String)? {
+        let parts = key.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0] == "c", PrivateLink.supergroupId(fromSourceKey: "c/" + parts[1]) != nil else { return nil }
+        return ("c/" + parts[1], String(parts[2]))
     }
 
     // MARK: Contact (§2.19)
@@ -182,10 +206,19 @@ struct DeleteNodeModal: View {
 
     // MARK: The confirm
 
+    /// PRODUCT §2.21's paragraph, grown per §2.33 when a private node exists: the private clause
+    /// is derived, and the sentence about members is present only then.
+    private var paragraph: String {
+        if let clause = model.deleteNodePrivateClause {
+            return "This deletes the channel @\(username), your comments channel @\(repliesUsername), \(clause) from Telegram. The public card other people read disappears, every post and comment in those channels goes with it, every member of your private channels loses them at once, and the public names are released for anyone to take. This cannot be undone."
+        }
+        return "This deletes the channel @\(username) and your comments channel @\(repliesUsername) from Telegram. The public card other people read disappears, every post and comment in those two channels goes with it, and the names are released for anyone to take. This cannot be undone."
+    }
+
     @ViewBuilder private var confirm: some View {
         HPSectionMark("Delete my node")
         HPH2("Delete my node.")
-        HPMuted("This deletes the channel @\(username) and your comments channel @\(repliesUsername) from Telegram. The public card other people read disappears, every post and comment in those two channels goes with it, and the names are released for anyone to take. This cannot be undone.")
+        HPMuted(paragraph)
             .padding(.top, HPTokens.Space.rowGap)
         HPMuted("Your feed channels are not touched.")
             .padding(.top, HPTokens.Space.rowGap)
@@ -223,7 +256,7 @@ struct DeleteNodeModal: View {
         HPSectionMark("Delete my node")
         switch result {
         case .notOwner(let name):
-            HPMuted("Telegram won't let you delete @\(name) \u{2014} only the channel's owner can. Open it in Telegram to see who owns it.")
+            HPMuted(Self.message(for: result) ?? "")
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButton("Open in Telegram", style: .neutral) {
                 model.modal = nil
@@ -231,12 +264,35 @@ struct DeleteNodeModal: View {
             }
             HPButton("Close", style: .ghost) { model.modal = nil }
                 .padding(.top, HPTokens.Space.rowGap)
-        case .commentsFailed(let name, let error):
-            retry("Couldn't delete @\(name) \u{2014} Telegram said: \(error). Nothing was deleted.")
-        case .nodeFailed(let name, let error):
-            retry("Your comments channel is gone. @\(name) is still there \u{2014} Telegram said: \(error).")
+        case .commentsFailed, .nodeFailed, .privateFailed, .commentsFailedAfterPrivate, .nodeFailedAfterPrivate:
+            retry(Self.message(for: result) ?? "")
         case .deleted, .offline:
             EmptyView()
+        }
+    }
+
+    /// The sentence each short ending shows (PRODUCT §2.21, §2.33), verbatim. Every one names
+    /// what is still there, and only the two that stop before anything went say
+    /// `Nothing was deleted.` — once the private channels have gone (PROTOCOL §11.4.12 puts them
+    /// first, and `deleteChat` is for every member at once) no later refusal may say it.
+    static func message(for result: DeleteNodeResult) -> String? {
+        switch result {
+        case .notOwner(let name):
+            return "Telegram won't let you delete @\(name) \u{2014} only the channel's owner can. Open it in Telegram to see who owns it."
+        case .commentsFailed(let name, let error):
+            return "Couldn't delete @\(name) \u{2014} Telegram said: \(error). Nothing was deleted."
+        case .nodeFailed(let name, let error):
+            return "Your comments channel is gone. @\(name) is still there \u{2014} Telegram said: \(error)."
+        // PRODUCT §2.33: the four private outcomes, one per point the run can stop at.
+        case .privateFailed(let title, let error):
+            return "Couldn't delete \(title) \u{2014} Telegram said: \(error). Nothing was deleted."
+        case .commentsFailedAfterPrivate(let name, let replies, let error):
+            return "Your private channels are gone. @\(replies) and @\(name) are still there \u{2014} Telegram said: \(error)."
+        case .nodeFailedAfterPrivate(let name, let commentsWent, let error):
+            let gone = commentsWent ? "Your private channels and your comments channel are gone." : "Your private channels are gone."
+            return "\(gone) @\(name) is still there \u{2014} Telegram said: \(error)."
+        case .deleted, .offline:
+            return nil
         }
     }
 

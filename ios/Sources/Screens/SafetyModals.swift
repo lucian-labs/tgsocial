@@ -104,11 +104,20 @@ struct ReportConfirm: View {
     let onCancel: () -> Void
     @State private var reason: String?
 
+    /// The muted paragraph, and on a private post its one honest addition (PRODUCT §2.32): the
+    /// maintainer is not a member and cannot open the link.
+    static let paragraph = "This sends an email from your mail app to the person who maintains tgsocial, with a link to it. It disappears from this device as soon as you send."
+    static let privateAddendum = "This is a private post. The maintainer can't open it \u{2014} report it to Telegram from the post as well."
+
+    static func paragraph(for subject: ReportSubject) -> String {
+        subject.isPrivate ? paragraph + " " + privateAddendum : paragraph
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Report")
             HPH2(subject.title)
-            HPMuted("This sends an email from your mail app to the person who maintains tgsocial, with a link to it. It disappears from this device as soon as you send.")
+            HPMuted(Self.paragraph(for: subject))
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPSectionMark("Why")

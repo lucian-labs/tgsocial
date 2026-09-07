@@ -225,7 +225,8 @@ the long-press sheet.
 
 **Share** — ghost small button right of the time. Native: the system share
 sheet with the post's `t.me` link. Web: `navigator.share` when available,
-else copy the link + toast `Link copied.`
+else copy the link + toast `Link copied.` On a private post the link is the
+`t.me/c/` form and the toast says who can open it (§2.32).
 
 - **Order is strictly newest first** (reverse chronological): the most recent
   post is at the top, "Load more" appends older posts at the bottom. New posts
@@ -273,7 +274,7 @@ SAFETY                                       (section mark)
 ### 2.4 Explore
 
 ```
-[ Find a node                 ]  (input; on submit → open profile for @username or toast `Not a tgsocial node.`)
+[ Find a node                 ]  (input; on submit → open profile for @username or toast `Not a tgsocial node.`; an invite link → the join preview, §2.31)
 
 NEARBY                                      (section mark)
 nodes at distance 2, ranked by mutual count; each row:
@@ -394,6 +395,10 @@ LISTING
 Public listing          [ pill: Listed / Unlisted ]  (toggle writes `public:`)
 ( Announce in Directory )  btn sm — posts to @tgsocial_index; disabled when unlisted
 
+PRIVATE                                       (§2.27 — absent until there is a node)
+Nothing private yet.
+( Make a Private Node )     btn neutral sm
+
 ( View as others see it )   ghost
 ( Settings )                ghost — pushes §2.20, which now holds Sign Out
 
@@ -420,7 +425,8 @@ POST TO
 ( Post )      ( Cancel )                     btn-row: primary + ghost
 ```
 Photo attach is a `( Add Photo )` ghost sm above the row on native; web v1
-is text only. Success toast `Posted.`; the feed refreshes.
+is text only. Success toast `Posted.`; the feed refreshes. A private channel's
+tab carries a faint `Private` pill (§2.28).
 
 ### 2.10 Status sheet
 
@@ -708,8 +714,8 @@ message itself. The wire details are in [`PUBLIC.md`](./PUBLIC.md).
 
 The public page is a **lens, not a copy**: nothing is stored, the cache is
 seconds long, and deleting a post in Telegram removes it from the page. No
-account data, no private chats — a channel is only readable here because its
-owner made it public on Telegram.
+account data, no private chats, no private channels (§2.34) — a channel is
+only readable here because its owner made it public on Telegram.
 
 **What renders.** The post card of §2.3 with media playable inline and the
 full-screen viewer, relative times, and the long-press sheet — minus the
@@ -783,8 +789,8 @@ Token               ••••••••  ( Copy ) ( Rotate )
 SCOPE
 [ Graph ] [ Mine ] [ Custom ]                 (.tabs)
 14 sources — your feeds and the feeds of the
-nodes you follow. Private chats are never
-included.                                     (muted)
+nodes you follow. Private chats and private
+channels are never included.                  (muted)
 ( Review Sources )                            (btn ghost sm → list of usernames)
 
 WRITES
@@ -1100,6 +1106,8 @@ HIDDEN · 3
 └───────────────────────────────────────┘
 Nothing hidden.                              (empty, muted)
 
+PRIVATE                                      (§2.33 — present only with a private node or a private follow)
+
 CONTACT                                      (§2.19)
 
 ( Sign Out )                                 (btn danger)
@@ -1120,7 +1128,8 @@ CONTACT                                      (§2.19)
 
 Setup (§2.2) creates two public channels a person cannot remove from anywhere
 else in the app, so the app removes them. Last item in Settings, below
-Sign Out.
+Sign Out. With a private node the same action removes the private channels
+first, and the copy grows to say so (§2.33).
 
 ```
 DELETE MY NODE                               (section mark)
@@ -1974,6 +1983,502 @@ that MUST NOT render anywhere** (`PROTOCOL §10.4`). It is in the fixtures
 precisely so that a client which forgot that rule fails visibly, on all three
 platforms, without anyone writing a test for it.
 
+### 2.27 Private — what it is, and making your private node
+
+`PROTOCOL §11` adds a private layer: a second channel of yours with no
+username, where Telegram lets in only the people you approve. This is the
+surface, and the shape of it is the protocol's argument again — **private is a
+layer on your node, not a second account.** No fifth tab, no separate sign-in,
+no second profile. A person who never makes a private node never sees any of
+this, and the app looks exactly as it does today.
+
+The word is **private**. It means one thing here — Telegram membership, owner
+approval — and the copy says so where it matters. Never "encrypted", never
+"secure", never "secret", never "close friends": each of those promises
+something this does not do (`PROTOCOL §11.9`).
+
+**Where it starts.** You (§2.8) gains one section between `LISTING` and
+`View as others see it`:
+
+```
+PRIVATE
+Nothing private yet.                          (muted)
+( Make a Private Node )                       (btn neutral sm)
+```
+
+Tapping it opens the confirm, which is the only place the promise is spelled
+out in full, and it is spelled out every time — this modal is not
+skippable and has no "don't show again":
+
+```
+PRIVATE NODE                                  (section mark)
+Make your private node.                       (h2)
+A second channel of yours with no public       (muted)
+name. Nobody can find it. People get in only
+when you approve them, one at a time, and
+only they can read it.
+
+WHAT PRIVATE MEANS HERE                       (section mark)
+Telegram checks who is a member, and that is   (muted)
+the whole of it. Telegram can read what you
+post. Anyone you let in can screenshot or
+forward it. A new member sees everything
+you ever posted there.
+
+Your public card will note that a private     (faint)
+node exists — not how to reach it. Turn
+that off in Settings.
+
+( Make It )                                   (btn primary)
+( Cancel )                                    (btn ghost)
+```
+
+- The second card is the honest part and it stays. A client that trims it to
+  the first card has promised end-to-end encryption by omission.
+- The faint line is `PROTOCOL §11.3`'s cost stated before it is paid; the switch
+  it points at is §2.33.
+- `Make It` runs `PROTOCOL §11.4.1` with the pill at `Syncing` and the pending
+  row reading `Making your private node`. On success the modal closes onto the
+  Private screen (§2.28) with the invite sheet (§2.29) already open, because the
+  next thing anyone does with a private node is hand somebody the way in.
+  Toast: `Your private node is ready.`
+- No public node yet: the section is absent from You, because You without a
+  node is Setup (§2.2) and a private node needs a public one to point at
+  (`PROTOCOL §11.1`).
+- Errors surface TDLib's text verbatim. Offline: `You're offline.`
+
+### 2.28 The private card, and private feeds
+
+A pushed screen, `‹ Back`, reached from the `PRIVATE` section of You once a
+private node exists — the section then reads:
+
+```
+PRIVATE
+Elijah · private                  3 members   (title body; count mono muted)
+2 requests                                    (mono; gold when > 0; absent when 0)
+( Open )                                      (btn neutral sm)
+```
+
+The screen:
+
+```
+‹ Back                                          [Synced]
+
+(avatar 72pt)                                    ⋮
+Elijah · private                                 (h2)
+private node of @tgs_elijah                      (mono muted)
+3 members · 2 requests                           (mono faint; requests gold when > 0)
+
+( Share Invite )                                 (btn primary — the one gold action)
+( Requests · 2 )                                 (btn neutral; reads `Requests` at 0)
+
+PRIVATE FEEDS
+┌ card ─────────────────────────────────────┐
+│ Elijah · private          3 members    ›  │  the node itself, always first, not removable
+│ Band notes                 2 members    ›  │  → feed channel screen (§2.6, private variant)
+└───────────────────────────────────────────┘
+( Add a Private Feed )                           (btn ghost sm)
+
+MEMBERS · 3                                      (section mark, serif count)
+┌ card ─────────────────────────────────────┐
+│ (avatar) Ana Iliovic          ( Remove )  │  Telegram name body, @handle mono muted under
+│          @anailiovic · since 4 Sep        │
+└───────────────────────────────────────────┘
+```
+
+- The kebab holds `Open in Telegram` and `Revoke Invite` (§2.29). No
+  `Copy Link`: the only link this channel has is the invite, and the invite
+  has its own button with its own warning.
+- `MEMBERS` is `PROTOCOL §11.4.10`'s list. Rows show the Telegram account —
+  name, username, join date — because that is what Telegram knows; the app
+  does not guess a node here. `Remove` confirms:
+
+  ```
+  REMOVE                                       (section mark)
+  Remove Ana Iliovic?                          (h2)
+  They lose access to this channel now. They   (muted)
+  keep any screenshots or forwards they made,
+  and Telegram keeps its own copies. They
+  can't ask to join again unless you let them
+  back in from Telegram.
+
+  [ ] Also remove from your private feeds      (checkbox row, 40pt; present only when they are in any)
+
+  ( Remove )                                   (btn danger)
+  ( Cancel )                                   (btn ghost)
+  ```
+
+  Toast: `Removed Ana Iliovic.` They are not told by the app; there is nothing
+  to send it from.
+- Empty members: `Nobody yet. Share the invite.` (muted, under the section
+  mark; the card is absent).
+
+**Adding a private feed** (`PROTOCOL §11.4.2`), modal:
+
+```
+PRIVATE FEED                                  (section mark)
+Add a private feed.                           (h2)
+A separate private channel with its own        (muted)
+members. Being in your private node doesn't
+get anyone in here — you approve each
+person again.
+
+FEED NAME
+[ Band notes                 ]                (input)
+( Add It )                                    (btn primary)
+( Cancel )                                    (btn ghost)
+```
+
+Toast `Added Band notes.` and the feed's invite sheet opens (§2.29). The
+feed appears in Compose's `POST TO` tabs (§2.9) with a faint `Private` pill on
+its tab and the same pill on the private node's tab — a person posting sees
+where it is going.
+
+**The feed channel screen** (§2.6) for a private channel: no username line
+(mono muted reads `private · 3 members`), no `Verified` pill of its own (the
+card is verified as a whole, `PROTOCOL §11.5`), a `Private` neutral pill in
+the pill slot, and the kebab holds `Open in Telegram` and — for a channel you
+own — `Share Invite`, `Revoke Invite`; for one you are a member of —
+`Leave` (§2.33). Never `Copy Link`.
+
+### 2.29 Sharing an invite
+
+The one way in. A House Pour modal, opened by `Share Invite` on the Private
+screen, on a private feed's kebab, and automatically after creating either:
+
+```
+INVITE                                        (section mark)
+Invite someone to Elijah · private.           (h2)
+https://t.me/+AbCdEfGh12345678                (mono, selectable, one line, ellipsised middle)
+
+Anyone with this link can ask to join.        (muted)
+Anyone they pass it to can ask too. Nobody
+gets in until you approve them, so a link
+that travels costs you a request, not a
+member. Share it only from here.
+
+( Copy Invite )                               (btn primary)
+( Share… )                                    (btn neutral — native share sheet; web: hidden when navigator.share is absent)
+( Show as QR )                                (btn ghost sm — swaps the link line for a QR of it; reads `Show as Link` to swap back)
+( Close )                                     (btn ghost)
+```
+
+- The muted paragraph is `PROTOCOL §11.7` and appears **every time** the sheet
+  opens; there is no "got it". The last sentence is 11.4.1's primary-link
+  hole: the link Telegram's own channel screen offers first joins without
+  approval, and the owner is told, in the one place they copy links, to copy
+  them here.
+- `Copy Invite`: toast `Invite copied. Anyone with it can ask to join.` — the
+  warning rides on the toast too, because the toast is what people read.
+- The app never posts the invite anywhere, never puts it on a card, never
+  hands it to the Connector, and never opens a share sheet the owner did not
+  tap.
+- `Revoke Invite` (kebab), confirm:
+
+  ```
+  REVOKE                                       (section mark)
+  Revoke this invite?                          (h2)
+  The old link stops working and you get a     (muted)
+  new one. Everyone already in stays in.
+
+  ( Revoke )                                   (btn danger)
+  ( Cancel )                                   (btn ghost)
+  ```
+
+  Then `PROTOCOL §11.4.4`, the invite sheet reopens with the new link, toast
+  `New invite. The old one is dead.`
+
+### 2.30 Requests — the inbox, and approving
+
+Pushed from `Requests` on the Private screen and from the gold `2 requests`
+line on You. One list, every private channel you own, newest first:
+
+```
+‹ Back                                          [Synced]
+
+REQUESTS · 2                                  (section mark, serif count)
+┌ card ─────────────────────────────────────┐
+│ (avatar) Ana Iliovic                       │  Telegram name, body
+│          @anailiovic · 2h ago              │  mono muted
+│          Voice, product, Vancouver.        │  their Telegram bio, muted; absent when empty
+│          Maybe @tgs_ana ›                  │  mono faint; only when the §4.3 guess resolves; taps to the profile
+│          Elijah · private                  │  which channel, mono faint; absent when you own only one
+│          ( Approve )  ( Decline )          │  btn primary sm · btn ghost sm
+└───────────────────────────────────────────┘
+No requests.                                  (empty, muted)
+```
+
+- `Maybe @tgs_ana` is `PROTOCOL §11.4.5`'s guess and is labelled as one. It is
+  the only tgsocial fact on the row and it is not a fact: Telegram does not
+  say which channels a user owns, so the app looks for a node named the way
+  Setup names them and shows it if it finds one. **Nothing else is inferred
+  from it** — no "follows you", no mutual count, no `Followed by N of yours`.
+  A row without the line is a person the app could not guess, which is most
+  people.
+- `Approve`: `processChatJoinRequest(…, true)`; the row leaves; toast
+  `Approved Ana Iliovic.` They are in from that moment and read everything
+  ever posted (§2.27 said so). `Decline`: `…false`; the row leaves; toast
+  `Declined.` No confirm on either — approval is one tap because the owner is
+  looking at exactly one person, and decline is reversible by the person
+  asking again.
+- The list refreshes live from `updateChatPendingJoinRequests`; a request
+  withdrawn on the other side leaves the list without a toast.
+- The count on You and on the Private screen is the same number this screen
+  shows, and it is gold only while non-zero. Nothing badges the tab bar.
+
+### 2.31 Asking to join — what a requester sees
+
+**Getting in.** An invite link arrives however people send things — a message,
+a QR, a note. Opening it lands here; so does pasting it into Explore's
+`Find a node` field (§2.4), which now accepts an invite link as well as a
+username (`PROTOCOL §11.4.6` step 1). The preview, a House Pour modal:
+
+```
+INVITE                                        (section mark)
+(avatar 48pt)  Elijah · private               (title, body 600)
+               3 members                      (mono muted)
+Ask to join this private channel. The owner    (muted)
+approves each person, and you'll see it here
+if they do.
+
+( Ask to Join )                               (btn primary)
+( Cancel )                                    (btn ghost)
+```
+
+- The preview is `checkChatInviteLink` — title, photo, member count — and
+  nothing more, because that is all Telegram shows a non-member. No card, no
+  posts, no owner name beyond the title.
+- A link to a public channel (`is_public`) skips this and opens the channel
+  (§2.6). A link needing a bot's approval: toast `This channel uses a bot to
+  approve members. Open it in Telegram.` and stop.
+
+**Waiting.** After `Ask to Join`, toast `Asked. You'll see it here when
+they approve.` and Explore gains a section above `NEARBY`:
+
+```
+WAITING                                       (section mark)
+┌ card ─────────────────────────────────────┐
+│ (avatar) Elijah · private                  │
+│          asked 2h ago         ( Ask Again )│  btn ghost sm
+└───────────────────────────────────────────┘
+```
+
+Under it, muted, every time:
+`If they decline, nothing arrives. Ask again if you think they missed it.`
+
+That line is `PROTOCOL §11.4.7`: Telegram tells a declined requester nothing,
+and the app does not pretend to know more than Telegram does. `Ask Again`
+re-sends (11.4.6 step 3); a duplicate is whatever TDLib says, verbatim. There
+is no `Cancel` because there is no call for it; the row can be swiped away
+(`Forget`), which forgets it locally and nothing else. The section is absent
+when the list is empty.
+
+**Approved.** On the next refresh the row leaves `WAITING` and the person's
+private posts are in the feed (§2.32). Toast, once: `You're in. Elijah · private
+is in your feed now.`
+
+**Their card.** The private node's channel screen for a member (§2.28, feed
+variant) shows the private card's owner as a link when the card is
+**verified** (`PROTOCOL §11.3`) — the mono muted line reads
+`private node of @tgs_elijah` and taps to the public profile, and the pill
+slot carries the gold `Verified` pill, which here means exactly the §11.3
+check. When it is **not** verified:
+
+```
+(avatar 72pt)                        [Unconfirmed]  ⋮      ← neutral pill
+Elijah · private                                 (h2)
+says it belongs to @tgs_elijah                   (mono muted; taps to the profile, which is what it claims, not what it is)
+Nothing confirms that. Posts here are shown       (muted)
+as this channel, not as that person.
+```
+
+Posts from an unverified private channel are attributed to the channel — its
+title and photo — never to the node it names (`PROTOCOL §11.5`). The pill and
+the paragraph stay until the public card confirms it; a client that shows a
+person's name and face over an unconfirmed channel has handed that face to
+whoever made the channel.
+
+### 2.32 Private posts in the feed, and Share
+
+A private post is a §2.3 post card with one addition and one subtraction.
+
+**The addition.** A neutral `Private` pill after the channel name in the
+header subheading, on every private post, on every screen that lists posts
+— Feed, the feed channel screen, the carousel's post sheet. There is no
+setting that hides it. The reader about to forward, screenshot, or read aloud
+is the person the pill is for.
+
+```
+┌ card ──────────────────────────────────────┐
+│ (avatar) Elijah Lucian     2h ago · Share  │
+│          Elijah · private  [Private]       │  mono muted + neutral pill
+│ …                                          │
+│ 3 reactions                                │  no comments count, no Comment button
+└────────────────────────────────────────────┘
+```
+
+Attribution is §2.3's rule with `PROTOCOL §11.5`'s source: a verified private
+card's channel is attributed to the public node it names, so the name is
+Elijah's, the avatar is the private channel's (the source-channel rule), and
+tapping the name opens Elijah's public profile. Unverified: the channel's own
+title and photo, and the name does not tap.
+
+**The subtraction.** No `Comment` button, no comments count, no thread
+screen. `PROTOCOL §11.5` says why in one sentence: comments live in public
+channels, and a reply would publish the post. Tapping the text does nothing;
+long-press still opens the post sheet.
+
+**The post sheet** (§2.3) on a private post:
+
+```
+POST
+Posted        2026-09-07 14:02
+Views         41
+Feed          Elijah · private · Private       (the pill again, mono)
+( Open in Telegram )                          (btn neutral — t.me/c/<id>/<n>, opens for members)
+
+SAFETY
+( Report Post )
+( Block @tgs_elijah )                         (present only when the card is verified — there is no node to name otherwise)
+( Mute Elijah · private )
+( Close )
+```
+
+**Share** copies the post's `https://t.me/c/<id>/<n>` link — the only link a
+private post has — with the toast `Link copied. Only members can open it.`
+Native share sheets get the same URL. There is no `t.me/s/` preview to fall
+back to and no public route (§2.13) to substitute, and the app does not
+manufacture one: a private post has no public address, and Share says so
+rather than pretending.
+
+**Safety on private content** (§2.15–§2.18) works unchanged, with two honest
+edits to the copy. The report confirm's muted paragraph gains a last
+sentence on a private post: `This is a private post. The maintainer can't
+open it — report it to Telegram from the post as well.` The email's `Link:`
+is the `t.me/c/` link, `Channel:` reads `private · <supergroupId>`, and the
+post is hidden on this device the moment `Send Report` is tapped, exactly as
+before. Block names the verified node and removes their private and public
+posts together. Mute names the channel by title and keys it by id
+(`PROTOCOL §7.2`). Settings' `MUTED` and `HIDDEN` rows show the channel title
+with a `Private` pill in place of a username; the `HIDDEN` key column reads
+`c/<id> · <n>`.
+
+### 2.33 Settings additions, and Delete My Node
+
+Settings (§2.20) gains one card between `HIDDEN` and `CONTACT`, present only
+when the reader has a private node or is a member of any:
+
+```
+PRIVATE                                      (section mark)
+Confirm on public card       [ toggle ]  On  (list row, 40pt)
+Your public card notes that a private node    (muted)
+exists — not how to reach it. Off, and
+members' apps can't confirm your private
+node is yours; they see it as unconfirmed.
+
+Revoke invite                ( Revoke )       (list row; §2.29's confirm)
+
+PRIVATE FOLLOWS · 2                           (section mark, serif count)
+┌ card ─────────────────────────────────┐
+│ Ana · private              ( Leave )   │  title body; `of @tgs_ana` mono muted under it (verified) or `unconfirmed` (not)
+│ of @tgs_ana                            │
+└───────────────────────────────────────┘
+You're not in anyone's private node.         (empty, muted)
+```
+
+- `Confirm on public card` writes or strips `private.id` (`PROTOCOL §11.2`,
+  §4.4). It is on by default; the paragraph is the cost of off, and it is the
+  same cost §2.27's faint line named before the node existed. While on, a
+  missing or wrong `private.id` — a §2-only client rewrote the card
+  (`PROTOCOL §11.6`) — is repaired silently on the next card write and on the
+  next read of your own card, with the toast `Card repaired.`
+- `Leave` confirms:
+
+  ```
+  LEAVE                                        (section mark)
+  Leave Ana · private?                         (h2)
+  Their private posts leave your feed. To       (muted)
+  get back in you'd ask again, and they'd
+  approve you again.
+
+  [x] Also leave their private feeds           (checkbox row; present when you are in any; on by default)
+
+  ( Leave )                                    (btn danger)
+  ( Cancel )                                   (btn ghost)
+  ```
+
+  Toast: `Left Ana · private.` The owner is not told by the app.
+
+**Delete My Node** (§2.21) grows to cover the private channels, and the copy
+grows with it. When a private node exists the muted paragraph reads:
+
+```
+This deletes the channel @tgs_elijah, your
+comments channel @tgs_elijah_r, your private
+node and 1 private feed from Telegram. The
+public card other people read disappears,
+every post and comment in those channels
+goes with it, every member of your private
+channels loses them at once, and the public
+names are released for anyone to take. This
+cannot be undone.
+```
+
+`1 private feed` is derived — `2 private feeds`, or the clause is absent with
+no feeds. The order is `PROTOCOL §11.4.12`: private feeds, private node,
+comments channel, node. Four more outcomes join §2.21's list, one per point
+the run can stop at — and once the private channels have gone, no later
+refusal may say `Nothing was deleted.`: `deleteChat` on a private channel is
+for every member at once and cannot be undone (`PROTOCOL §11.4.12`).
+
+- **A private channel failed.** Stop before touching anything public.
+  `Couldn't delete Band notes — Telegram said: <error>. Nothing was deleted.`
+  with `( Try Again )` and `( Close )`.
+- **Private channels went, comments channel failed.** The card is rewritten
+  without `private.id` and the modal reads `Your private channels are gone.
+  @tgs_elijah_r and @tgs_elijah are still there — Telegram said: <error>.`
+  with `( Try Again )` and `( Close )`.
+- **Private channels went, public node failed.** The card is rewritten
+  without `private.id` and the modal reads `Your private channels are gone.
+  @tgs_elijah is still there — Telegram said: <error>.` with `( Try Again )`
+  and `( Close )`.
+- **Private channels and comments channel went, public node failed.** The
+  card is rewritten without `replies:` and `private.id` and the modal reads
+  `Your private channels and your comments channel are gone. @tgs_elijah is
+  still there — Telegram said: <error>.` with `( Try Again )` and `( Close )`.
+
+A private channel deleted from Telegram's own client — not through the app —
+is gone for every member the same way, and the owner's app notices on its
+next refresh or the moment `updateSupergroup` says so: the record drops it,
+`private.id` comes off the public card (the private node) or its link comes
+off the private card (a private feed), and `Delete My Node` no longer stops
+on a channel that is not there. Nothing is toasted; there is nothing to say
+that Telegram did not already show.
+
+Members of the deleted channels see them leave the feed on their next
+refresh, with no toast and no tombstone (§2.16's rule: nothing at all). The
+`PRIVATE FOLLOWS` row on their Settings leaves with it.
+
+### 2.34 What does not touch the private layer
+
+Three surfaces, each excluded by construction and each saying so once.
+
+- **The public reader** (§2.13) renders nothing private and cannot: it reads
+  `t.me/s/<channel>`, which Telegram serves for public channels only, and its
+  reader is anonymous — the one reader membership excludes by definition. A
+  `t.me/c/…` or `t.me/+…` link pasted into a public route shows the §2.6
+  empty card. Nothing is written about it on the page.
+- **The Connector** (§2.14) exposes no private source under any preset, and
+  `Custom` cannot name one (it lists usernames). The scope paragraph gains a
+  sentence: `Private chats and private channels are never included.` A
+  member's consent to read a friend's private channel is not consent to pipe
+  it to an assistant (`PROTOCOL §11.5`).
+- **The demo** (§2.22) carries no private fixtures and no `PRIVATE` section
+  on You. `Make a Private Node` is not in the demo to refuse; a demo that
+  painted an invite link would be handing the reviewer a fake bearer token
+  to reason about, and §2.22's fixture world is invented people who cannot
+  approve anyone.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -1984,9 +2489,18 @@ meant to feel (follow counts in section marks) are serif.
 Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`,
 `demo` (§2.22 — never "sandbox", "sample", "test mode", "fake"),
-`work`, `work card`, `work feed`, `vouch`, `open to` (§2.23–§2.25).
+`work`, `work card`, `work feed`, `vouch`, `open to` (§2.23–§2.25),
+`private`, `private node`, `private feed`, `invite`, `member`, `request`,
+`approve`, `unconfirmed` (§2.27–§2.34).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
+
+And never, on the private surfaces: "encrypted", "secure", "secret",
+"close friends", "circle", "safe". Each promises something Telegram
+membership does not do (`PROTOCOL §11.9`), and the one place the feature is
+allowed to be reassuring is the paragraph that says exactly what it does.
+`Verified` on a private card means `PROTOCOL §11.3`'s check and appears only
+when it passed; `Unconfirmed` is its absence, said aloud.
 
 And never, on the work surfaces: "professional", "career", "job", "skill",
 "endorse", "endorsement", "recommendation", "recruiter", "résumé", "CV",

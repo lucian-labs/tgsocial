@@ -67,6 +67,9 @@ struct PostHeader<Avatar: View>: View {
     let name: String
     /// The source channel's title. Nil when nothing attributes the post and `name` *is* the channel.
     let channel: String?
+    /// PRODUCT §2.32: a neutral `Private` pill after the channel name on every private post, on
+    /// every screen. No setting hides it — the reader about to forward is who it is for.
+    let pill: String?
     let date: Int
     let shareURL: URL?
     /// PRODUCT §2.22.3: in the demo `Share` stays where it is, stays tappable, and answers rather
@@ -77,11 +80,11 @@ struct PostHeader<Avatar: View>: View {
     let onOpenChannel: () -> Void
     let avatar: Avatar
 
-    init(name: String, channel: String?, date: Int, shareURL: URL?,
+    init(name: String, channel: String?, pill: String? = nil, date: Int, shareURL: URL?,
          onShareRefused: (() -> Void)? = nil,
          onOpenName: @escaping () -> Void, onOpenChannel: @escaping () -> Void,
          @ViewBuilder avatar: () -> Avatar) {
-        self.name = name; self.channel = channel; self.date = date; self.shareURL = shareURL
+        self.name = name; self.channel = channel; self.pill = pill; self.date = date; self.shareURL = shareURL
         self.onShareRefused = onShareRefused
         self.onOpenName = onOpenName; self.onOpenChannel = onOpenChannel; self.avatar = avatar()
     }
@@ -115,12 +118,18 @@ struct PostHeader<Avatar: View>: View {
                 // holds clear for exactly this. See that constant.
                 if let channel {
                     Button(action: onOpenChannel) {
-                        HPMonoSmall(channel)
-                            .lineLimit(1)
-                            .hpTouchOverlay(.topLeading, label: PostCardRegion.channel)
+                        HStack(spacing: HPTokens.Space.rowGap) {
+                            HPMonoSmall(channel)
+                                .lineLimit(1)
+                            if let pill { HPPill(pill, tone: .neutral) }
+                        }
+                        .hpTouchOverlay(.topLeading, label: PostCardRegion.channel)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Open \(channel)")
+                    .accessibilityLabel("Open \(channel)" + (pill.map { ", \($0)" } ?? ""))
+                } else if let pill {
+                    // Unattributed and private: the channel is the name, and the pill still shows.
+                    HPPill(pill, tone: .neutral)
                 }
             }
 

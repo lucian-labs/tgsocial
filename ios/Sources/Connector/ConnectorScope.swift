@@ -136,8 +136,19 @@ struct ScopeResolution: Equatable {
         case .mine: what = "your own feeds and your own card"
         case .custom: what = "exactly the usernames you list"
         }
-        return "\(n) \(noun) \u{2014} \(what). Private chats are never included."
+        // PRODUCT §2.34: a member's consent to read a friend's private channel is not consent to
+        // pipe it to an assistant (PROTOCOL §11.5). No preset can name one — every key is a
+        // username — and `exposable` is the second lock on the merged window.
+        return "\(n) \(noun) \u{2014} \(what). Private chats and private channels are never included."
     }
+}
+
+extension ScopeResolution {
+    /// PROTOCOL §11.5: the merged window with every private post removed, before the scope check
+    /// runs. The scope check alone would drop them — a private post has no username to be in
+    /// scope — but a lock that depends on a second lock is a lock nobody measured, so this one is
+    /// explicit and tested on its own.
+    static func exposable(_ posts: [Post]) -> [Post] { posts.filter { !$0.isPrivate } }
 }
 
 enum ScopeResolver {

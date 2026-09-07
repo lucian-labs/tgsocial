@@ -61,6 +61,13 @@ struct RootView: View {
             case .vouch(let node): VouchModal(node: node)
             case .vouchSheet(let vouch): VouchSheetModal(vouch: vouch)
             case .deleteVouch(let vouch): DeleteVouchModal(vouch: vouch)
+            case .makePrivateNode: MakePrivateNodeModal()
+            case .addPrivateFeed: AddPrivateFeedModal()
+            case .privateInvite(let chatId, let title): PrivateInviteModal(chatId: chatId, title: title)
+            case .revokeInvite(let chatId, let title): RevokeInviteModal(chatId: chatId, title: title)
+            case .removeMember(let member, let chatId): RemoveMemberModal(member: member, chatId: chatId)
+            case .invitePreview(let preview): InvitePreviewModal(preview: preview)
+            case .leavePrivate(let follow): LeavePrivateModal(follow: follow)
             case nil: EmptyView()
             }
         }
@@ -103,6 +110,9 @@ struct RootView: View {
                             case .settings: SettingsScreen()
                             case .thread(let post): ThreadScreen(post: post)
                             case .vouches(let node, let tag): VouchesScreen(node: node, tag: tag)
+                            case .privateNode: PrivateScreen()
+                            case .privateRequests: RequestsScreen()
+                            case .privateChannel(let chatId): PrivateChannelScreen(chatId: chatId)
                             #if targetEnvironment(macCatalyst)
                             case .connectorSources: ConnectorSourcesScreen()
                             case .connectorCustom: ConnectorCustomScreen()

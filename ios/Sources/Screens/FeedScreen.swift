@@ -62,7 +62,7 @@ struct FeedScreen: View {
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(visible) { post in
-                        PostCard(post: post) { username in model.path.append(.feedChannel(username: username)) }
+                        PostCard(post: post) { key in model.openFeed(sourceKey: key) }
                             .onAppear {
                                 // Load more when the last card is within two screens of the bottom.
                                 if let i = visible.firstIndex(where: { $0.id == post.id }), i >= visible.count - Self.prefetchDistance {

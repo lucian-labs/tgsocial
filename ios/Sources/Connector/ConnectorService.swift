@@ -290,7 +290,8 @@ final class ConnectorService: ConnectorReader {
     func mergedPosts() async throws -> [Post] {
         // A cold app has nothing to serve yet; one refresh through the app's own path fills it.
         if model.feed.posts.isEmpty, !model.feedReady { await model.refreshFeed() }
-        return model.feed.posts
+        // PROTOCOL §11.5: never a private post, under any preset.
+        return ScopeResolution.exposable(model.feed.posts)
     }
 
     func channelPosts(_ source: ScopedSource, limit: Int, before: Foundation.Date?) async throws -> [Post] {
@@ -352,7 +353,7 @@ final class ConnectorService: ConnectorReader {
     }
 
     func findPost(id: String) async throws -> Post {
-        guard let hit = model.feed.posts.first(where: { $0.id == id }) else {
+        guard let hit = ScopeResolution.exposable(model.feed.posts).first(where: { $0.id == id }) else {
             throw ConnectorError.notFound("post \(id)")
         }
         return hit

@@ -16,15 +16,31 @@ struct ReportSubject: Equatable, Hashable {
 
     var kind: Kind
     /// The channel the reported message lives in: the source feed for a post, the commenter's
-    /// comments channel for a comment.
+    /// comments channel for a comment. Empty for a private post, which has none.
     var channel: String
     var serverMessageId: Int64
     /// The attributed node (§2.3) — the commenter's node on a comment. Nil reads `unattributed`.
     var node: String?
+    /// PRODUCT §2.32: set for a post from a private channel. The link is then `t.me/c/<id>/<n>`,
+    /// `Channel:` reads `private · <id>`, and the hidden key is `c/<id>/<n>` (PROTOCOL §7.2).
+    var privateSupergroupId: Int64? = nil
 
-    var link: String { "https://t.me/\(channel)/\(serverMessageId)" }
-    /// Where it lands on the hidden list (PROTOCOL §7.1).
-    var hiddenKey: String { Moderation.key(channel: channel, serverMessageId: serverMessageId) }
+    var isPrivate: Bool { privateSupergroupId != nil }
+
+    var link: String {
+        if let id = privateSupergroupId { return "https://t.me/c/\(id)/\(serverMessageId)" }
+        return "https://t.me/\(channel)/\(serverMessageId)"
+    }
+    /// `@waveloop_devlog`, or `private · 2481234567` for a private post.
+    var channelLine: String {
+        if let id = privateSupergroupId { return "private \u{00B7} \(id)" }
+        return "@" + channel
+    }
+    /// Where it lands on the hidden list (PROTOCOL §7.1, §7.2).
+    var hiddenKey: String {
+        if let id = privateSupergroupId { return PrivateLink.hiddenKey(supergroupId: id, serverMessageId: serverMessageId) }
+        return Moderation.key(channel: channel, serverMessageId: serverMessageId)
+    }
 
     /// `Report this post.` / `Report this comment.` / `Report this vouch.`
     var title: String {
@@ -48,6 +64,7 @@ struct ReportSubject: Equatable, Hashable {
         channel = post.sourceUsername
         serverMessageId = DeepLink.serverMessageId(post.messageId)
         node = post.authorUsername
+        privateSupergroupId = post.privateSupergroupId
     }
 
     init(comment: Comment) {
@@ -85,7 +102,7 @@ enum ReportMail {
         var lines = [
             "Reason: " + reason,
             "Link: " + s.link,
-            "Channel: @" + s.channel,
+            "Channel: " + s.channelLine,
             "Message: " + String(s.serverMessageId),
             "Node: " + (s.node.map { "@" + $0 } ?? "unattributed"),
             "Kind: " + s.kind.rawValue,

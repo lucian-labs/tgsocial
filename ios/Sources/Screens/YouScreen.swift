@@ -70,6 +70,12 @@ struct YouScreen: View {
                         HPButton("Announce in Directory", style: .neutral, size: .small, enabled: isPublic) { Task { await model.announce() } }
                     }
                 }
+                // PRODUCT §2.27: between LISTING and `View as others see it`. Not in the demo
+                // (§2.34): a demo that painted an invite link would be handing the reviewer a fake
+                // bearer token to reason about.
+                if !model.isDemo {
+                    PrivateSection().padding(.top, HPTokens.Space.cardGap)
+                }
                 HPButton("View as others see it", style: .ghost) { model.path.append(.profile(username: node.username)) }
                 HPButton("Settings", style: .ghost) { model.path.append(.settings) }
                     .padding(.top, HPTokens.Space.rowGap)

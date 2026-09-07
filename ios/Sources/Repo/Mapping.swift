@@ -212,7 +212,10 @@ enum Mapping {
                     sourceTitle: source.title, sourcePhoto: source.photo, date: m.date, text: text, media: media,
                     albumId: m.mediaAlbumId.rawValue, albumMessageIds: [m.id],
                     views: views, reactions: reactions, forwardedFrom: forwarded, forwardedChatId: forwardedChatId,
-                    forwardedUserId: forwardedUserId, isPending: isPending)
+                    forwardedUserId: forwardedUserId, isPending: isPending,
+                    // PROTOCOL §11.5: a post from a private channel is marked at the source, so no
+                    // later step can lose the mark.
+                    privateSupergroupId: source.privateSupergroupId)
     }
 
     /// `linkPreview` title/description/thumbnail as a bordered row (PRODUCT §2.11).

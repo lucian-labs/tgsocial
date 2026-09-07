@@ -323,7 +323,7 @@ struct ConnectorSourcesScreen: View {
                     }
                 }
             }
-            HPMuted("Private chats are never included.")
+            HPMuted("Private chats and private channels are never included.")
         }
     }
 }
@@ -357,7 +357,7 @@ struct ConnectorCustomScreen: View {
                     }
                 }
             }
-            HPMuted("Only these usernames are exposed. Private chats are never included.")
+            HPMuted("Only these usernames are exposed. Private chats and private channels are never included.")
         }
     }
 

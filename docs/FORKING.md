@@ -75,3 +75,5 @@ Propose changes as PRs against `PROTOCOL.md` + `docs/card-vectors.json` in
 the upstream repo. New optional card keys are cheap (old clients ignore
 them); anything that changes the meaning of existing lines needs a
 `tgsocial v2` marker and a migration story (`PROTOCOL.md §9`).
+`PROTOCOL.md §10` (work) and `§11` (private) are the two worked examples:
+prefixed keys, a second parse pass, vectors in the same file.

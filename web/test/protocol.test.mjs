@@ -51,6 +51,11 @@ import {
   keepsVouch,
   pruneWorkFeeds,
   workTag,
+  parsePrivate,
+  privateIdOf,
+  normaliseInviteLink,
+  inviteHash,
+  privateVerified,
   openIsCurrent,
   WORK_DOES_MAX,
   WORK_INTENTS,
@@ -1600,6 +1605,68 @@ for (const c of vectors.work.vouch.self.cases) {
     assert.equal(keepsVouch(parseVouch(c.in), c.voucherNode), c.out);
   });
 }
+
+// ── PROTOCOL §11, the private extension ─────────────────────────────────────
+
+for (const c of vectors.private.parse) {
+  test(`private parse: ${c.name}`, () => {
+    assert.deepEqual(parsePrivate(c.text), c.expect);
+  });
+}
+
+for (const c of vectors.private.publicId.cases) {
+  test(`private id: ${JSON.stringify(c.text.slice(0, 40))}`, () => {
+    assert.equal(privateIdOf(c.text), c.out);
+  });
+}
+
+for (const c of vectors.private.invite.cases) {
+  test(`invite link: ${JSON.stringify(c.in)}`, () => {
+    assert.equal(normaliseInviteLink(c.in), c.out);
+    assert.equal(inviteHash(c.in), c.out ? c.out.slice('https://t.me/+'.length) : null);
+  });
+}
+
+for (const c of vectors.private.serialise) {
+  test(`private serialise: ${c.name}`, () => {
+    assert.equal(serialiseCard(c.card), c.expect);
+  });
+}
+
+for (const c of vectors.private.verify.cases) {
+  test(`private verify: ${c.name}`, () => {
+    assert.equal(privateVerified(c.privateText, c.supergroupId, c.publicText, c.publicNode), c.out);
+  });
+}
+
+/**
+ * §11.3's whole argument in one assertion: the private card's own claim is
+ * not evidence. Two channels naming the same node, one of which the node's
+ * public card names back — exactly one verifies, and it is not the one that
+ * asked more loudly.
+ */
+test('§11.3: the claim is checked against the public card, never taken from the private one', () => {
+  const pub = vectors.private.verify.cases[0].publicText;
+  const claim = 'tgsocial v1\nprivate.node: @tgs_elijah\nname: Elijah Lucian (official)';
+  assert.equal(privateVerified(claim, privateIdOf(pub), pub, 'tgs_elijah'), true);
+  assert.equal(privateVerified(claim, '1', pub, 'tgs_elijah'), false);
+});
+
+/**
+ * §11.6 — the §10.6 hazard, again: a §2-only rewrite of the public card drops
+ * `private.id`, which is the only thing that makes the private card
+ * verifiable, and a round-tripping rewrite keeps it while changing nothing a
+ * §2 client can see.
+ */
+test('§11.6: a §2-only rewrite drops private.id; a round trip keeps it and changes nothing §2 sees', () => {
+  const text = vectors.private.verify.cases[0].publicText;
+  const card = parseCard(text);
+  const followed = withFollow(card, 'tgs_bob');
+  assert.equal(privateIdOf(serialiseCard(followed)), null);
+  const kept = serialiseCard({ ...followed, work: parseWork(text), privateId: privateIdOf(text) });
+  assert.equal(privateIdOf(kept), '2481234567');
+  assert.deepEqual(parseCard(kept), followed);
+});
 
 /**
  * §10's whole claim: the extension is additive, and a client that does not

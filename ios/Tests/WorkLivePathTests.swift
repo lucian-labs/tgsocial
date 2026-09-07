@@ -23,11 +23,13 @@ import XCTest
 private final class RecordingCardWriter: CardWriting {
     private(set) var pinned: [String] = []
     private(set) var handedWork: [Work?] = []
+    private(set) var handedPrivateId: [String?] = []
 
-    func writeCard(_ card: Card, work: Work?, node: MyNode) async throws -> MyNode {
+    func writeCard(_ card: Card, work: Work?, privateId: String?, node: MyNode) async throws -> MyNode {
         handedWork.append(work)
+        handedPrivateId.append(privateId)
         // The bytes TDLib would receive, produced by the same serialiser the repository uses.
-        pinned.append(CardCodec.serialise(card, work: work))
+        pinned.append(CardCodec.serialise(card, work: work, privateId: privateId))
         return node
     }
 }

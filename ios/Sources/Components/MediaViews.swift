@@ -891,7 +891,8 @@ struct ViewerOverlay: View {
     /// screen is; `Save` acts on whatever is showing either way.
     private var actions: [HPViewerAction] {
         var out: [HPViewerAction] = []
-        if request.post != nil {
+        // PROTOCOL §11.5: no comments on a private post, in the carousel as on the card.
+        if let post = request.post, !post.isPrivate {
             out.append(HPViewerAction("Comments") {
                 withAnimation(HPMotion.color) { showsComments.toggle() }
             })

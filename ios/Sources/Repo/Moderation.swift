@@ -77,6 +77,11 @@ extension SafetyLists {
         return mutedFeeds.contains(Moderation.listKey(username))
     }
 
+    /// A source key as `FeedInfo.key` / `Post.sourceKey` spell it — a username key or `c/<id>`.
+    func isMuted(sourceKey: String) -> Bool {
+        mutedFeeds.contains(sourceKey.lowercased())
+    }
+
     func isHidden(key: String?) -> Bool {
         guard let key else { return false }
         return hidden.contains { $0.key == key.lowercased() }
@@ -92,7 +97,7 @@ extension SafetyLists {
     func allows(post: Post, inMainFeed: Bool) -> Bool {
         if isBlocked(post.authorUsername) { return false }
         if isHidden(key: Moderation.key(post: post)) { return false }
-        if inMainFeed, isMuted(feed: post.sourceUsername) { return false }
+        if inMainFeed, isMuted(sourceKey: Moderation.muteKey(post: post)) { return false }
         return true
     }
 
@@ -192,8 +197,21 @@ enum Moderation {
         return key(channel: username, serverMessageId: id)
     }
 
+    /// A private post keys as `c/<supergroupId>/<serverMessageId>` (PROTOCOL §7.2): the `t.me/c/`
+    /// path without the host, which no username can collide with, and which an older client's
+    /// username comparison never matches — the correct result, since it could not read the post.
     static func key(post: Post) -> String {
-        key(channel: post.sourceUsername, serverMessageId: DeepLink.serverMessageId(post.messageId))
+        if let id = post.privateSupergroupId {
+            return PrivateLink.hiddenKey(supergroupId: id, serverMessageId: DeepLink.serverMessageId(post.messageId))
+        }
+        return key(channel: post.sourceUsername, serverMessageId: DeepLink.serverMessageId(post.messageId))
+    }
+
+    /// What `mutedFeeds` holds for a post's source: its username key, or `c/<id>` for a private
+    /// channel (PROTOCOL §7.2).
+    static func muteKey(post: Post) -> String {
+        if let id = post.privateSupergroupId { return PrivateLink.sourceKey(supergroupId: id) }
+        return listKey(post.sourceUsername)
     }
 
     static func key(comment: Comment) -> String {
@@ -304,15 +322,20 @@ final class ModerationStore {
         save()
     }
 
-    func mute(feed username: String) {
-        let key = Moderation.listKey(username)
+    func mute(feed username: String) { mute(sourceKey: Moderation.listKey(username)) }
+
+    func unmute(feed username: String) { unmute(sourceKey: Moderation.listKey(username)) }
+
+    /// PROTOCOL §7.2: a private channel is muted by its `c/<id>` key. Same list, second grammar.
+    func mute(sourceKey: String) {
+        let key = sourceKey.lowercased()
         guard !lists.mutedFeeds.contains(key) else { return }
         lists.mutedFeeds.append(key)
         save()
     }
 
-    func unmute(feed username: String) {
-        let key = Moderation.listKey(username)
+    func unmute(sourceKey: String) {
+        let key = sourceKey.lowercased()
         guard lists.mutedFeeds.contains(key) else { return }
         lists.mutedFeeds.removeAll { $0 == key }
         save()
