@@ -125,10 +125,12 @@ session data on-device only.
 
 ## Review notes (App Store)
 
-This is a third-party Telegram client built on TDLib, Telegram's official
-client library, with our own registered api_id. Signing in needs a Telegram
-account and an SMS/Telegram code, so **the app ships a demo and the demo is
-the review path** — no credential is needed and none is supplied. It is a
+This is a third-party client for Telegram and Bluesky: Telegram through TDLib,
+Telegram's official client library, with our own registered api_id, and
+Bluesky through atproto OAuth. The sign-in screen offers both as peers; either
+one alone signs in, or both. Signing in to Telegram needs a Telegram account
+and an SMS/Telegram code, so **the app ships a demo and the demo is the review
+path** — no credential is needed and none is supplied. It is a
 visible button on the first screen rather than a hidden mode, because this
 app is open source (MIT, github.com/lucian-labs/tgsocial) and anything a
 reviewer could be told in private would be in the repository for everyone to
@@ -139,8 +141,8 @@ The demo is specified in full in `PRODUCT §2.22`.
 
 ### What to tap
 
-1. Launch. On the sign-in screen, below the phone field, tap
-   **`Look Around First`**.
+1. Launch. The sign-in screen shows two cards, `TELEGRAM` (phone number) and
+   `BLUESKY` (handle). Below both, tap **`Look Around First`**.
 2. You land on the feed. Every screen from here carries a `Demo` pill in the
    top bar and the strip `Demo. Everyone here is invented. Nothing leaves this
    device.` The people, channels, posts, photos, audio and video are invented
@@ -177,11 +179,13 @@ checkable by a number on screen:
 - **The filter is always on and has no switch** (`PRODUCT §2.18`). There is no
   preference to find, and blocked, muted or reported content never paints
   anywhere: feed, channel, threads, Explore, Graph, search.
-- **Undo.** You tab → `Settings` shows `BLOCKED · 1`, `MUTED · 1`,
+- **Undo.** The avatar tab — the rightmost item of the tab bar at the bottom,
+  a circle holding the reader's initial in the demo — then **`Settings`**, top right of
+  that screen. It shows `BLOCKED · 1`, `MUTED · 1`,
   `HIDDEN · 1`, each with a one-tap reverse. The hidden row names the channel
   and message id and the reason, never the content.
-- **Contact.** elijah@lucianlabs.ca is on the sign-in screen, in the You
-  footer, and in Settings with the line `Read by a person within 24 hours.`
+- **Contact.** elijah@lucianlabs.ca is on the sign-in screen, in the footer
+  of the avatar tab's screen, and in Settings with the line `Read by a person within 24 hours.`
   There is no server, so a report is an email the reader's own mail client
   sends plus an immediate local hide (`PRODUCT §2.19`); the app does not imply
   a takedown we cannot perform.
@@ -189,7 +193,8 @@ checkable by a number on screen:
 ### Guideline 5.1.1(v) — account deletion
 
 Also reachable without an account, which is why the demo is visible rather
-than hidden: You → `Settings` → `Delete My Node`. The modal names both public
+than hidden: the avatar tab (rightmost, bottom) → `Settings` (top right) →
+`Delete My Node`, the last button on the screen. The modal names both public
 channels the app created (`@tgs_demo_you` and its comments channel
 `@tgs_demo_you_r`), says in one sentence that they and everything in them are
 deleted and that it can't be undone, and requires the node name typed exactly
@@ -197,30 +202,68 @@ before the button enables. Confirming runs the real flow — comments channel
 first, node second (`PROTOCOL §4.11`) — and, because a demo has no session to
 survive, ends the demo and returns to sign in.
 
-In a real session the same control is in the same place and deletes the same
-two channels through TDLib; feed channels the person already owned are not
+In a real session the same control is in the same place — Settings'
+`TELEGRAM` card, below `Sign Out of Telegram` — and deletes the same two
+channels through TDLib; feed channels the person already owned are not
 touched, and the app lands back on Setup, still signed in.
+
+Signed in to Bluesky alone, there is no `Delete My Node` and nothing to put
+there: the app creates nothing on Bluesky — no record, no account — until the
+person links a node, which needs Telegram (`PRODUCT §2.37`). The Bluesky
+account is Bluesky's, deleted on Bluesky; `Sign Out of Bluesky` in Settings
+revokes the app's session (`PROTOCOL §12.7` step 12) and wipes it from the
+device.
+
+### Bluesky alone — an optional path, with your own account
+
+Not needed for review; the demo covers every screen. For a reviewer who has a
+Bluesky account and wants to see the Bluesky sign-in (no credential is
+supplied, for the reason above; a Bluesky account is free at bsky.app):
+
+1. On the sign-in screen, in the `BLUESKY` card, type your handle (`name`
+   alone becomes `name.bsky.social`) and tap **`Sign In with Bluesky`**.
+2. Bluesky's own page opens in the device's default browser. Approve there;
+   the password is typed into Bluesky, never into the app. The app shows
+   `Waiting for Bluesky…` with `Cancel` until the browser hands back.
+3. Back in the app, it offers `Also sign in to Telegram?` once. Tap
+   **`Not Now`**.
+4. Feed shows posts from the accounts you follow on Bluesky, each with a
+   `Bluesky` pill. Tapping a post's text opens it on Bluesky. The Graph tab
+   lists who you follow. Explore reads `Sign in to Telegram to find nodes.` —
+   nodes are Telegram channels.
+5. Long-press a post: `Report Post`, `Block @handle` and `Mute @handle` work as
+   in the demo, and the Settings lists show them.
+6. The avatar tab now shows your Bluesky avatar. `Compose` there posts to your
+   Bluesky account.
+7. Avatar tab → `Settings` (top right) → `BLUESKY` card → `Sign Out of
+   Bluesky` → `Sign Out`. With nothing else signed in, the app returns to the
+   sign-in screen.
 
 ### Guideline 4.8 — Sign in with Apple
 
 The app does not offer Sign in with Apple, and 4.8 does not require it here.
 4.8 exempts an app that is a client for a specific third-party service where
 the user signs in to that service's own account, directly, to reach their
-content on it. tgsocial is that, twice:
+content on it. tgsocial is that, twice — the sign-in screen offers Telegram
+and Bluesky side by side, and each login is to that service's own account to
+reach its content:
 
 - **Telegram.** The sign-in is a Telegram account's own phone-and-code login,
   through TDLib, to that account's Telegram channels and the public channels
   it reads. The login is not tgsocial's: there is no tgsocial account, no
   tgsocial user record and no tgsocial server (`docs/PRIVACY.md`).
-- **Bluesky.** Optional, from Settings once signed in to Telegram
-  (`PRODUCT §2.35`). The sign-in is Bluesky's own OAuth login, on Bluesky's
-  own page in the system browser — the password is typed into Bluesky, never
-  into the app — to that account's follows and posts on Bluesky
-  (`PROTOCOL §12.7`). Again, no tgsocial account results.
+- **Bluesky.** A peer of Telegram on the sign-in screen, alone or alongside
+  it, and later from Settings (`PRODUCT §2.1`, `§2.35`). The sign-in is
+  Bluesky's own OAuth login, on Bluesky's own page in the system browser — the
+  password is typed into Bluesky, never into the app — to that account's
+  follows and posts on Bluesky (`PROTOCOL §12.7`). Again, no tgsocial account
+  results.
 
 Neither is a social login used to create or authenticate an account with
 tgsocial, which is what 4.8 is about: each gives access to the service's own
-content, and tgsocial is a client of both. Offering Sign in with Apple would
+content, and tgsocial is a client of both. Signing in to both does not join
+them into an account either: each signs out on its own, in its own Settings
+card, and the app holds nothing that belongs to neither. Offering Sign in with Apple would
 have nothing to sign in to — an Apple identity reaches no Telegram channel
 and no Bluesky feed.
 

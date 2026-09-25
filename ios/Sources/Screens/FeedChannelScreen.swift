@@ -22,6 +22,17 @@ struct FeedChannelScreen: View {
     }
 
     var body: some View {
+        if model.session.kind == .blueskyOnly {
+            // PRODUCT §2.41: reached from a link or a list, signed in to Bluesky alone — the screen
+            // is a Telegram channel's, so it keeps its topbar and shows the Telegram card, and reads
+            // nothing (the load below is TDLib's).
+            Screen(back: true) { NeedsTelegramCard(verb: SessionCopy.see(username)) }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         Screen(back: true, refresh: { await load(reset: true) }) {
             if let feed {
                 VStack(alignment: .leading, spacing: 0) {

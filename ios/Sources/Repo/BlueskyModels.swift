@@ -229,6 +229,38 @@ enum BlueskyText {
         return .object(record)
     }
 
+    /// PRODUCT §2.9, Bluesky only: the counter's line past 300. The app never cuts the sentence.
+    static let tooLong = "Too long for Bluesky."
+
+    /// The one photo a direct post carries (§12.8): the uploaded blob and its pixel size.
+    struct PostImage: Equatable {
+        var blob: JSONValue
+        var width: Int
+        var height: Int
+    }
+
+    /// PROTOCOL §12.8's direct post: text, facets, and `app.bsky.embed.images` with one image when
+    /// a photo is attached — `alt` the empty string (the lexicon requires the field; v1 has no alt
+    /// text to fill it from), `aspectRatio` from its pixel size. No external embed: there is no
+    /// Telegram original to link back to, so §12.5 rule 7 never mistakes it for a cross-post.
+    static func directRecord(text: String, image: PostImage?, now: Date = Date()) -> JSONValue {
+        var record: [String: JSONValue] = [
+            "$type": .string(Atproto.postCollection),
+            "text": .string(text),
+            "createdAt": .string(iso(now)),
+        ]
+        let f = facets(text)
+        if !f.isEmpty { record["facets"] = .array(f) }
+        if let image {
+            var one: [String: JSONValue] = ["image": image.blob, "alt": .string("")]
+            if image.width > 0, image.height > 0 {
+                one["aspectRatio"] = .object(["width": .number(Double(image.width)), "height": .number(Double(image.height))])
+            }
+            record["embed"] = .object(["$type": .string("app.bsky.embed.images"), "images": .array([.object(one)])])
+        }
+        return .object(record)
+    }
+
     static func iso(_ date: Date) -> String {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

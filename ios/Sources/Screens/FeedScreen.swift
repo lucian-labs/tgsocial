@@ -51,6 +51,10 @@ struct FeedScreen: View {
                     // rendering an empty list (§2.18).
                     FeedFooter(text: "Loading\u{2026}")
                         .onAppear { Task { await model.loadMoreFeed() } }
+                } else if model.session.kind == .blueskyOnly {
+                    // §2.3, Bluesky only: the h2 alone — Explore finds nodes, and that needs
+                    // Telegram (§2.41), so there is no action to offer here.
+                    EmptyCard("Nothing here yet.")
                 } else if model.myNode == nil {
                     // PRODUCT §2.2: the skip path lands here with the §2.3 empty state linking back to Setup.
                     EmptyCard("Nothing here yet.", action: ("Set Up", { model.openSetup() }))

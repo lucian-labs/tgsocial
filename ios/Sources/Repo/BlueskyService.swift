@@ -26,6 +26,25 @@ struct BlueskyPrefs: Codable, Equatable {
     var tagOn = false
 }
 
+/// PRODUCT §2.39: the account whose session Bluesky ended. Stored, because an ended session still
+/// counts as held (PRODUCT §1): a Bluesky-only reader whose token lapsed is still signed in to the
+/// app on the next launch, with `Sign In Again` in Settings, not dropped back to Sign in.
+struct BlueskyEnded: Codable, Equatable {
+    var did: String
+    var handle: String
+}
+
+/// One account the signed-in account follows (PROTOCOL §12.11: Graph, signed in to Bluesky alone).
+struct BlueskyFollow: Equatable, Identifiable {
+    var did: String
+    var handle: String
+    var displayName: String?
+    var avatar: String?
+    var id: String { did }
+    var handleLabel: String { handle.isEmpty || handle == "handle.invalid" ? did : "@" + handle }
+    var nameLabel: String { displayName?.isEmpty == false ? displayName! : handleLabel }
+}
+
 /// §12.9's Bluesky blocks, stored with the account they were read from. Persisted so a session
 /// restored at launch filters from its first refresh: read only at sign-in and held only in memory,
 /// the list was empty after every relaunch and a blocked author came back through the tag.
@@ -72,8 +91,10 @@ final class BlueskyService {
     /// Signed in, or nil.
     private(set) var account: BlueskyAccount?
     /// §2.39: Bluesky ended the session. Settings shows `Signed out by Bluesky` with the handle, so
-    /// `Sign In Again` can open with it filled in; the toast has been shown once.
-    private(set) var endedHandle: String?
+    /// `Sign In Again` can open with it filled in; the toast has been shown once. Persisted
+    /// (`LocalStore.blueskyEnded`): PRODUCT §1 counts it as a session held.
+    private(set) var ended: BlueskyEnded?
+    var endedHandle: String? { ended?.handle }
     var prefs: BlueskyPrefs { didSet { if prefs != oldValue { store.save(prefs, LocalStore.blueskyPrefs) } } }
     /// §12.3's cache, keyed `node|did`. Persisted beside the card cache; discardable (§7).
     private(set) var linkChecks: [String: LinkCheck] = [:]
@@ -145,11 +166,24 @@ final class BlueskyService {
                 blueskyBlocks = Set(saved.dids)
                 blocksFetchedAt = saved.fetchedAt
             }
+        } else {
+            ended = store.load(BlueskyEnded.self, LocalStore.blueskyEnded)
         }
     }
 
-    private static let accountKey = "blueskyAccount"
+    private static let accountKey = LocalStore.blueskyAccount
+    /// A live session: reads the follows, writes. What compose and the following source ask.
     var isSignedIn: Bool { account != nil }
+    /// PRODUCT §1: a session held — live, or ended by Bluesky and not signed out of. What "signed
+    /// in to Bluesky" means to every gate in the app.
+    var isHeld: Bool { account != nil || ended != nil }
+    /// The DID of the session held — PROTOCOL §7.1's `did` key for the safety lists.
+    var heldDid: String? { account?.did ?? ended?.did }
+
+    private func setEnded(_ value: BlueskyEnded?) {
+        ended = value
+        store.save(value, LocalStore.blueskyEnded)
+    }
 
     // MARK: Sign in (§12.7, §2.35)
 
@@ -160,7 +194,10 @@ final class BlueskyService {
     }
 
     /// The whole of §12.7 steps 1–9. Throws the §2.39 outcome; returns the account on success.
-    func signIn(_ typed: String) async throws -> BlueskyAccount {
+    /// `landed` runs synchronously the moment the session is held, before the profile and block
+    /// reads: the app routes on "held" (PRODUCT §1), and a caller that waited for the return would
+    /// decide where the reader goes one or two round trips after the screen already changed.
+    func signIn(_ typed: String, landed: (BlueskyAccount) -> Void = { _ in }) async throws -> BlueskyAccount {
         guard !signingIn else { throw SignInError.busy }
         signingIn = true
         cancelRequested = false
@@ -214,9 +251,10 @@ final class BlueskyService {
             try await auth.install(session, sender: sender)
             var acct = BlueskyAccount(did: checked.did, handle: checked.handle)
             account = acct
-            endedHandle = nil
+            setEnded(nil)
             prefs.followsOn = true
             store.save(acct, Self.accountKey)
+            landed(acct)
             if let profile = try? await reader.appView("app.bsky.actor.getProfile", [("actor", checked.did)]) {
                 acct.displayName = profile["displayName"].string
                 acct.avatar = profile["avatar"].string
@@ -278,19 +316,34 @@ final class BlueskyService {
     }
 
     /// `Sign Out of Bluesky` (§2.35): revoke, then forget. The link stays — it is two public lines.
+    /// An ended session (§2.39) is signed out of too: there is nothing to revoke, and the handle
+    /// `Sign In Again` would have filled in goes with it.
     func signOut() async {
         await auth.signOut()
         clearAccount()
+        setEnded(nil)
     }
 
-    /// Telegram `logOut` (§7): the session is local state and goes with the rest, no revoke call
-    /// needed to leave the device clean — but it is made, best effort, so the token dies too.
-    func endForTelegramSignOut() async {
+    /// The last one out (PROTOCOL §7): Bluesky's sign-out that leaves neither network signed in, or
+    /// Telegram's with no session held. Everything of Bluesky's goes — the session (revoked, best
+    /// effort, so the token dies too), the toggles, the caches — from memory as well as disk.
+    func endForLastOneOut() async {
         stopChecks()
         await auth.signOut()
         clearAccount()
-        endedHandle = nil
+        setEnded(nil)
         discardLocalState()
+    }
+
+    /// Telegram's part of §7, held here: the link-verification cache (it verifies cards, and the
+    /// cards are Telegram's) and the node scope the merge attributes through. The session, its
+    /// toggles and its blocks are Bluesky's and stay — PRODUCT §1, "either leaves the other".
+    func discardTelegramPart() {
+        stopChecks()
+        linkChecks = [:]
+        scope = []
+        activeSources = activeSources.filter { if case .author = $0.kind { return false } else { return true } }
+        firstPages = firstPages.filter { !$0.key.hasPrefix(Atproto.sourceKey(.author(did: ""))) }
     }
 
     /// Everything here that is §7 local state and not the session, dropped from memory the way the
@@ -318,7 +371,7 @@ final class BlueskyService {
     /// §2.39: a read found the session over. Once.
     private func sessionEnded() {
         guard let acct = account else { return }
-        endedHandle = acct.handle
+        setEnded(BlueskyEnded(did: acct.did, handle: acct.handle))
         clearAccount()
         onSessionEnded?()
     }
@@ -562,6 +615,28 @@ extension BlueskyService: AtprotoFeedSource {
     }
 }
 
+// MARK: - The follows list (PROTOCOL §12.11)
+
+extension BlueskyService {
+    /// One page of `app.bsky.graph.getFollows` for the session's own DID, from the AppView without
+    /// auth (§12.4) — the Graph tab of a reader signed in to Bluesky alone. Listed, never walked:
+    /// nothing here reaches a card or a +1 ring (§12.10).
+    func follows(cursor: String?) async throws -> (follows: [BlueskyFollow], cursor: String?) {
+        guard let did = heldDid else { return ([], nil) }
+        var params: [(String, String)] = [("actor", did), ("limit", "100")]
+        if let cursor { params.append(("cursor", cursor)) }
+        let page = try await activity.run("Loading your Bluesky follows") {
+            try await self.reader.appView("app.bsky.graph.getFollows", params)
+        }
+        let list = (page["follows"].array ?? []).compactMap { f -> BlueskyFollow? in
+            guard let d = Atproto.normaliseDid(f["did"].string) else { return nil }
+            return BlueskyFollow(did: d, handle: f["handle"].string ?? "", displayName: f["displayName"].string, avatar: f["avatar"].string)
+        }
+        let next = page["cursor"].string
+        return (list, next?.isEmpty == false && !list.isEmpty ? next : nil)
+    }
+}
+
 // MARK: - Writes (§12.8)
 
 extension BlueskyService {
@@ -592,6 +667,24 @@ extension BlueskyService {
             thumb = try await auth.uploadBlob(jpeg, mimeType: "image/jpeg")
         }
         let record = BlueskyText.postRecord(text: text, telegramLink: telegramLink, feedTitle: feedTitle, thumb: thumb)
+        _ = try await auth.post("com.atproto.repo.createRecord", .object([
+            "repo": .string(session.did), "collection": .string(Atproto.postCollection), "record": record]))
+        await surfaceVaultFailure()
+    }
+
+    /// §12.8's direct post, signed in to Bluesky alone (PRODUCT §2.9): what the person wrote, its
+    /// facets, and — when a photo is attached — one image. No link card: there is no original.
+    /// Refused before anything is sent when too long, never truncated.
+    func directPost(text: String, photoPath: String?) async throws {
+        guard BlueskyText.fits(text) else { throw AtprotoError.authFailed(BlueskyText.tooLong) }
+        guard let session = await auth.session else { throw AtprotoError.sessionEnded }
+        var image: BlueskyText.PostImage?
+        if let photoPath, let jpeg = Self.jpegUnderLimit(path: photoPath), let decoded = UIImage(data: jpeg) {
+            let blob = try await auth.uploadBlob(jpeg, mimeType: "image/jpeg")
+            image = BlueskyText.PostImage(blob: blob, width: Int(decoded.size.width * decoded.scale),
+                                          height: Int(decoded.size.height * decoded.scale))
+        }
+        let record = BlueskyText.directRecord(text: text, image: image)
         _ = try await auth.post("com.atproto.repo.createRecord", .object([
             "repo": .string(session.did), "collection": .string(Atproto.postCollection), "record": record]))
         await surfaceVaultFailure()

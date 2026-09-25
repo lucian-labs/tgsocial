@@ -39,14 +39,28 @@ final class LocalStore {
     ///
     /// `blockedWith` rides along: it is the half of a node block that remembers which DID was
     /// written beside the node (PROTOCOL §12.9), so it survives exactly when the list does.
-    func clear() {
-        let kept = Self.survivesSignOut.map { ($0, try? Data(contentsOf: url($0))) }
+    ///
+    /// `keeping` is what survives: the safety lists alone for the last one out, and those plus
+    /// Bluesky's part and the UI preferences when Telegram signs out and Bluesky stays (PROTOCOL
+    /// §7: "Signing out is per network").
+    func clear(keeping names: [String] = LocalStore.survivesSignOut) {
+        let kept = names.map { ($0, try? Data(contentsOf: url($0))) }
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for (name, data) in kept { if let data { try? data.write(to: url(name), options: .atomic) } }
     }
 
     static let survivesSignOut = [moderation, blockedWith]
+
+    /// PROTOCOL §7: Telegram's `logOut` with a Bluesky session held clears Telegram's part — TDLib's
+    /// database, `myNode`, the card cache, Telegram's cursors, the comment index, the private record
+    /// and the link-verification cache (it verifies cards). What it leaves is this: the safety
+    /// lists, Bluesky's part (the session's account, its toggles and blocks, and §2.39's ended
+    /// account), and the UI preferences, which only the last one out clears.
+    static let survivesTelegramSignOut = survivesSignOut + [
+        blueskyAccount, blueskyPrefs, blueskyBlocks, blueskyEnded,
+        feedMode, privateConfirmOff, offeredOther, telegramSignedOut,
+    ]
 
     // MARK: Versioned caches (PRODUCT §2.3)
 
@@ -87,6 +101,16 @@ final class LocalStore {
     /// PROTOCOL §12.9: the signed-in account's Bluesky blocks, with the DID they belong to.
     /// Discardable (§7): a later read rebuilds it.
     static let blueskyBlocks = "blueskyBlocks"
+    /// PRODUCT §2.35: the signed-in account's handle, name and avatar, beside the Keychain session.
+    static let blueskyAccount = "blueskyAccount"
+    /// PRODUCT §2.39: the account Bluesky ended the session of. Kept across a relaunch because an
+    /// ended session still counts as held (PRODUCT §1) — the reader signed in and did not sign out.
+    static let blueskyEnded = "blueskyEnded"
+    /// PROTOCOL §7, §12.11: a UI preference — Telegram is known signed out while a Bluesky session
+    /// is held, so a launch does not start TDLib to find out. Absent means start TDLib.
+    static let telegramSignedOut = "telegramSignedOut"
+    /// PROTOCOL §7, PRODUCT §2.1: a UI preference — the other network's sign-in was offered once.
+    static let offeredOther = "offeredOther"
     static let myTitle = "myTitle"
     static let nodeCache = "nodes"
     static let feedCache = "feeds"

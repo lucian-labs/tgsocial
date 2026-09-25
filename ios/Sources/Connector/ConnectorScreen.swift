@@ -51,6 +51,20 @@ struct ConnectorScreen: View {
     private var connector: ConnectorService { model.connector }
 
     var body: some View {
+        if model.session.kind == .blueskyOnly {
+            // PRODUCT §2.14 / §2.41, CONNECTOR.md §2: the tab stays — the shell does not change
+            // shape with the account — and its body is the Telegram card. The bridge does not
+            // listen: every source it serves is a Telegram channel.
+            Screen {
+                HPSectionMark("Connector")
+                NeedsTelegramCard(verb: SessionCopy.useConnector)
+            }
+        } else {
+            connectorBody
+        }
+    }
+
+    private var connectorBody: some View {
         Screen {
             HPSectionMark("Connector")
             HPMuted("Let an assistant read your feeds.")

@@ -25,7 +25,6 @@ enum BlueskyCopy {
     static let sheetTitle = "Sign in with Bluesky."
     static let signOutTitle = "Sign out of Bluesky?"
     static let signOutBody = "Your Bluesky follows leave your feed."
-    static let telegramSignOutLine = "You'll be signed out of Bluesky too."
     static let pill = "Bluesky"
     static let openOn = "Open on Bluesky"
     static let playsOn = "Plays on Bluesky"
@@ -127,9 +126,20 @@ extension AppModel {
     func signInBluesky(_ typed: String) async -> BlueskySignInOutcome {
         guard !refuseDemoWrite() else { return .cancelled }
         if isOffline { showToast("You're offline.", tone: .bad); return .failed }
+        // PRODUCT §2.1: a sign-in from Sign in — nothing held yet — is the one that offers the other.
+        let wasSignedIn = session.isSignedIn
         do {
-            let acct = try await bluesky.signIn(typed)
+            let acct = try await bluesky.signIn(typed) { [weak self] landed in
+                self?.blueskySessionLanded(landed, wasSignedIn: wasSignedIn)
+            }
             showToast(BlueskyCopy.signedIn(acct.handleLabel), tone: .good)
+            if !telegramReady {
+                // §12.11: Bluesky alone runs no TDLib client — park the one the phone step made.
+                await parkTelegram()
+            } else if telegramUserId == nil, let id = await readTelegramUserId() {
+                // §7.1's comparison `blueskySessionLanded` could not make: Telegram's key is read now.
+                moderation.adopt(userId: id, did: acct.did)
+            }
             await refreshFeed()
             return .signedIn
         } catch let e as BlueskyService.SignInError {
@@ -144,17 +154,31 @@ extension AppModel {
         }
     }
 
+    /// The instant the session is held — inside `BlueskyService.signIn`, before its profile and
+    /// block reads — because that is the instant `session` makes the reader signed in and `root`
+    /// leaves Sign in. Deciding the offer after those reads let the tabbed Feed paint first (§2.1:
+    /// the offer comes "before anything else").
+    func blueskySessionLanded(_ acct: BlueskyAccount, wasSignedIn: Bool) {
+        // PROTOCOL §7.1: a completed Bluesky sign-in is a network becoming signed in, and the
+        // safety lists are compared with every key held. Telegram signed in with its id not read
+        // (`getMe` failed at Ready) is a key held but unknown: it cannot be said not to match, and
+        // treating it as absent made §7.1's replace row empty the lists of the person who wrote
+        // them. So nothing is compared until it is read (`signInBluesky`, or the next Ready).
+        if !(telegramReady && telegramUserId == nil) {
+            moderation.adopt(userId: telegramReady ? telegramUserId : nil, did: acct.did)
+        }
+        if !wasSignedIn {
+            offerOther(.telegram)
+        } else if offer == .bluesky {
+            // Finishing the offer's second sign-in goes on (§2.1).
+            offer = nil
+        }
+    }
+
     /// `onOpenURL`: the Bluesky callback on the registered scheme (PROTOCOL §12.7 steps 6–7). Any
     /// other URL is not ours to handle here and is left alone.
     func handleOpenURL(_ url: URL) {
         _ = bluesky?.receiveCallback(url)
-    }
-
-    func signOutBluesky() async {
-        modal = nil
-        await bluesky.signOut()
-        showToast(BlueskyCopy.signedOut)
-        await refreshFeed()
     }
 
     func noteBlueskyError(_ message: String) { noteError(message) }

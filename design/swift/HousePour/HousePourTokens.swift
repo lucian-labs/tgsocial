@@ -142,6 +142,7 @@ public enum HPTokens {
     public static let kebabDotGap: CGFloat = 3
     public static let menuWidth: CGFloat = 240
     public static let menuDismissDrag: CGFloat = 40
+    public static let avatarTab: CGFloat = 24
     public static let avatarRow: CGFloat = 36
     public static let avatarProfile: CGFloat = 72
     public static let bottomSafe: CGFloat = 96

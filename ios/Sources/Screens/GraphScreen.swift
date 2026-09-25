@@ -9,7 +9,14 @@ struct GraphScreen: View {
     @State private var canvasSize: CGSize = .zero
 
     var body: some View {
-        @Bindable var model = model
+        if model.session.kind == .blueskyOnly {
+            BlueskyFollowsGraph()
+        } else {
+            nodeGraph
+        }
+    }
+
+    private var nodeGraph: some View {
         Screen(refresh: { await model.refreshDiscovery(force: true) }) {
             // §2.18: a blocked node is in neither graph list, neither count, and not on the canvas.
             let direct = model.visibleDirect
@@ -73,6 +80,100 @@ struct GraphScreen: View {
     private var layout: GraphLayout {
         GraphLayout(me: model.myNode?.username ?? "", direct: model.visibleDirect.map(\.username),
                     plusOne: model.visibleNearby.map(\.node.username), edges: model.visibleEdges)
+    }
+}
+
+/// PRODUCT §2.7, Bluesky only (PROTOCOL §12.11): there is no node graph to draw — no card, no
+/// `follows:`, no +1 — so the tab draws who the account follows on Bluesky, rather than standing
+/// empty. Ring 1 only: Bluesky follows are never walked, and a ring 2 would be the graph §12.10
+/// says this is not. No Follow button: following on Bluesky happens on Bluesky. Both signed in,
+/// the tab is the node graph, unchanged.
+struct BlueskyFollowsGraph: View {
+    @Environment(AppModel.self) private var model
+    @State private var pan: CGSize = .zero
+    @State private var dragStart: CGSize = .zero
+    @State private var canvasSize: CGSize = .zero
+
+    var body: some View {
+        // §2.18: a blocked account is not a dot and not a row.
+        let follows = model.visibleBlueskyFollows
+        Screen(refresh: { await model.refreshBlueskyFollows() }) {
+            HPSectionMark("Your network")
+            HPCard(padded: false) {
+                GraphCanvas(layout: layout(follows), pan: pan)
+                    .frame(height: GraphScreen.canvasHeight)
+                    .background(GeometryReader { g in Color.clear.onAppear { canvasSize = g.size }.onChange(of: g.size) { _, n in canvasSize = n } })
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { v in
+                                pan = CGSize(width: dragStart.width + v.translation.width, height: dragStart.height + v.translation.height)
+                            }
+                            .onEnded { v in
+                                if hypot(v.translation.width, v.translation.height) < GraphScreen.tapSlop {
+                                    pan = dragStart
+                                    // A dot is keyed by DID; it opens the profile on Bluesky (§4).
+                                    if let did = layout(follows).hit(at: v.location, pan: pan, size: canvasSize) {
+                                        model.open(Atproto.bskyProfileUrl(did))
+                                    }
+                                } else {
+                                    dragStart = pan
+                                }
+                            }
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: HPTokens.Radius.card, style: .continuous))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Network graph: you, \(follows.count) followed on Bluesky")
+            }
+
+            HPSectionMark(SessionCopy.blueskyFollowsMark, count: follows.count)
+            if follows.isEmpty {
+                HPCard { HPMuted(model.blueskyFollowsLoading ? "Loading\u{2026}" : SessionCopy.notFollowing) }
+            } else {
+                HPListCard {
+                    ForEach(Array(follows.enumerated()), id: \.element.id) { i, f in
+                        BlueskyFollowRow(follow: f, isLast: i == follows.count - 1)
+                            .onAppear {
+                                // The list pages as it scrolls; the ring draws what has loaded.
+                                if i == follows.count - 1 { Task { await model.loadMoreBlueskyFollows() } }
+                            }
+                    }
+                }
+            }
+        }
+        .task { if model.blueskyFollows.isEmpty, !model.blueskyFollowsLoading { await model.refreshBlueskyFollows() } }
+    }
+
+    private func layout(_ follows: [BlueskyFollow]) -> GraphLayout {
+        GraphLayout(me: "", direct: follows.map(\.did), plusOne: [], edges: [:])
+    }
+}
+
+/// §2.7's Bluesky row: avatar, display name in body, handle in mono muted; tap → the profile on
+/// Bluesky. No Follow button.
+struct BlueskyFollowRow: View {
+    @Environment(AppModel.self) private var model
+    let follow: BlueskyFollow
+    let isLast: Bool
+
+    var body: some View {
+        HPListItem(isLast: isLast) {
+            Button { model.open(Atproto.bskyProfileUrl(follow.did)) } label: {
+                HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
+                    BlueskyAvatar(url: follow.avatar, size: HPTokens.Space.avatarRow,
+                                  initial: String(follow.nameLabel.drop(while: { $0 == "@" }).prefix(1)))
+                    VStack(alignment: .leading, spacing: 0) {
+                        HPBody(follow.nameLabel, strong: true).lineLimit(1)
+                        HPMonoSmall(follow.handleLabel).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: HPTokens.Space.touchMin)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(follow.handleLabel) on Bluesky")
+        }
     }
 }
 

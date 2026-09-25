@@ -2,6 +2,9 @@
 // This is the only segmented control in the look; never a system one.
 // `hugging` sizes the control to its content (every segment as wide as the widest label)
 // for the floating bottom bar; the default fills its container.
+// `glyph` puts a picture in a segment in place of its word (PRODUCT §1: the last tab is your
+// avatar). The word stays the segment's accessibility label and its hidden width, so a glyph
+// changes neither the bar's height nor the segments' widths.
 
 import SwiftUI
 
@@ -12,12 +15,15 @@ public struct HPTabs<Item: Hashable>: View {
     let hugging: Bool
     let trackFill: Color
     let bottomPadded: Bool
+    let glyph: ((Item, Bool) -> AnyView?)?
 
     public init(items: [Item], selected: Binding<Item>, hugging: Bool = false,
                 trackFill: Color = HPTokens.Colors.bg2, bottomPadded: Bool = true,
-                label: @escaping (Item) -> String) {
+                label: @escaping (Item) -> String,
+                glyph: ((Item, Bool) -> AnyView?)? = nil) {
         self.items = items; _selected = selected; self.hugging = hugging
         self.trackFill = trackFill; self.bottomPadded = bottomPadded; self.label = label
+        self.glyph = glyph
     }
 
     public var body: some View {
@@ -51,6 +57,9 @@ public struct HPTabs<Item: Hashable>: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(label(item))
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                // Each segment reports its own frame under `hpMeasureTouchTargets`, so a test can
+                // read which item is rightmost and how tall the bar is, off the shipped layout.
+                .hpTouchRegion(label(item))
             }
         }
         .padding(.horizontal, HPTokens.Space.tabsPad)
@@ -63,6 +72,31 @@ public struct HPTabs<Item: Hashable>: View {
     /// while the control as a whole hugs its content.
     @ViewBuilder private func segmentLabel(_ item: Item) -> some View {
         let isSelected = item == selected
+        if let picture = glyph?(item, isSelected) {
+            // The words lay the segment out, hidden; the picture is an overlay on them, so it can
+            // be taller than a line of tab type (it sits inside the segment's `tabY` inset) without
+            // making the bar any taller than it is with four words.
+            hiddenWidth(item).overlay { picture }
+        } else {
+            wordLabel(item, isSelected: isSelected)
+        }
+    }
+
+    /// Every label, hidden, in one stack — the widest one sets the width (hugging), or the item's
+    /// own word does (filling).
+    @ViewBuilder private func hiddenWidth(_ item: Item) -> some View {
+        ZStack {
+            ForEach(hugging ? items : [item], id: \.self) { other in
+                Text(label(other))
+                    .hpStyle(HPType.tab, color: HPTokens.Colors.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(HPMetric.tabLabelMinScale)
+                    .hidden()
+            }
+        }
+    }
+
+    @ViewBuilder private func wordLabel(_ item: Item, isSelected: Bool) -> some View {
         let text = Text(label(item))
             .hpStyle(HPType.tab, color: isSelected ? HPTokens.Colors.ink : HPTokens.Colors.muted)
             .lineLimit(1)
@@ -99,14 +133,17 @@ public struct HPFloatingTabs<Item: Hashable>: View {
     let label: (Item) -> String
     @Binding var selected: Item
 
-    public init(items: [Item], selected: Binding<Item>, label: @escaping (Item) -> String) {
-        self.items = items; _selected = selected; self.label = label
+    let glyph: ((Item, Bool) -> AnyView?)?
+
+    public init(items: [Item], selected: Binding<Item>, label: @escaping (Item) -> String,
+                glyph: ((Item, Bool) -> AnyView?)? = nil) {
+        self.items = items; _selected = selected; self.label = label; self.glyph = glyph
     }
 
     public var body: some View {
         let shape = Capsule(style: .continuous)
         HPTabs(items: items, selected: $selected, hugging: true,
-               trackFill: HPTokens.Colors.panel, bottomPadded: false, label: label)
+               trackFill: HPTokens.Colors.panel, bottomPadded: false, label: label, glyph: glyph)
             .hpCardShadow(shape: shape, fill: HPTokens.Colors.panel)
     }
 }

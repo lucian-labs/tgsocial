@@ -1,8 +1,8 @@
 // Screens — Bluesky (PRODUCT.md §2.35–§2.40). The Settings card, the sheets, the post card.
 //
-// Nothing here is reachable at first launch, on Sign in, in Setup, on You, or in the demo (§2.35,
-// §2.40): the Settings card is the only door, and a reader who never opens it sees the app exactly
-// as before — except that a node they follow may now carry Bluesky posts, which renders below.
+// Bluesky is a peer of Telegram at sign-in (§2.1, §2.35): its card on Sign in and §2.1's offer run
+// the same steps inline (SignInScreen.swift); after that, the Settings card is the door. Nothing
+// here is in the demo (§2.40).
 
 import SwiftUI
 
@@ -368,6 +368,10 @@ struct BlueskySettingsSection: View {
                         HPButton(BlueskyCopy.signInAgain, style: .neutral, size: .small) { model.modal = .blueskySignIn(prefill: ended) }
                     }
                 }
+                // PRODUCT §2.39: an ended session is still held (§1) — for a Bluesky-only reader it
+                // is what keeps them in the app — so it can be signed out of like a live one.
+                HPButton(BlueskyCopy.signOut, style: .ghost) { model.modal = .blueskySignOut }
+                    .padding(.top, HPTokens.Space.rowGap)
             } else {
                 HPButton(BlueskyCopy.signIn, style: .neutral, size: .small) { model.modal = .blueskySignIn(prefill: nil) }
                     .padding(.bottom, HPTokens.Space.rowGap)

@@ -27,9 +27,13 @@ struct HiddenItem: Codable, Equatable, Hashable {
 struct SafetyLists: Codable, Equatable {
     /// This record's own version, deliberately NOT `LocalStore.schemaVersion` (PRODUCT §2.3).
     var v: Int
-    /// The Telegram user id that wrote the record. A mismatch on sign-in empties the lists rather
-    /// than handing one account someone else's judgement on a shared device.
+    /// The Telegram user id that wrote the record, `0` for none (`null` on the wire). With `did`,
+    /// the keys §7.1 compares whenever a network signs in — a record whose keys all belong to
+    /// accounts that are not here is emptied rather than handed to someone else on a shared device.
     var userId: Int64
+    /// PROTOCOL §7.1: the Bluesky DID of a §12.7 session that wrote the record, or nil. One record
+    /// for both networks, so a block made signed in to one survives the other joining.
+    var did: String?
     /// Node usernames, lowercased, no `@`.
     var blocked: [String]
     /// Feed channel usernames, lowercased, no `@`.
@@ -38,9 +42,9 @@ struct SafetyLists: Codable, Equatable {
 
     static let currentVersion = 1
 
-    init(v: Int = SafetyLists.currentVersion, userId: Int64 = 0,
+    init(v: Int = SafetyLists.currentVersion, userId: Int64 = 0, did: String? = nil,
          blocked: [String] = [], mutedFeeds: [String] = [], hidden: [HiddenItem] = []) {
-        self.v = v; self.userId = userId
+        self.v = v; self.userId = userId; self.did = did
         self.blocked = blocked; self.mutedFeeds = mutedFeeds; self.hidden = hidden
     }
 
@@ -54,12 +58,49 @@ struct SafetyLists: Codable, Equatable {
         }
         v = value(Int.self, .v, or: Self.currentVersion)
         userId = value(Int64.self, .userId, or: 0)
+        // Absent reads as null: every record written before §12.11 has no `did`.
+        did = (try? c.decodeIfPresent(String.self, forKey: .did)) ?? nil
         blocked = value([String].self, .blocked, or: [])
         mutedFeeds = value([String].self, .mutedFeeds, or: [])
         hidden = value([HiddenItem].self, .hidden, or: [])
     }
 
+    /// Every field, under the spec's names. `userId` 0 goes out as `null` — a Bluesky-only
+    /// reader's record has no Telegram id (PROTOCOL §12.11) — and `did` as `null` when unset, so
+    /// Android and web read one shape whichever network wrote it.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(v, forKey: .v)
+        if userId == 0 { try c.encodeNil(forKey: .userId) } else { try c.encode(userId, forKey: .userId) }
+        if let did { try c.encode(did, forKey: .did) } else { try c.encodeNil(forKey: .did) }
+        try c.encode(blocked, forKey: .blocked)
+        try c.encode(mutedFeeds, forKey: .mutedFeeds)
+        try c.encode(hidden, forKey: .hidden)
+    }
+
+    private enum CodingKeys: String, CodingKey { case v, userId, did, blocked, mutedFeeds, hidden }
+
     var isEmpty: Bool { blocked.isEmpty && mutedFeeds.isEmpty && hidden.isEmpty }
+
+    /// PROTOCOL §7.1's table, as a value: what the record becomes when these keys are held. `nil`
+    /// for a network not signed in — its field neither matches nor conflicts.
+    func adopted(userId held: Int64?, did heldDid: String?) -> SafetyLists {
+        let tg = held.flatMap { $0 == 0 ? nil : $0 }
+        let bs = heldDid.flatMap(Atproto.normaliseDid)
+        guard tg != nil || bs != nil else { return self }
+        let matches = (tg != nil && userId == tg) || (bs != nil && did.flatMap(Atproto.normaliseDid) == bs)
+        let keyed = userId != 0 || did != nil
+        var next = self
+        if !matches, keyed {
+            // Replace: every key belongs to an account that is not here — someone else's judgement.
+            next = SafetyLists(v: v)
+        }
+        // Keep (a key matched) and adopt (no key at all) both keep the lists; all three write every
+        // held key into its field and leave a field whose network is not held as it was.
+        if let tg { next.userId = tg }
+        if let bs { next.did = bs }
+        return next
+    }
 }
 
 // MARK: - Queries
@@ -309,24 +350,26 @@ final class ModerationStore {
     func isMuted(feed username: String?) -> Bool { lists.isMuted(feed: username) }
     func isHidden(key: String?) -> Bool { lists.isHidden(key: key) }
 
-    /// PROTOCOL §7.1: on `authorizationStateReady` the record's `userId` is compared with the
-    /// signed-in account. A mismatch replaces the lists with empty ones — the record survives sign
-    /// out for the same account, not for the next person to sign in on this device.
-    func adopt(userId: Int64) {
-        // A demo has no Telegram session to reach `authorizationStateReady`, so this cannot fire
-        // from inside one; the guard says so rather than relying on that.
-        guard !isDemo, userId != 0 else { return }
-        if lists.userId == userId { return }
-        if lists.userId == 0, !lists.isEmpty {
-            // Written before there was an id to write (or by a build that did not record one):
-            // it is this account's own list until something says otherwise.
-            lists.userId = userId
-        } else {
-            lists = SafetyLists(userId: userId)
-            blockedWith = [:]
-        }
+    /// PROTOCOL §7.1: whenever a network becomes signed in — `authorizationStateReady`, a completed
+    /// Bluesky sign-in, a launch that finds either held — the record's keys are compared with the
+    /// held ones (`SafetyLists.adopted`). One key matching is the same person, and the lists follow
+    /// them onto the second network; no key matching a keyed record empties it — the record survives
+    /// sign-out for the same person, not for the next one to sign in on this device.
+    func adopt(userId: Int64?, did: String?) {
+        // A demo is signed in to nothing, so this cannot fire from inside one; the guard says so
+        // rather than relying on that.
+        guard !isDemo else { return }
+        let next = lists.adopted(userId: userId, did: did)
+        guard next != lists else { return }
+        lists = next
+        // A replaced record takes its node → DID pairs with it (they are the half of a block that
+        // remembers which DID it wrote); with no block left there is nothing for one to describe.
+        if next.blocked.isEmpty { blockedWith = [:] }
         save()
     }
+
+    /// Telegram alone — the shape every caller had before §12.11.
+    func adopt(userId: Int64) { adopt(userId: userId, did: nil) }
 
     /// `did` is the node's verified Bluesky account (PROTOCOL §12.9), written beside it. A DID that
     /// is already on the list because of another node's block is tied to this node too, so it stays

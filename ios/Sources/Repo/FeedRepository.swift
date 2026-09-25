@@ -101,6 +101,15 @@ final class FeedRepository {
         merger.setSources(Array(next.keys) + Array(atprotoSources.keys))
     }
 
+    /// PROTOCOL §12.11: signed in to Bluesky alone there are no Telegram sources — no node, no
+    /// `follows:`, no private layer — and resolving them would be a TDLib call for nobody. The merge
+    /// runs over the atproto sources alone, unchanged.
+    func useNoTelegramSources() {
+        myUsername = nil; myFeeds = []; follows = []; privateOwners = [:]
+        sources = [:]
+        merger.setSources(Array(atprotoSources.keys))
+    }
+
     /// §12.5: the atproto sources join the same merge. With none — everyone who never linked or
     /// signed in, and whose follows never linked — this changes nothing at all.
     func setAtprotoSources(_ specs: [AtprotoSourceSpec]) {

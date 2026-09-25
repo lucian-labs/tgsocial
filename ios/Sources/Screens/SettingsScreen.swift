@@ -1,9 +1,10 @@
 // Screens — Settings (PRODUCT.md §2.20) and Delete my node (§2.21).
 //
-// Everything the safety lists (PROTOCOL §7.1) hold, each row with its own undo, plus the contact
-// card (§2.19) and the two destructive actions. Sign Out lives here rather than on You so the
+// Everything the safety lists (PROTOCOL §7.1) hold, each row with its own undo, the contact card
+// (§2.19), and one card per network, each with its own sign-in or sign-out (PRODUCT §1: signed in
+// means Telegram, Bluesky, or both). The sign-outs live here rather than on You so the
 // irreversible action can sit directly below the reversible one instead of a mis-tap away from
-// `View as others see it`.
+// `View as others see it`. Reached only from You's top right (§2.8).
 
 import SwiftUI
 
@@ -23,18 +24,19 @@ struct SettingsScreen: View {
             if !model.isDemo { BlueskySettingsSection() }
             contact
 
-            // §2.22.3: `Sign Out` is not in the demo at all — there is no session to leave.
-            // `( Leave Demo )` is neutral and sits exactly where it sat, above the danger button.
+            // §2.22.3: neither network's card is in the demo — it is signed in to nothing, so it
+            // has nothing to sign out of or in to. `( Leave Demo )` is neutral and sits where the
+            // `TELEGRAM` card would, above the danger button.
             if model.isDemo {
                 HPButton(DemoCopy.leaveButton, style: .neutral) { model.leaveDemo() }
                     .padding(.top, HPTokens.Space.rowGap)
+                if model.myNode != nil {
+                    HPButton("Delete My Node", style: .danger) { model.modal = .deleteNode }
+                        .hpTouchRegion("Delete My Node")
+                        .padding(.top, HPTokens.Space.rowGap)
+                }
             } else {
-                HPButton("Sign Out", style: .danger) { model.modal = .signOut }
-                    .padding(.top, HPTokens.Space.rowGap)
-            }
-            if model.myNode != nil {
-                HPButton("Delete My Node", style: .danger) { model.modal = .deleteNode }
-                    .padding(.top, HPTokens.Space.rowGap)
+                TelegramSettingsSection()
             }
         }
     }
@@ -211,6 +213,38 @@ struct SettingsScreen: View {
             .accessibilityLabel("Write to \(Moderation.contactAddress)")
             HPMuted("Read by a person within 24 hours.")
                 .padding(.top, HPTokens.Space.rowGap)
+        }
+    }
+}
+
+/// PRODUCT §2.20's `TELEGRAM` card, always there outside the demo. Signed in: the phone, `Sign Out
+/// of Telegram`, and `Delete My Node` below it with a node — the reversible destructive action
+/// before the irreversible one, both last on the screen. Signed out (Bluesky only): `Sign In with
+/// Telegram`, and no `Delete My Node` — the app created nothing on Bluesky (§2.21).
+struct TelegramSettingsSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HPSectionMark(SessionCopy.telegramMark)
+        if model.telegramReady {
+            HPCard {
+                HPListItem(isLast: true) {
+                    HPBody(SessionCopy.phoneRow)
+                } trailing: {
+                    HPMono(PhoneMask.format(model.me?.phoneNumber ?? ""), small: true)
+                }
+            }
+            HPButton(SessionCopy.signOutOfTelegram, style: .danger) { model.modal = .signOut }
+                .hpTouchRegion(SessionCopy.signOutOfTelegram)
+                .padding(.top, HPTokens.Space.rowGap)
+            if model.myNode != nil {
+                HPButton("Delete My Node", style: .danger) { model.modal = .deleteNode }
+                    .hpTouchRegion("Delete My Node")
+                    .padding(.top, HPTokens.Space.rowGap)
+            }
+        } else {
+            HPButton(SessionCopy.signInWithTelegram, style: .neutral, size: .small) { model.openTelegramSignIn() }
+                .hpTouchRegion(SessionCopy.signInWithTelegram)
         }
     }
 }

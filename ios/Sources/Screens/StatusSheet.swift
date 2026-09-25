@@ -11,14 +11,17 @@ struct StatusSheetModal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Status")
-            row("Connection", model.connectionLabel)
+            // PRODUCT §2.10, Bluesky only: `Connection`, `Node` and `TDLib` each describe a TDLib
+            // client that is not running (PROTOCOL §12.11), so they are absent, not `Unknown`.
+            let telegram = model.session.kind != .blueskyOnly
+            if telegram { row("Connection", model.connectionLabel) }
             row("Telegram", model.telegramLabel)
-            row("Node", model.nodeLabel)
+            if telegram { row("Node", model.nodeLabel) }
             row("Feed", model.feedLabel)
             row("Pending", model.pendingLabel)
-            row("Last error", model.lastErrorLabel)
             let bluesky = model.blueskyStatusLabel
-            row("TDLib", model.tdlibVersion.isEmpty ? "Unknown" : model.tdlibVersion, isLast: bluesky == nil)
+            row("Last error", model.lastErrorLabel, isLast: !telegram && bluesky == nil)
+            if telegram { row("TDLib", model.tdlibVersion.isEmpty ? "Unknown" : model.tdlibVersion, isLast: bluesky == nil) }
             // PRODUCT §2.35: present with any Bluesky source, absent for everyone else.
             if let bluesky { row("Bluesky", bluesky, isLast: true) }
             HPButton("Refresh Now", style: .accent, enabled: !refreshing) {

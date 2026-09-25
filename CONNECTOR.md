@@ -56,7 +56,16 @@ drops all in-flight requests.
 - Wrong or missing token → `401 {"error":"unauthorized"}`.
 - Bridge off → connection refused (the MCP tools report
   `tgsocial is not running, or the connector is off`).
-- Not signed in → `409 {"error":"signed out"}`.
+- **The Connector needs Telegram.** The app can be signed in to Bluesky alone
+  (`PRODUCT §1`), and then the bridge does not listen at all — connection
+  refused, as if off — and the Connector tab shows `Sign in to Telegram to use
+  the Connector.` in place of its switches (`PRODUCT §2.14`). Every source the
+  bridge serves is a Telegram channel, so there is nothing to serve; and a
+  Bluesky session is never something it pipes (`PROTOCOL §12.9`). Signing out
+  of Telegram turns the bridge off and wipes the token whether or not Bluesky
+  stays signed in.
+- Not signed in to Telegram while listening (the session ended under a
+  request) → `409 {"error":"signed out"}`.
 - Out of scope → `403 {"error":"out of scope","detail":"<what was asked>"}`.
 - Write attempted with writes disabled → `403 {"error":"read only"}`.
 - TDLib error → `502 {"error":"telegram","code":n,"message":"…"}`.
@@ -200,4 +209,4 @@ assistant can tell the difference between "not allowed" and "broken".
 - Not remote. There is no hosted mode, and adding one would need a different
   security model than a bearer token on loopback.
 - Not a second session to maintain: it is the Mac app's own TDLib client, so
-  signing out of the app revokes the connector too.
+  signing out of Telegram revokes the connector too — with or without Bluesky.

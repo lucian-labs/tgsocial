@@ -16,15 +16,21 @@ enum AuthPhase: Equatable {
     case unsupported(state: String)
     case ready
     case loggingOut
+    /// PROTOCOL §12.11: no TDLib client, on purpose — Telegram is known signed out while a Bluesky
+    /// session is held. Sign in shows Telegram's phone step; `Send Code` is what starts TDLib.
+    case off
 }
 
 enum Tab: String, CaseIterable, Hashable {
-    case feed, explore, graph, you
+    case feed, explore, graph
     #if targetEnvironment(macCatalyst)
     /// PRODUCT §2.14: a fifth tab, present only on macOS. On iOS and Android it does not exist
     /// and the bridge is not compiled in — a phone is not a host for a local service.
     case connector
     #endif
+    /// PRODUCT §1: always the rightmost item — on the Mac after `Connector` — and drawn as your
+    /// avatar, not the word. The word stays: it is the item's accessibility label.
+    case you
 
     var label: String {
         switch self {
@@ -55,6 +61,9 @@ enum Route: Hashable {
     case privateRequests
     /// PRODUCT §2.28, §2.31: a private channel's screen, keyed by chat id — it has no username.
     case privateChannel(chatId: Int64)
+    /// PRODUCT §2.1 "From inside the app": Telegram's steps as a full screen, for a reader signed in
+    /// to Bluesky alone. Lands back where it was opened (or Setup, with no node).
+    case telegramSignIn
     #if targetEnvironment(macCatalyst)
     /// PRODUCT §2.14: "the answer to 'what can it see' is always one tap away".
     case connectorSources
@@ -214,7 +223,14 @@ final class AppModel {
 
     // Navigation
     var tab: Tab = .feed
-    var path: [Route] = []
+    var path: [Route] = [] {
+        // PRODUCT §2.1 "From inside the app": Telegram's steps leaving the stack before
+        // `authorizationStateReady` — `‹ Back`, a tab — is the reader abandoning the sign-in, and
+        // the client `Send Code` started has nobody to serve (PROTOCOL §12.11). Watched here, on
+        // the one value NavigationStack and the tab bar both write, not in the screen's own
+        // `onDisappear`, so no way of leaving can skip it.
+        didSet { if oldValue.contains(.telegramSignIn), !path.contains(.telegramSignIn) { leftTelegramSignIn() } }
+    }
     var modal: Modal?
     /// PRODUCT §2.21: "while the delete runs … the modal cannot be dismissed". The scrim and the
     /// binding both go through `dismissModal`, so there is one place that can refuse.
@@ -356,9 +372,49 @@ final class AppModel {
 
     @ObservationIgnored private var floodUntil: Foundation.Date?
 
+    // Two networks (PRODUCT §1, §2.1, §2.41; PROTOCOL §12.11) — see AppSession.swift.
+    /// §2.1's offer of the other network, while it is on screen.
+    var offer: OtherNetwork?
+    /// The reader typed a number and is still in Telegram's steps: the `authorizationStateReady`
+    /// that follows is a sign-in, not a launch restoring a session, and so it is the one that may
+    /// offer Bluesky (§2.1). Also what keeps a TDLib answer from being parked under the reader
+    /// mid-sign-in (PROTOCOL §12.11). Cleared at Ready, and when the reader leaves the steps.
+    @ObservationIgnored var telegramSigningIn = false
+    /// `Sign Out of Telegram` is running: TDLib's `authorizationStateLoggingOut` is ours.
+    @ObservationIgnored var telegramUserSignOut = false
+    /// TDLib is logging out without us — the session was ended from another device (PRODUCT §4).
+    @ObservationIgnored var telegramRemoteSignOut = false
+    /// The device's own network, for a reader with no TDLib connection to ask (§2.10, Bluesky only).
+    /// Written by the path monitor (AppSession.swift); its return is what refreshes a stale
+    /// Bluesky-only feed, the way TDLib's `Connected` does for Telegram (PRODUCT §4).
+    var deviceOnline = true {
+        didSet { if deviceOnline, !oldValue { deviceNetworkReturned() } }
+    }
+    @ObservationIgnored var pathMonitor: AnyObject?
+    /// Test seam: under XCTest the model asks for TDLib and is refused, because a client started
+    /// in the test host crashes it at exit (tgsocialApp.swift). The asks are counted either way —
+    /// `tdlibStartRequests` is what a test measures "Bluesky alone never starts TDLib" with.
+    @ObservationIgnored var mayStartTDLib = !tgsocialApp.isTestHost
+    @ObservationIgnored var tdlibStartRequests = 0
+    /// The Telegram user id of the session, set at `authorizationStateReady` — PROTOCOL §7.1's
+    /// `userId` key, which a Bluesky sign-in completing later compares beside its DID.
+    @ObservationIgnored var telegramUserId: Int64?
+    /// Test seam for `logOut`: a TDLib call builds a client, and the test host must not.
+    @ObservationIgnored var logOutOverride: (() async -> Void)?
+    /// Test seam for Telegram's sign-in calls, for the same reason: receives each step the reader
+    /// sent (`Send Code`, `Sign In`, `Unlock`) in place of TDLib.
+    @ObservationIgnored var authStepOverride: ((TelegramAuthStep) async -> Void)?
+    /// PROTOCOL §12.11: the Graph tab signed in to Bluesky alone — who the account follows, paged.
+    var blueskyFollows: [BlueskyFollow] = []
+    var blueskyFollowsLoading = false
+    var blueskyFollowsExhausted = false
+    @ObservationIgnored var blueskyFollowsCursor: String?
+
     // MARK: Init
 
-    init() {
+    /// `makeBluesky` is a test seam: the app's service talks to the Keychain and the network, and a
+    /// test that needs a session held hands in one built over a memory vault and a stub transport.
+    init(makeBluesky: ((LocalStore, ActivityRegistry) -> BlueskyService)? = nil) {
         moderation = ModerationStore(store: store)
         // §2.11 both ways: a starting video pauses audio (VideoCoordinator.willPlay), and
         // starting or resuming audio pauses the audible inline video.
@@ -382,7 +438,7 @@ final class AppModel {
         comments = CommentRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         privateLayer = PrivateRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         privateRecord = privateLayer.record
-        bluesky = BlueskyService(store: store, activity: activity)
+        bluesky = makeBluesky?(store, activity) ?? BlueskyService(store: store, activity: activity)
         feed.atproto = bluesky
         confirmPrivateOnCard = store.load(Bool.self, LocalStore.privateConfirmOff) != true
         myNode = store.load(MyNode.self, LocalStore.myNode)
@@ -418,7 +474,18 @@ final class AppModel {
         bluesky.onSourcesChanged = { [weak self] in Task { await self?.refreshFeed() } }
         // A demo entered before this ran must not be handed a client behind its back.
         guard !isDemo else { return }
-        td.start()
+        startNetworkMonitor()
+        if telegramKnownSignedOut {
+            // PROTOCOL §12.11: Bluesky alone. No TDLib client — not started, not asked. The safety
+            // lists are compared with the one key held (§7.1: "a launch that finds either held"),
+            // and the feed is Bluesky's sources, read now because no `authorizationStateReady`
+            // is coming to read it.
+            auth = .off
+            moderation.adopt(userId: nil, did: bluesky.heldDid)
+            Task { await refreshFeed() }
+        } else {
+            startTelegram()
+        }
         #if targetEnvironment(macCatalyst)
         await connector.restore()
         #endif
@@ -445,6 +512,12 @@ final class AppModel {
     /// (ActivityRegistry), so the pill cannot stick.
     var status: StatusKind {
         if isDemo { return .demo }
+        // PRODUCT §2.10, Bluesky only: the same words, from Pending and the device's network —
+        // there is no TDLib connection to read them from.
+        if session.kind == .blueskyOnly {
+            if !deviceOnline { return .offline }
+            return activity.isEmpty ? .synced : .syncing
+        }
         if auth != .ready { return .signedOut }
         switch connection {
         case .connectionStateWaitingForNetwork: return .offline
@@ -467,7 +540,8 @@ final class AppModel {
         // §2.22.5: the row that answers the reviewer's question without them having to take our
         // word for §2.22.4.
         if isDemo { return DemoCopy.telegramRow }
-        guard auth == .ready else { return "Signed out" }
+        // §2.41: `Telegram  Not signed in` — the word §3 gives every network's signed-out state.
+        guard auth == .ready else { return SessionCopy.notSignedIn }
         let phone = PhoneMask.format(me?.phoneNumber ?? "")
         return phone.isEmpty ? "Signed in" : "Signed in \u{00B7} " + phone
     }
@@ -510,7 +584,12 @@ final class AppModel {
         await refreshFeed()
     }
 
-    var isOffline: Bool { if case .connectionStateWaitingForNetwork = connection { return true } else { return false } }
+    /// TDLib's word while Telegram is signed in; the device's network otherwise — a Bluesky-only
+    /// reader has no TDLib connection, and `connection` sits at its initial `Connecting` forever.
+    var isOffline: Bool {
+        guard auth == .ready else { return !deviceOnline }
+        if case .connectionStateWaitingForNetwork = connection { return true } else { return false }
+    }
 
     /// Setup screen shows when signed in, no node, and the user has not skipped it — or while a setup is in progress.
     /// Never in the demo: the reader already has `@tgs_demo_you`, and `Create Node` is a write.
@@ -657,7 +736,10 @@ final class AppModel {
 
     // MARK: Update routing
 
-    private func handle(_ update: Update) {
+    /// The update stream's one consumer (TDClient's pump). Not private: a test drives the auth
+    /// state machine with TDLib's own updates through here, because the test host may not start
+    /// a client to send them (`mayStartTDLib`).
+    func handle(_ update: Update) {
         sends.handle(update)
         switch update {
         case .updateAuthorizationState(let u):
@@ -796,34 +878,68 @@ final class AppModel {
         switch authState {
         case .authorizationStateWaitTdlibParameters:
             Task { await sendParameters() }
+        // Each "not signed in" answer goes past `telegramAnsweredSignedOut`: with a Bluesky session
+        // held and nobody in Telegram's steps, the client is parked (PROTOCOL §12.11). The code
+        // step is one of them because TDLib keeps it across a relaunch.
         case .authorizationStateWaitPhoneNumber:
             auth = .phone
+            telegramAnsweredSignedOut()
         case .authorizationStateWaitCode(let c):
             auth = .code(phone: c.codeInfo.phoneNumber)
+            telegramAnsweredSignedOut()
         case .authorizationStateWaitPassword(let p):
             auth = .password(hint: p.passwordHint)
+            telegramAnsweredSignedOut()
         case .authorizationStateWaitOtherDeviceConfirmation(let o):
             auth = .otherDevice(link: o.link)
+            telegramAnsweredSignedOut()
         case .authorizationStateWaitRegistration:
             auth = .registration
-            showToast("Sign up in Telegram first.", tone: .bad)
+            // Said to a reader in Telegram's steps; a launch parking a client nobody asked for
+            // has nobody to say it to.
+            if !telegramUnwanted { showToast("Sign up in Telegram first.", tone: .bad) }
+            telegramAnsweredSignedOut()
         case .authorizationStateReady:
             let wasReady = auth == .ready
             auth = .ready
-            if !wasReady { Task { await onReady() } }
+            guard !wasReady else { return }
+            // Same turn as `auth = .ready`, before `getMe`'s round trip: where the reader goes —
+            // §2.1's offer included — is decided before SwiftUI can paint the tabbed Feed.
+            telegramBecameReady()
+            Task { await onReady() }
         case .authorizationStateLoggingOut:
+            // Not ours: the session was ended from another device (PRODUCT §4, "Telegram signs you
+            // out"). With Bluesky held the app stays open, so TDLib must not come back up after.
+            if !telegramUserSignOut, auth == .ready {
+                telegramRemoteSignOut = true
+                if blueskyHeld { store.save(true, LocalStore.telegramSignedOut) }
+            }
             auth = .loggingOut
         case .authorizationStateClosing:
-            auth = .loading
+            // Our own `close()` already put `auth` where it belongs (`.off`, or the demo).
+            if td.explicitCloses == 0 { auth = .loading }
         case .authorizationStateClosed:
-            auth = .loading
             resetCandidacyMemory()
-            // In the demo this update is the answer to `enterDemo`'s own `close()`. Recreating here
-            // would put a live client back behind the fixtures a moment after it was taken away
-            // (PRODUCT §2.22.4); `leaveDemo` is what brings one back.
-            if !isDemo { td.recreate() }
+            // The answer to one of our own `close()`s — the demo's (PRODUCT §2.22.4), or a Bluesky
+            // sign-in parking Telegram (§12.11). Whoever closed it has already decided what comes
+            // next; recreating here would put a live client back a moment after it was taken away.
+            if td.takeExplicitClose() { return }
+            if isDemo { auth = .loading; return }
+            if telegramRemoteSignOut {
+                telegramRemoteSignOut = false
+                finishRemoteTelegramSignOut()
+            }
+            if telegramKnownSignedOut {
+                // PROTOCOL §12.11: signed out of Telegram with Bluesky held — no client after.
+                td.forget()
+                auth = .off
+            } else {
+                auth = .loading
+                restartTelegram()
+            }
         default:
             auth = .unsupported(state: Self.stateName(authState))
+            telegramAnsweredSignedOut()
         }
     }
 
@@ -842,19 +958,37 @@ final class AppModel {
     func submitPhone(_ phone: String) async {
         let trimmed = phone.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        await authCall { try await self.td.api.setAuthenticationPhoneNumber(phoneNumber: trimmed, settings: nil) }
+        telegramSigningIn = true
+        // PROTOCOL §12.11: starting Telegram's sign-in is what brings TDLib up when it is off.
+        // Still signing in once it is up: a reader who left the steps meanwhile sent nothing.
+        guard await ensureTelegramClient(), telegramSigningIn else { return }
+        await send(.phone(trimmed))
     }
 
     func submitCode(_ code: String) async {
-        await authCall { try await self.td.api.checkAuthenticationCode(code: code.trimmingCharacters(in: .whitespaces)) }
+        await send(.code(code.trimmingCharacters(in: .whitespaces)))
     }
 
     func submitPassword(_ password: String) async {
-        await authCall { try await self.td.api.checkAuthenticationPassword(password: password) }
+        await send(.password(password))
+    }
+
+    /// Telegram's three sign-in calls (PROTOCOL §4.1), in one place so a test can stand in for
+    /// TDLib (`authStepOverride`) and read back exactly what the reader sent.
+    private func send(_ step: TelegramAuthStep) async {
+        if let authStepOverride { await authStepOverride(step); return }
+        switch step {
+        case .phone(let number):
+            await authCall { try await self.td.api.setAuthenticationPhoneNumber(phoneNumber: number, settings: nil) }
+        case .code(let code):
+            await authCall { try await self.td.api.checkAuthenticationCode(code: code) }
+        case .password(let password):
+            await authCall { try await self.td.api.checkAuthenticationPassword(password: password) }
+        }
     }
 
     /// TDLib accepts a new setAuthenticationPhoneNumber while waiting for a code, so going back is local.
-    func useAnotherNumber() { auth = .phone }
+    func useAnotherNumber() { if auth != .off { auth = .phone } }
 
     private func authCall(_ op: @escaping () async throws -> Ok) async {
         do { _ = try await activity.run("Signing in") { try await op() } }
@@ -876,14 +1010,20 @@ final class AppModel {
 
     // MARK: Ready → cold start (PRODUCT §4)
 
+    /// Everything after `authorizationStateReady` that needs TDLib. Where the reader lands was
+    /// already decided, synchronously, by `telegramBecameReady` (AppSession.swift).
     private func onReady() async {
+        // Every line below is a TDLib read, and the test host may not make the client they need.
+        guard mayStartTDLib else { return }
         // No blanket counter here: each operation on this path registers itself with the
         // activity registry, so the pill reflects what is actually in flight.
         me = try? await td.api.getMe()
-        // PROTOCOL §7.1: the safety lists belong to the account that wrote them. Same id, they
-        // carry over a sign-out; a different id and they are replaced with empty ones, because a
-        // shared device must not hand one person another person's judgement.
-        if let me { moderation.adopt(userId: me.id) }
+        telegramUserId = me?.id
+        // PROTOCOL §7.1: the safety lists belong to the accounts that wrote them — compared with
+        // every key held, Telegram's and a Bluesky session's. One matching carries them over; a
+        // keyed record with none matching is replaced with empty lists, because a shared device
+        // must not hand one person another person's judgement.
+        if let id = telegramUserId { moderation.adopt(userId: id, did: bluesky.heldDid) }
         if myNode == nil {
             if let (node, info) = try? await nodes.findMyNode() { adopt(node: node, info: info) }
         } else {
@@ -981,7 +1121,9 @@ final class AppModel {
             feedReady = true
             return
         }
-        guard auth == .ready else { return }
+        // PRODUCT §1: signed in means either network. Bluesky alone runs the same merge over its
+        // own sources (PROTOCOL §12.11) and never asks TDLib anything.
+        guard session.isSignedIn else { return }
         // Offline, reads serve cache: the cached posts are already on screen; refresh again when the network returns.
         if isOffline { feedStale = true; feedReady = true; posts = feed.posts; return }
         // One refresh at a time. A caller that lands while one is in flight — an arrival pass, a
@@ -998,6 +1140,7 @@ final class AppModel {
 
     /// One pass of the refresh: pending requests, sources, the merge, the comment index.
     private func refreshFeedOnce() async {
+        guard auth == .ready else { await refreshBlueskyOnlyFeed(); return }
         // PROTOCOL §11.4.7: every feed refresh re-checks the requests I have out.
         await checkPendingApprovals()
         do {
@@ -1818,54 +1961,17 @@ final class AppModel {
                 ? .nodeFailedAfterPrivate(username: node.username, commentsWent: repliesChat != nil, error: message)
                 : .nodeFailed(username: node.username, error: message)
         }
-        // PROTOCOL §4.11 step 3: everything §7 calls discardable goes, the session stays authorized,
-        // and the client is nodeless — no logOut. The safety lists survive (LocalStore.clear).
-        discardLocalState()
+        // PROTOCOL §4.11 step 3: Telegram's part of §7 goes, exactly as `Sign Out of Telegram`
+        // wipes it; the session stays authorized and the client is nodeless — no logOut. A Bluesky
+        // session is untouched (PRODUCT §2.21), and the safety lists survive (LocalStore.clear).
+        discardTelegramState()
         nodeLookupDone = true
         modal = nil
         showToast("Your node is gone.", tone: .good)
         return .deleted
     }
 
-    // MARK: Sign out (wipes local state)
-
-    /// Everything PROTOCOL §7 calls discardable, in one place: sign out and delete-my-node both
-    /// wipe exactly this, and only sign out also drops the session.
-    private func discardLocalState() {
-        // Bluesky's share of §7 goes from memory too, not only from disk (PRODUCT §2.35).
-        bluesky.discardLocalState()
-        store.clear()
-        myNode = nil; myCard = nil; myWork = nil; myAtprotoDid = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
-        setupSkipped = false; inSetup = false; feedMode = .all
-        posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
-        feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
-        clearPrivateState()
-        path = []; tab = .feed
-        feedReady = false; feedStale = false; feedExhausted = false
-        lastFeedRefresh = nil; myCardFetchedAt = nil
-    }
-
-    func signOut() async {
-        #if targetEnvironment(macCatalyst)
-        // PRODUCT §2.14: signing out turns the bridge off and wipes the token. Before `logOut`,
-        // so no request can be served against a session that is on its way out.
-        connector.signOut()
-        #endif
-        modal = nil
-        viewer = nil
-        audio.stop()
-        auth = .loggingOut
-        _ = try? await td.api.logOut()
-        // PRODUCT §2.35: signing out of Telegram signs out of Bluesky too — the session is §7
-        // local state and goes with the rest.
-        await bluesky.endForTelegramSignOut()
-        // The safety lists survive this by design (PROTOCOL §7.1); LocalStore.clear keeps them.
-        discardLocalState()
-        me = nil
-        nodeLookupDone = false
-        resetCandidacyMemory()
-        lastError = nil
-    }
+    // MARK: Sign out (PRODUCT §4, §2.20; PROTOCOL §7) — per network, in AppSession.swift
 
     // MARK: Links
 

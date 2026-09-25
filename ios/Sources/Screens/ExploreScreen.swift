@@ -8,6 +8,15 @@ struct ExploreScreen: View {
     @State private var searching = false
 
     var body: some View {
+        if model.session.kind == .blueskyOnly {
+            // PRODUCT §2.41: Explore finds nodes, and a node is a Telegram channel.
+            Screen { NeedsTelegramCard(verb: SessionCopy.findNodes) }
+        } else {
+            explore
+        }
+    }
+
+    @ViewBuilder private var explore: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshDiscovery(force: true) }) {
             HPTextField(nil, text: $query, placeholder: "Find a node", kind: .text) { submit() }

@@ -21,7 +21,8 @@ final class BlueskySignInTests: XCTestCase {
     /// an empty profile and no block records.
     private static func network() -> StubTransport { StubTransport { req, _ in answer(req) } }
 
-    nonisolated private static func answer(_ req: URLRequest) -> StubTransport.Reply {
+    /// Internal, not private: `SessionTests` signs a whole app model in against the same server.
+    nonisolated static func answer(_ req: URLRequest) -> StubTransport.Reply {
             let url = req.url!
             switch (url.host ?? "", url.path) {
             case ("plc.directory", _):

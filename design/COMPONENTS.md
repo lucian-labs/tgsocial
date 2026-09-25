@@ -106,6 +106,11 @@ Web: `.pill[.gold|.bad]`.
 border, pill radius, `tabsPad` inset, `tabsGap`; each item `tabY/tabX`,
 `tab` style, muted; selected item `panel` fill, ink text, inset 1pt `line`
 ring + a 1pt/3pt contact shadow at 12%. Equal widths. Web: `.tabs`.
+An item may carry a **glyph** in place of its word (PRODUCT §1: the last tab
+is your avatar, `avatarTab` 24pt): the word stays as the item's accessibility
+label and, hidden, as its width, and the glyph is an overlay on it — so a glyph
+never changes the control's height or the items' widths. `HPFloatingTabs` is
+the same control, hugging, `panel` fill, the one card shadow.
 
 **HPToggle(isOn)** — there is no switch in the upstream kit; derive: a pill
 track 44×26, `bg2` + 1pt `line2` off, `accentSoft` + `accent` border on; a

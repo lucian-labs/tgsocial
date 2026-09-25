@@ -283,7 +283,8 @@ final class BlueskyMergeTests: XCTestCase {
         store.save(Optional<[String: LinkCheck]>.none, LocalStore.atprotoLinks)
         store.save(Optional<BlueskyPrefs>.none, LocalStore.blueskyPrefs)
         store.save(Optional<BlueskyBlocks>.none, LocalStore.blueskyBlocks)
-        store.save(Optional<BlueskyAccount>.none, "blueskyAccount")
+        store.save(Optional<BlueskyAccount>.none, LocalStore.blueskyAccount)
+        store.save(Optional<BlueskyEnded>.none, LocalStore.blueskyEnded)
     }
 
     private func service(_ transport: HTTPTransport, vault: SessionVault = MemoryVault()) -> BlueskyService {
@@ -435,30 +436,49 @@ final class BlueskyMergeTests: XCTestCase {
     }
 
     /// A Telegram sign-out while a check is out: the wipe stands. The check's answer arrives after
-    /// it and is not written back into the cache it emptied.
+    /// it and is not written back into the cache it emptied — the link-verification cache is
+    /// Telegram's part of §7 (it verifies cards), so Telegram's sign-out empties it even with a
+    /// Bluesky session staying.
     func testATelegramSignOutDuringACheckWritesNothingBack() async throws {
         let bsky = service(HeldTransport(BskyFixture.network(), hold: 0.2))
         let anaNode = BskyFixture.node("tgs_ana", did: ana)
         bsky.startChecks([anaNode])
-        await bsky.endForTelegramSignOut()
+        bsky.discardTelegramPart()
         try await Task.sleep(for: .milliseconds(700))
         XCTAssertNil(bsky.linkCheck(node: "tgs_ana", did: ana))
         XCTAssertNil(store.load([String: LinkCheck].self, LocalStore.atprotoLinks))
     }
 
-    /// PRODUCT §2.35: the session and its settings are §7 local state. A Telegram sign-out drops
-    /// them from memory too, so the next person signed in during this run starts with the tag off.
-    func testTelegramSignOutLeavesNoBlueskyToggleBehind() async throws {
+    /// PROTOCOL §7: the session and its settings are local state. The last one out drops them
+    /// from memory too, so the next person signed in during this run starts with the tag off.
+    func testTheLastOneOutLeavesNoBlueskyToggleBehind() async throws {
         let bsky = service(BskyFixture.network(), vault: signedIn())
         bsky.prefs.tagOn = true
         bsky.prefs.followsOn = false
         XCTAssertEqual(bsky.sources(scope: [], isBlocked: { _ in false }).map(\.key), ["tag:waveloop"])
 
-        await bsky.endForTelegramSignOut()
+        await bsky.endForLastOneOut()
         XCTAssertFalse(bsky.isSignedIn)
         XCTAssertEqual(bsky.prefs, BlueskyPrefs())
         XCTAssertEqual(bsky.sources(scope: [], isBlocked: { _ in false }), [], "no tag source for whoever signs in next")
         XCTAssertEqual(bsky.blueskyBlocks, [])
+    }
+
+    /// PRODUCT §1, §2.35: sign-outs are independent. Telegram's part leaves the session, its
+    /// toggles and its blocks exactly as they were — measured on the sources the merge would read.
+    func testTelegramsPartLeavesTheSessionAndItsToggles() async throws {
+        let bsky = service(BskyFixture.network(), vault: signedIn())
+        bsky.prefs.tagOn = true
+        bsky.prefs.followsOn = true
+        let anaNode = BskyFixture.node("tgs_ana", did: ana)
+        await bsky.refreshLinks([anaNode])
+        XCTAssertEqual(bsky.verifiedDid(anaNode), ana)
+
+        bsky.discardTelegramPart()
+        XCTAssertTrue(bsky.isSignedIn, "the Bluesky session stays")
+        XCTAssertTrue(bsky.prefs.tagOn, "and so do its toggles")
+        XCTAssertNil(bsky.verifiedDid(anaNode), "the link cache verified a card, and cards are Telegram's")
+        XCTAssertEqual(bsky.sources(scope: [], isBlocked: { _ in false }).map(\.key), ["bsky:following", "tag:waveloop"])
     }
 
     // MARK: A Keychain that refuses (§12.7 "Where the session lives")

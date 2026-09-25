@@ -75,7 +75,9 @@ final class ConnectorService: ConnectorReader {
     /// Restores the listener at launch when the user left it on. Not automatic beyond that:
     /// enabling is a grant, and a grant survives a relaunch but is never invented by one.
     func restore() async {
-        guard settings.enabled else {
+        // CONNECTOR.md §2: the Connector needs Telegram. Signed in to Bluesky alone the bridge does
+        // not listen at all — connection refused, as if off (PROTOCOL §12.11).
+        guard settings.enabled, !model.telegramKnownSignedOut else {
             writeHandshake()
             return
         }
@@ -101,6 +103,9 @@ final class ConnectorService: ConnectorReader {
         // hand out belongs to an account that is not signed in. Off is refused too: the grant this
         // toggle reads belongs to the real session the demo is standing in front of.
         if refuseInDemo() { return }
+        // CONNECTOR.md §2: no bridge without Telegram. The switch is not on screen then (§2.41);
+        // this is the guard behind it.
+        if enabled, model.session.kind == .blueskyOnly { return }
         guard enabled != settings.enabled else { return }
         settings.enabled = enabled
         persist()

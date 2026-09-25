@@ -85,21 +85,16 @@ struct RootView: View {
         .tint(HPTokens.Colors.accent)
     }
 
+    /// One switch over one value (`AppModel.root`, AppSession.swift): signed in means Telegram,
+    /// Bluesky or both (PRODUCT §1), and no branch here decides that for itself. The demo is `.app`
+    /// — it IS the app on an invented network (§2.22), the same stack, not a second one.
     @ViewBuilder private var content: some View {
-        @Bindable var model = model
-        if model.secretsMissing {
-            SecretsMissingScreen()
-        } else if model.isDemo {
-            // PRODUCT §2.22: the demo IS the app, on an invented network. It routes ahead of the
-            // auth check because there is no auth state behind it to be ready — that is the point,
-            // and it is the same stack, not a second one built for the demo.
-            stack
-        } else if model.auth != .ready {
-            SignInScreen()
-        } else if model.needsSetup {
-            SetupScreen()
-        } else {
-            stack
+        switch model.root {
+        case .secretsMissing: SecretsMissingScreen()
+        case .signIn: SignInScreen(mode: .both)
+        case .offer(let network): SignInScreen(mode: .offer(network))
+        case .setup: SetupScreen()
+        case .app: stack
         }
     }
 
@@ -114,6 +109,7 @@ struct RootView: View {
                             case .feedChannel(let username): FeedChannelScreen(username: username)
                             case .manageFeeds: ManageFeedsScreen()
                             case .settings: SettingsScreen()
+                            case .telegramSignIn: TelegramSignInScreen()
                             case .thread(let post): ThreadScreen(post: post)
                             case .vouches(let node, let tag): VouchesScreen(node: node, tag: tag)
                             case .privateNode: PrivateScreen()
@@ -149,11 +145,9 @@ struct BottomChromeHeightKey: PreferenceKey {
 struct BottomChrome: View {
     @Environment(AppModel.self) private var model
 
-    private var showsTabs: Bool {
-        guard !model.secretsMissing else { return false }
-        // The demo has no Setup and no auth to be ready; it is always the tabbed stack.
-        return model.isDemo || (model.auth == .ready && !model.needsSetup)
-    }
+    /// The same tabs in every signed-in state (PRODUCT §1: "The shell is the same in every state").
+    /// Hidden on Sign in, the offer and Setup — which is exactly "the root is not the stack".
+    private var showsTabs: Bool { model.root == .app }
     private var showsDock: Bool { model.audio.current != nil }
 
     var body: some View {
@@ -174,7 +168,11 @@ struct BottomChrome: View {
                     }
                 }
                 if showsTabs {
-                    HPFloatingTabs(items: Tab.allCases, selected: tabSelection) { $0.label }
+                    // PRODUCT §1: the last item is your avatar, not the word — which stays as its
+                    // accessibility label and its hidden width, so the bar is no taller for it.
+                    HPFloatingTabs(items: Tab.allCases, selected: tabSelection, label: { $0.label }) { tab, selected in
+                        tab == .you ? AnyView(TabAvatarView(avatar: model.tabAvatar, selected: selected)) : nil
+                    }
                 }
             }
             .padding(.bottom, HPTokens.Space.cardGap)

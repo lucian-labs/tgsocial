@@ -11,6 +11,17 @@ struct NodeProfileScreen: View {
     @State private var failed = false
 
     var body: some View {
+        if model.session.kind == .blueskyOnly {
+            // PRODUCT §2.41: reached from a link or a list, signed in to Bluesky alone — the screen
+            // is a Telegram channel's, so it keeps its topbar and shows the Telegram card, and reads
+            // nothing (the load below is TDLib's).
+            Screen(back: true) { NeedsTelegramCard(verb: SessionCopy.see(username)) }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         Screen(back: true, refresh: { await load(force: true) }) {
             // §2.16: a blocked node renders as nothing at all everywhere else, but this profile is
             // reached deliberately — a t.me link, a public URL, an exact-username search — and an

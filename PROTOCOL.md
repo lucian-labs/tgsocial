@@ -347,7 +347,21 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - A **Bluesky session** and the link-verification cache (§12.7, §12.3), if
   the client implements §12. Both discardable.
 
-Signing out (`logOut`) clears all of it except the safety lists.
+**Signing out is per network** (`PRODUCT §1`, `§4`). Telegram's `logOut`
+clears Telegram's part: TDLib's database, `myNode`, the card cache, Telegram
+sources' cursors, the comment index, the private record and the
+link-verification cache (it verifies cards). Bluesky's sign-out (§12.7 step
+12) clears the session and the atproto sources' cursors. Either one leaves the
+other network's part as it was. **The last one out** — the sign-out that leaves
+neither held — clears all of it, UI preferences included, except the safety
+lists.
+
+Two UI preferences exist for the two-network shell, and both are cleared by
+the last one out, never before:
+
+- `offeredOther` — `PRODUCT §2.1`'s offer of the second network was shown.
+- `telegramSignedOut` — §12.11: Telegram is known signed out while a Bluesky
+  session is held, so a launch does not start TDLib to find out.
 
 ### 7.1 Safety lists
 
@@ -358,6 +372,7 @@ record, stored apart from every cache:
 {
   "v": 1,
   "userId": 176543210,
+  "did": "did:plc:eli2eli2eli2eli2eli2eli2",
   "blocked": ["tgs_ana", "tgs_bob"],
   "mutedFeeds": ["waveloop_devlog"],
   "hidden": [
@@ -381,14 +396,51 @@ record, stored apart from every cache:
   someone's block list. Unknown `v` is read as best it can be and never
   dropped.
 
-**It survives Sign Out, for the same account.** `userId` is the Telegram user
-id that wrote the record; on reaching `authorizationStateReady` a client
-compares it and, on a mismatch, replaces the lists with empty ones. A block
-list that evaporated on sign-out would re-expose the reader to the person
-they blocked the next time they signed in, and a list inherited by a
+**It survives Sign Out, for the same account.** The record is keyed by the
+accounts that wrote it: `userId`, the Telegram user id, and `did`, the Bluesky
+DID of a §12.7 session (optional; absent reads as `null`). One record, not one
+per network, so a block made while signed in to one survives the other joining
+(`PRODUCT §1`, both networks). Whenever a network becomes signed in —
+`authorizationStateReady`, a completed §12.7 sign-in, and a launch that finds
+either already held — a client compares each **held** key with its field:
+
+- a field **matches** when it equals the held key;
+- a field **conflicts** when the field and the held key are both non-null and
+  differ; a field whose network is not held neither matches nor conflicts.
+- a key that is held but not yet known (Telegram ready, its user id not yet
+  returned by `getMe`) is not absent. Nothing is compared until it is read:
+  counted as absent, it would take a record keyed by that same account to the
+  replace row, and empty the lists of the person who wrote them. The next
+  `authorizationStateReady` compares with every key at the latest.
+
+| Held keys against the record | Result |
+| --- | --- |
+| any field matches | **keep** the lists; write every held key into its field |
+| nothing matches, and the record has any non-null key | **replace** with empty lists, keyed by the held keys |
+| the record has no key at all (`userId` and `did` both null) | **adopt**: keep the lists; write the held keys |
+
+Why each row:
+
+- **Keep, and overwrite.** One matching key is the same person: signing in to
+  a second network, or to a different account on it, is theirs to do, and the
+  lists follow them. `{userId: 7, did: A}`, Telegram 7 held, Bluesky `B` signs
+  in → kept, `did` becomes `B`.
+- **Replace.** A record whose keys all belong to accounts that are not here is
+  someone else's judgement. That includes a person who signed out of both and
+  comes back through the *other* network — `{userId: 7, did: null}` and a
+  Bluesky-only sign-in — who starts empty. A list inherited by a stranger on a
+  shared device is the worse error, and coming back through the network they
+  had keeps it.
+- **Adopt.** A record written before any account was known (the public
+  routes, `PRODUCT §2.13`) belongs to whoever signs in first, as before.
+
+A block list that evaporated on sign-out would re-expose the reader to the
+person they blocked the next time they signed in, and a list inherited by a
 different account on a shared device would be someone else's judgement — the
-id settles both. `PRODUCT §2.21` (delete my node) keeps the record too: it
-protects the person, not the node.
+keys settle both. Neither sign-out touches the record, the last one included
+(§7). `PRODUCT §2.21` (delete my node) keeps the record too: it protects the
+person, not the node. A client older than §12 reads `did` as an unknown field,
+drops nothing and compares `userId` alone — the rule above with one key.
 
 Per platform:
 
@@ -401,8 +453,10 @@ Per platform:
 **The demo has no user id, and no home.** `PRODUCT §2.22` runs the app on
 invented fixtures with no Telegram session behind it, and block, mute and
 report work there in full. That state is a record of this shape held **in
-memory**, with `userId: null`, and a `userId: null` record MUST NOT be written
-to any of the three homes above. The reverse holds too: a demo session MUST NOT
+memory**, with `userId: null` and `did: null`, and the demo's record MUST NOT
+be written to any of the three homes above. The test is "this is the demo",
+not "`userId` is null": a Bluesky-only reader's record has a null `userId` and
+MUST be written, or their blocks die with the process. The reverse holds too: a demo session MUST NOT
 load the stored record. A demo block is not the reader's judgement about a real
 person, and a real block list is not a demo's to show.
 
@@ -1266,14 +1320,18 @@ Four properties, each checkable:
   the reader's device (§12.4). Nothing of tgsocial's sits in between. The one
   file an operator hosts is OAuth client metadata (§12.7), and it holds no user
   data.
-- **Reading needs no account.** Signing in with Bluesky is for exactly two
-  things: reading the signed-in account's own follows (§12.5) and writing
-  (§12.8). A linked account and the tag source are read signed-out, by every
-  reader, whether or not they have a Bluesky account at all. Signing in is never
-  required and never offered at first launch (`PRODUCT §2.35`).
+- **Reading needs no account.** Signing in with Bluesky is for exactly three
+  things: reading the signed-in account's own follows (§12.5), writing
+  (§12.8), and being signed in to the app without Telegram (§12.11). A linked
+  account and the tag source are read signed-out, by every reader, whether or
+  not they have a Bluesky account at all. Signing in is never required; it is
+  offered at first launch as a peer of Telegram's (`PRODUCT §2.1`), and either
+  one alone is a session.
 
 The graph still lives on Telegram, and that is not softened here: `follows:`
-names nodes, the +1 walk reads cards, comments are §6's. An atproto account
+names nodes, the +1 walk reads cards, comments are §6's. A reader signed in to
+Bluesky alone has no graph in this sense — no node, no `follows:`, no +1 — and
+§12.11 says what they have instead. An atproto account
 reaches a reader's feed three ways and no other — it is linked to a node they
 follow and the link verifies (§12.3); they follow it on Bluesky and are signed
 in (§12.5); or it announces a WaveLoop drop under the tag and they turned the
@@ -1416,6 +1474,7 @@ both halves each; that is §1's co-admin case, and §2.3's rule (earliest in my
 | `app.bsky.feed.getAuthorFeed` (author source) | AppView | none |
 | `app.bsky.feed.searchPosts` (tag source) | signed in: the session's PDS with `atproto-proxy: did:web:api.bsky.app#bsky_appview`; signed out: AppView | DPoP / none |
 | `app.bsky.feed.getTimeline` (following source) | the session's PDS with the same `atproto-proxy` header | DPoP |
+| `app.bsky.graph.getFollows` (Graph, Bluesky alone — §12.11) | AppView | none |
 
 **AppView hosts**, in order: `https://public.api.bsky.app`, then
 `https://api.bsky.app`, failing over on a network error, a 403 or a 5xx, and
@@ -1432,6 +1491,7 @@ searches through their own PDS.
 **Parameters.** `getAuthorFeed?actor=<DID>&filter=posts_no_replies&limit=30`,
 and never `includePins` — a pinned post would head the source forever and
 break §12.5 rule 1. `getTimeline?limit=30`. `searchPosts?q=%23waveloop&sort=latest&limit=30`.
+`getFollows?actor=<session DID>&limit=100`.
 Every later page passes back the previous page's `cursor` and nothing else.
 
 **Handles.** Shown from `getProfile` or the post view's `author.handle`, which
@@ -1694,9 +1754,10 @@ own, because the person consented to a list and the list is the promise.
 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (iOS, Mac); encrypted
 preferences over a Keystore key (Android); IndexedDB (web), where any script on
 the origin can read it — one more reason the web client loads no script it
-does not serve itself. It is §7 local state and discardable: Telegram `logOut`
-ends it with everything else (§7), and signing out of Bluesky touches nothing
-of Telegram's.
+does not serve itself. It is §7 local state and discardable. Telegram's `logOut`
+does not end it — each network signs out alone, and signing out of Bluesky
+touches nothing of Telegram's (§7). The last one out, whichever it is, clears
+both.
 
 **What has not been observed.** No login has completed end to end: when this
 was measured there was no hostable `client_id` for tgsocial and no one to
@@ -1706,7 +1767,7 @@ error messages, not from a session.
 
 ### 12.8 Writing
 
-Three writes, each into the writer's own repo or onto the writer's own card.
+Four writes, each into the writer's own repo or onto the writer's own card.
 
 **Link** (a session for `D`, node `N`):
 
@@ -1745,7 +1806,31 @@ succeeded (§4.9) — `com.atproto.repo.createRecord` of an `app.bsky.feed.post`
 
 Private posts (§11) are never cross-posted. Nothing on Bluesky is edited or
 deleted by tgsocial — the scope is create only — so deleting the Telegram post
-leaves the copy, and the compose sheet says so.
+leaves the copy (`PRODUCT §2.38` writes that down; the sheet no longer says
+it, `PRODUCT §3`).
+
+**Direct post**, signed in to Bluesky alone (§12.11, `PRODUCT §2.9`) — there is
+no Telegram post for it to follow, so it carries only what the person wrote.
+`com.atproto.repo.createRecord` of an `app.bsky.feed.post`:
+
+- `text`: at most 300 graphemes and 3000 bytes, refused before anything is
+  sent, never truncated — the cross-post's rule.
+- `facets`: `#link` for URLs and `#tag` for hashtags, in UTF-8 byte offsets.
+  An `@name` stays plain text: making it a mention means resolving it to a
+  DID, a lookup v1 does not make, and a facet pointing at whoever answered to
+  that name would be a guess.
+- `embed`, only when a photo is attached (native; web compose is text only):
+  `app.bsky.embed.images` with one image — the JPEG uploaded with
+  `uploadBlob` exactly as the cross-post's thumb is, `alt` the empty string
+  (the lexicon requires the field, and v1 has no alt-text field to fill it
+  from), `aspectRatio` from its pixel size. No link card: there is no
+  original to link back to.
+- `createdAt`: now.
+
+The §12.7 scopes already cover it — `repo:app.bsky.feed.post?action=create`
+and `blob:image/*` — so the table does not change and a signed-in reader is
+asked for nothing new. Create only, like the cross-post: tgsocial never edits
+or deletes it.
 
 ### 12.9 What every existing section says about atproto
 
@@ -1761,8 +1846,10 @@ leaves the copy, and the compose sheet says so.
 - **§6.** No tgsocial comments on an atproto post: `re:` names `t.me` posts
   (§6.2, unchanged). Replies and likes stay on Bluesky, one tap away.
 - **§7.** Local state gains the session (§12.7) and the verification cache
-  (§12.3), both discardable. **The §7.1 safety lists** grow a key grammar, not a
-  field: `blocked` and `mutedFeeds` MAY hold DIDs, and `hidden[].key` MAY hold a
+  (§12.3), both discardable. **The §7.1 safety lists** grow a key grammar,
+  and the record one owner field, `did`, which §7.1 compares beside `userId`
+  so the record belongs to a reader on either network: `blocked` and
+  `mutedFeeds` MAY hold DIDs, and `hidden[].key` MAY hold a
   post's at-uri. A `:` never occurs in a username or a `c/` key, so nothing
   collides and an older client simply never matches — the right answer, as in
   §7.2. A post's record key is a TID by its lexicon, lowercase by construction,
@@ -1796,7 +1883,8 @@ leaves the copy, and the compose sheet says so.
 - **§11.** Never on a private card; private posts are never cross-posted.
 - **The public reader** (`PRODUCT §2.13`), **the Connector** (`§2.14`) and
   **the demo** (`§2.22`) do not touch this section in v1. The public routes read
-  `t.me/s/` previews only; the Connector's sources are usernames; and the demo
+  `t.me/s/` previews only; the Connector's sources are usernames, and signed in
+  to Bluesky alone its port stays closed (§12.11); and the demo
   makes no network request by construction (`§2.22.4`), while an invented
   Bluesky would be invented accounts wearing a real network's name.
 
@@ -1805,7 +1893,9 @@ leaves the copy, and the compose sheet says so.
 - **Take anything down on Bluesky.** §12.9.
 - **Comment, like, repost or reply in the app.** They stay on Bluesky.
 - **Put Bluesky on the graph.** No DIDs in `follows:`, no +1 over Bluesky
-  follows, no Bluesky accounts in directories.
+  follows, no Bluesky accounts in directories. The Graph tab of a reader
+  signed in to Bluesky alone lists who the account follows (§12.11); a list
+  is not a graph, and nothing in it is walked.
 - **Reposts in the feed.** §12.5 rule 5.
 - **Edit or delete a cross-post.** §12.8.
 - **Run an AppView, a relay, a feed generator or a firehose consumer.** Each is
@@ -1818,3 +1908,49 @@ leaves the copy, and the compose sheet says so.
   measured; and a Following that kept reading after `Sign Out of Bluesky`
   would make sign-out mean something other than what it says.
 - **DMs.** `transition:chat.bsky` is not requested.
+
+### 12.11 Signed in to Bluesky alone
+
+A reader may hold a §12.7 session and no Telegram session (`PRODUCT §1`,
+§2.41). Everything above holds; this is what that state is on the wire, and
+what it is not.
+
+- **No TDLib client.** A client launched with a Bluesky session held and
+  Telegram known signed out does not create a TDLib client, and one that
+  created a client for `PRODUCT §2.1`'s phone step closes it when a Bluesky
+  sign-in completes with Telegram not ready. It knows Telegram is signed out
+  without asking TDLib from the UI preference `telegramSignedOut` (§7): written
+  when Telegram signs out while a session is held, and when a Bluesky sign-in
+  completes with Telegram not ready; removed when the reader starts Telegram's
+  sign-in. Absent means start TDLib — which is what every install from before
+  this section does, so none of them changes.
+- **Parked again.** A client whose TDLib answers "not signed in" (any
+  authorization step: phone number, code, password, and the rest) while a
+  session is held and the reader is not in Telegram's steps closes and writes
+  the preference. That covers a sign-in the reader started and walked away
+  from (they left the steps, or the app quit on the code step, which TDLib keeps
+  across a relaunch). It also covers a Bluesky sign-in that completed while TDLib
+  was still coming up. A client that has not answered yet is never closed: it
+  may be restoring a signed-in session. Without this, a preference removed by
+  an abandoned `Send Code` starts TDLib on every launch for good. An MTProto session for a reader
+  who never gave a phone number is a connection to Telegram about nobody, and
+  on the web it is tdweb's wasm booted for nothing.
+- **Sources.** The following source (unless turned off) and the tag source
+  (when on). No author sources: they come from verified links on nodes in
+  `follows:` (§12.5), and there is no `follows:`. The §4.8 merge runs over what
+  there is, unchanged.
+- **Graph.** `app.bsky.graph.getFollows` for the session's own DID, from the
+  AppView without auth (§12.4), paged by cursor as §12.4 says. Drawn and
+  listed, never written and never walked: no DID enters a card, and nothing
+  sits at +1 (§12.9 on §5, §12.10).
+- **Writing.** The direct post (§12.8). The link needs a node, so it is not
+  offered; there is no card to write.
+- **Safety.** §7.1's record, keyed by `did` with `userId` null, written to the
+  platform's home like any other. Blocks are by DID (§12.9); there is no node
+  to name.
+- **Not here.** The Connector's bridge does not listen (`CONNECTOR.md §2`): its
+  sources are Telegram usernames, and a Bluesky account is never one (§12.9).
+  The public reader and the demo are unchanged.
+- **Sign-outs** are §7's: Bluesky's is the last one out, and clears everything
+  but the safety lists. Telegram's, when a session is held, clears Telegram's
+  part and writes `telegramSignedOut`, and the reader lands here.

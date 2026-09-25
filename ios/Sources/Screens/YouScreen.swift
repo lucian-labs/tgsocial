@@ -1,6 +1,7 @@
-// Screens — You (PRODUCT.md §2.8): my node, my feeds, compose, listing, view as others, Settings.
-// Sign Out moved to Settings (§2.20) so the two destructive actions live together; this screen
-// pushes Settings and carries the contact lines (§2.19) above the version line.
+// Screens — You (PRODUCT.md §2.8): my node, my feeds, compose, listing, view as others. The avatar
+// tab opens it (§1). `Settings` is top right in every state (Elijah, 2026-09-25: "put "settings" on
+// top right of that") — the one door to Settings, where both sign-outs and Delete My Node live
+// together (§2.20). The contact lines (§2.19) sit above the version line.
 
 import SwiftUI
 
@@ -10,13 +11,16 @@ struct YouScreen: View {
     var body: some View {
         @Bindable var model = model
         Screen(refresh: { await model.refreshYou() }) {
-            if let node = model.myNode, model.myCardState == .newerVersion {
+            YouSettingsButton()
+            if model.session.kind == .blueskyOnly {
+                // §2.8, Bluesky only: no node, so no node sections — the account, Compose, and the
+                // Telegram section standing where they would be.
+                blueskyOnlyBody
+            } else if let node = model.myNode, model.myCardState == .newerVersion {
                 // PROTOCOL §8: a v2 card is mine, but this client cannot read or write it.
                 header(node)
                 HPCard { HPMuted(AppModel.newerCardText) }
                 HPButton("View as others see it", style: .ghost) { model.path.append(.profile(username: node.username)) }
-                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
-                    .padding(.top, HPTokens.Space.rowGap)
             } else if let node = model.myNode {
                 header(node)
                 HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
@@ -77,12 +81,10 @@ struct YouScreen: View {
                     PrivateSection().padding(.top, HPTokens.Space.cardGap)
                 }
                 HPButton("View as others see it", style: .ghost) { model.path.append(.profile(username: node.username)) }
-                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
-                    .padding(.top, HPTokens.Space.rowGap)
             } else {
                 // No node: the §2.3 empty state, linking to Setup (PRODUCT §2.2).
                 EmptyCard("Nothing here yet.", action: ("Set Up", { model.openSetup() }))
-                HPButton("Settings", style: .ghost) { model.path.append(.settings) }
+                    .hpTouchRegion(YouScreen.headerRegion)
             }
             // §2.19: the address is reachable from inside the app. The 24-hour commitment is on
             // Settings' CONTACT card, the one place it is said (§3: one helper line, not two).
@@ -102,17 +104,55 @@ struct YouScreen: View {
         }
     }
 
+    /// Bluesky only (§2.8): the account. The header taps through to the profile on Bluesky; Compose
+    /// posts there (§2.9) and is absent while Bluesky has ended the session, until `Sign In Again`.
+    @ViewBuilder private var blueskyOnlyBody: some View {
+        let bsky = model.bluesky!
+        let handle = bsky.account?.handleLabel ?? bsky.endedHandle.map { "@" + $0 } ?? ""
+        let name = bsky.account?.displayName?.isEmpty == false ? bsky.account!.displayName! : handle
+        Button {
+            if let did = bsky.heldDid { model.open(Atproto.bskyProfileUrl(did)) }
+        } label: {
+            HStack(alignment: .center, spacing: HPTokens.Space.rowPad) {
+                MyAvatarImage(avatar: model.tabAvatar, size: HPTokens.Space.avatarProfile)
+                VStack(alignment: .leading, spacing: 0) {
+                    HPH2(name).lineLimit(1)
+                    HPMono(handle).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(handle) on Bluesky")
+        .hpTouchRegion(YouScreen.headerRegion)
+        .padding(.bottom, HPTokens.Space.cardGap)
+        if bsky.isSignedIn {
+            HPButton("Compose", style: .primary) { model.modal = .compose(feed: nil) }
+                .padding(.bottom, HPTokens.Space.cardGap)
+        }
+        HPSectionMark(SessionCopy.telegramMark)
+        HPButton(SessionCopy.signInWithTelegram, style: .neutral, size: .small) { model.openTelegramSignIn() }
+            .hpTouchRegion(SessionCopy.signInWithTelegram)
+    }
+
+    /// The first thing under `Settings` in every state — the header, or the no-node card — measured
+    /// so a test can read that `Settings` sits above it, at its right edge.
+    static let headerRegion = "You.header"
+
     private var footer: String {
         var parts = [model.versionLine]
-        if !model.tdlibVersion.isEmpty { parts.append("TDLib \(model.tdlibVersion)") }
+        // A Bluesky-only reader runs no TDLib (PROTOCOL §12.11), so the line names none.
+        if model.telegramReady, !model.tdlibVersion.isEmpty { parts.append("TDLib \(model.tdlibVersion)") }
         if let n = model.myNode { parts.append("node @\(n.username)") }
         return parts.joined(separator: " \u{00B7} ")
     }
 
     @ViewBuilder private func header(_ node: MyNode) -> some View {
         HStack(alignment: .center, spacing: HPTokens.Space.rowPad) {
-            NodeAvatar(photo: model.myPhoto, size: HPTokens.Space.avatarProfile,
-                       initial: String((model.myCard?.name ?? model.myTitle).prefix(1)))
+            // §1's chain, the tab's own: the node photo, else the Bluesky avatar (both signed in,
+            // a node with no photo), else the initial.
+            MyAvatarImage(avatar: model.tabAvatar, size: HPTokens.Space.avatarProfile)
             VStack(alignment: .leading, spacing: 0) {
                 HPH2((model.myCard?.name?.isEmpty == false ? model.myCard?.name : nil) ?? model.myTitle)
                 HPMono("@" + node.username)
@@ -122,6 +162,7 @@ struct YouScreen: View {
                 HPButton("Edit Card", style: .neutral, size: .small) { model.modal = .editCard }
             }
         }
+        .hpTouchRegion(Self.headerRegion)
         .padding(.bottom, HPTokens.Space.cardGap)
     }
 }
@@ -292,19 +333,33 @@ struct EditCardModal: View {
     }
 }
 
+/// PRODUCT §2.8: `( Settings )`, ghost sm, in the header's top-right corner — where §2.6 puts a
+/// channel's kebab — in every state, the demo included. The topbar's right is the status pill's.
+struct YouSettingsButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            HPButton(SessionCopy.settings, style: .ghost, size: .small) { model.path.append(.settings) }
+                .hpTouchRegion(SessionCopy.settings)
+        }
+    }
+}
+
+/// PRODUCT §4: `Sign out of Telegram?` — the consequence, one sentence (§3). Signing out of
+/// Telegram no longer signs out of Bluesky (§2.35: "Sign-outs are independent"), so the line that
+/// used to say so is gone, and being the last one out changes nothing it says.
 struct SignOutModal: View {
     @Environment(AppModel.self) private var model
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HPH2("Sign out of tgsocial?")
-            // PRODUCT §2.35: the Bluesky session is local state and goes too; said only when one exists.
-            HPMuted(model.bluesky?.isSignedIn == true
-                    ? "Your node stays on Telegram. " + BlueskyCopy.telegramSignOutLine
-                    : "Your node stays on Telegram.")
+            HPH2(SessionCopy.signOutTelegramTitle)
+            HPMuted(SessionCopy.signOutTelegramBody)
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {
-                HPButton("Sign Out", style: .danger) { Task { await model.signOut() } }
+                HPButton("Sign Out", style: .danger) { Task { await model.signOutTelegram() } }
             } b: {
                 HPButton("Cancel", style: .ghost) { model.modal = nil }
             }

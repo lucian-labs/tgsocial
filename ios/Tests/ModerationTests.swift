@@ -338,7 +338,10 @@ final class SafetyRecordTests: XCTestCase {
         let lists = SafetyLists(userId: 7, blocked: ["tgs_ana"], mutedFeeds: ["waveloop_devlog"],
                                 hidden: [HiddenItem(key: "waveloop_devlog/144", reason: "Spam", at: "2026-09-04T21:02:11Z")])
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(lists)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), ["v", "userId", "blocked", "mutedFeeds", "hidden"])
+        // PROTOCOL §7.1: `did` is the record's second key, written `null` when no Bluesky session
+        // wrote it — one shape for Android and web whichever network did.
+        XCTAssertEqual(Set(object.keys), ["v", "userId", "did", "blocked", "mutedFeeds", "hidden"])
+        XCTAssertTrue(object["did"] is NSNull)
         let hidden = try XCTUnwrap((object["hidden"] as? [[String: Any]])?.first)
         XCTAssertEqual(Set(hidden.keys), ["key", "reason", "at"])
     }

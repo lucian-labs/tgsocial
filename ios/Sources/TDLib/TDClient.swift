@@ -79,8 +79,26 @@ final class TDClient {
     func close() async {
         guard let client else { return }
         self.client = nil
+        explicitCloses += 1
         _ = try? await client.close()
     }
+
+    /// Closes asked for by `close()` whose `authorizationStateClosed` has not arrived yet. The model
+    /// routes Closed differently for the two causes: TDLib closing itself after `logOut` wants a
+    /// fresh client (or none, Bluesky alone — PROTOCOL §12.11), and one we closed on purpose wants
+    /// nothing, because whoever closed it already put the app where it belongs.
+    private(set) var explicitCloses = 0
+
+    /// True — and consumed — when this Closed answers one of our own `close()`s.
+    func takeExplicitClose() -> Bool {
+        guard explicitCloses > 0 else { return false }
+        explicitCloses -= 1
+        return true
+    }
+
+    /// Drops the handle to a client TDLib has already closed (after `logOut`), without making a new
+    /// one: PROTOCOL §12.11 — Telegram signed out with a Bluesky session held runs no TDLib client.
+    func forget() { client = nil }
 
     deinit { updates.finish(); pump.cancel() }
 

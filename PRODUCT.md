@@ -29,8 +29,8 @@ side padding (native). The shell is:
 │                                          │
 │                                          │
 │      ╭──────────────────────────╮        │  floating tab bar, bottom, House Pour `.tabs` pill:
-│      │ Feed  Explore  Graph  You │        │  panel fill, 1pt line, pill radius, one card shadow,
-│      ╰──────────────────────────╯        │  16pt above the home indicator / viewport bottom
+│      │ Feed  Explore  Graph  (◉) │        │  panel fill, 1pt line, pill radius, one card shadow,
+│      ╰──────────────────────────╯        │  16pt above the home indicator / viewport bottom; (◉) = your avatar
 └──────────────────────────────────────────┘
 ```
 
@@ -38,7 +38,8 @@ side padding (native). The shell is:
   reads `Synced`, `Syncing`, `Offline`, or `Signed out`; gold only when
   `Synced`. **The pill is a button**: tapping it opens the Status sheet (§2.10).
 - The **tab bar floats at the bottom**: the House Pour `.tabs` segmented
-  control (same component, same four items `Feed · Explore · Graph · You`)
+  control (same component, same four items `Feed · Explore · Graph` and your
+  avatar)
   placed `position: fixed` / overlay at the bottom of the column, centred,
   hugging its content (not full width), `cardGap` (16pt) above the safe-area
   bottom, with `panel` fill and the single card shadow so it reads as a raised
@@ -46,6 +47,20 @@ side padding (native). The shell is:
   pads its bottom by the bar height + `cardGap` so the last card clears it.
   It is hidden on Sign in, Setup, and inside full-screen viewers; it stays
   on pushed screens (profile, feed channel). No native tab bar.
+- **The last tab is your avatar, not a word** (Elijah, 2026-09-25: "instead of
+  "you" put an avatar on the bottom right of the menu"). A 24pt circle in the
+  item's slot, always the rightmost item (on the Mac, after `Connector`,
+  §2.14); the 40pt target is an overlay around it (`COMPONENTS.md` rule 6),
+  and its accessibility label is `You`. The picture is the first of: your
+  node's photo; your Bluesky avatar (§2.35); the initial of your name in the
+  display serif — §2.3's last fallback. Selected, the item takes the `.tabs`
+  selected fill like the other three, the avatar inside it, and the circle
+  takes a 2pt `accent` ring — a photo can hide the fill behind it. The circle
+  is laid over the item's hidden word, so the bar is no taller and no wider for
+  it (`avatarTab`, 24pt, sits inside the item's `tabY` inset). The screen it
+  opens is still called You in this file (§2.8). A person's own face is the
+  one thing on the bar that is theirs, and it reads at a glance as "me" where
+  the word needed reading.
 - No native navigation bars with system titles, no system segmented controls.
   Pushes (profile, feed detail, compose) open as full screens with a
   `‹ Back` ghost button top-left in the same topbar slot where the wordmark
@@ -56,35 +71,76 @@ side padding (native). The shell is:
   media viewers (§2.11) are the one other dark surface — `ink` at 96% — because
   photos and video need it.
 
+**Signed in means Telegram, Bluesky, or both** (Elijah, 2026-09-25: "it should
+allow combined logins to telegram and blueky"). It is one value, computed in
+one place, and every gate reads it — routing, Setup, the tab bar, the status
+pill, Compose, Settings, the Connector — so no screen decides for itself what
+"signed in" means:
+
+| State | Telegram | Bluesky |
+| --- | --- | --- |
+| **Telegram only** | `authorizationStateReady` | no session |
+| **Bluesky only** | not ready | a session held (§2.35) |
+| **Both** | ready | held |
+| **Signed out** | not ready | no session — Sign in (§2.1) |
+
+A Bluesky session that Bluesky ended (§2.39) still counts as held: the reader
+signed in and did not sign out, and an app that dropped a Bluesky-only reader
+back to Sign in whenever a two-week token lapsed would be signing them out on
+Bluesky's schedule. The shell is the same in every state — same tabs, same
+topbar — and what each screen shows in each state is §2.41. Bluesky alone
+never starts TDLib (`PROTOCOL §12.11`).
+
 ## 2. Screens
 
 ### 2.1 Sign in
 
-Shown whenever TDLib is not `authorizationStateReady`.
+Shown whenever the reader is signed in to neither network (§1).
 
 ```
 tgsocial                                   (wordmark, 3rem)
-Your Telegram, as a feed.                  (h1)
+Telegram and Bluesky, as one feed.         (h1)
 
-PHONE NUMBER                                (field label)
-[ +1 604 555 0199            ]              (input, tel)
-( Send Code )                               (btn primary)
+┌ card ─────────────────────────────────┐
+│ TELEGRAM                               │  (section mark)
+│ PHONE NUMBER                           │  (field label)
+│ [ +1 604 555 0199            ]         │  (input, tel)
+│ ( Send Code )                          │  (btn neutral)
+└───────────────────────────────────────┘
+┌ card ─────────────────────────────────┐
+│ BLUESKY                                │  (section mark)
+│ HANDLE                                 │  (field label)
+│ [ elijah                     ]         │  (input, mono; placeholder `elijah.bsky.social`)
+│ ( Sign In with Bluesky )               │  (btn neutral)
+└───────────────────────────────────────┘
 
-( Look Around First )                       (btn ghost, outside the card — §2.22)
+( Look Around First )                       (btn ghost, outside the cards — §2.22)
 elijah@lucianlabs.ca                        (muted, → mail composer — §2.19)
 ```
 
+- **Two peer cards, and neither button is gold.** They are two equal next
+  actions, and gold marks the one next action (§1): a gold `Send Code` would
+  say Telegram is the sign-in and Bluesky the extra, which is the thing this
+  screen stopped saying. Either card alone signs in (§1). Telegram's card is
+  first because the graph lives there (`PROTOCOL §12`) — first, not primary.
 - **No explanation on the screen** (§3). The h1 is the only sentence; what the
-  app stores and where is `docs/PRIVACY.md`'s to say.
+  app stores and where is `docs/PRIVACY.md`'s to say, and what each network
+  unlocks is §2.41's.
 - `Look Around First` is the demo (§2.22), and it is on **step 1 only**. It
-  sits below the card and carries no fill, so the one gold button on the screen
-  is still `Send Code`.
+  sits below both cards and carries no fill.
 
 Arrived on a public link (§2.13), one muted line under the h1 names the
-destination: `Sign in to see @<name>.`
+destination and the network that reaches it: `Sign in to Telegram to see
+@<name>.` The destination is a Telegram channel, so only Telegram's card gets
+there. A Bluesky sign-in from this screen lands on Feed and parks the
+destination, as the demo does (§2.22); signing in to Telegram later lands on
+it.
 
-Step 2 replaces the field with `CODE` + input (numeric, 5 digits) and the
-button reads `Sign In`. A ghost button `Use another number` goes back.
+**Telegram's steps.** `Send Code` replaces both cards with Telegram's alone —
+once a number is in flight the screen has one job — and from here its button is
+gold, because now there is one next action. Step 2 replaces the field with
+`CODE` + input (numeric, 5 digits) and the button reads `Sign In`. A ghost
+button `Use another number` goes back to both cards.
 
 Step 3 (2FA) shows `PASSWORD` + secure input, hint text from TDLib's
 `passwordHint` in muted if present, button `Unlock`.
@@ -93,21 +149,67 @@ A step TDLib asks for that the app does not have shows muted
 `Sign in with the Telegram app first.`, TDLib's state name in mono faint, and
 `Use another number`.
 
+**Bluesky's steps.** `Sign In with Bluesky` runs §2.35's sign-in from this
+card: the handle rules, Bluesky's page in the system browser, and the waiting
+state (`Waiting for Bluesky…`, the resolved handle, `Finish in your browser.`,
+`( Cancel )`) in place of both cards. Cancel, a refusal, a failure and the
+10-minute timeout return to both cards with the handle still typed, with
+§2.35's and §2.39's toasts. Success: toast `Signed in to Bluesky as
+@elijah.bsky.social.`, then the offer below.
+
+**The other one, offered once.** Whichever sign-in succeeds first, this screen
+offers the other once, before anything else:
+
+```
+tgsocial                                   (wordmark, 3rem)
+Also sign in to Bluesky?                   (h1)
+
+┌ card ─────────────────────────────────┐
+│ BLUESKY                                │
+│ HANDLE                                 │
+│ [ elijah                     ]         │
+│ ( Sign In with Bluesky )               │  (btn primary — the one next action)
+└───────────────────────────────────────┘
+( Not Now )                                 (btn ghost)
+```
+
+and, after Bluesky first, h1 `Also sign in to Telegram?` over Telegram's card
+(`PHONE NUMBER`, `( Send Code )` primary) and `( Not Now )`. Telegram's steps
+and Bluesky's steps run from the offer exactly as above; `Use another number`
+and a failed Bluesky attempt come back to the offer, not to both cards.
+
+- `Not Now`, or finishing the second sign-in, goes on: to Setup (§2.2) when
+  Telegram is signed in and has no node, else to Feed (§2.3).
+- **Once per install.** The UI preference `offeredOther` (`PROTOCOL §7`) is set
+  when the offer is shown, not when it is answered, so a relaunch mid-offer
+  does not show it twice. After `Not Now` the other network is in Settings
+  (§2.20) — and, for a Bluesky-only reader, on You (§2.8). It is cleared with
+  the rest of local state when the last network signs out (§4), so the next
+  person to sign in on the device is offered it too.
+- Absent in the demo (§2.22), and when the second network is already held.
+
+**From inside the app.** A Bluesky-only reader's `( Sign In with Telegram )`
+(§2.41) pushes Telegram's steps as a full screen — Telegram's card alone, its
+button gold, `‹ Back` top left, no `Look Around First`, no offer — and lands
+where Telegram's sign-in would: Setup with no node, else back where it was
+opened. Leaving before Telegram's sign-in finishes (`‹ Back`, a tab) ends it,
+and TDLib is closed again (`PROTOCOL §12.11`). A Telegram-only reader signs in
+to Bluesky from Settings (§2.35).
+
 Every step's footer carries one muted line, `elijah@lucianlabs.ca` (§2.19) —
 this is the only screen a signed-out reader sees, and the address has to be
 reachable from it.
 
-Bluesky is not on this screen: it is added from Settings once signed in
-(§2.35).
-
 Errors (toast, `.bad`): `That code didn't match.` · `That password didn't
 match.` · `Telegram didn't accept that number.` · `Too many tries. Wait a
 moment.` (FLOOD_WAIT — show the seconds if TDLib gives them). Other TDLib
-errors surface their message text verbatim.
+errors surface their message text verbatim. Bluesky's are §2.39's.
 
 ### 2.2 Setup
 
-Shown after sign-in when no node is found (`PROTOCOL §4.2`).
+Shown after Telegram's sign-in (and §2.1's offer) when no node is found
+(`PROTOCOL §4.2`). A Bluesky-only reader never sees it: a node is a Telegram
+channel.
 
 Card 1 — **Your node**
 ```
@@ -272,6 +374,8 @@ SAFETY                                       (section mark)
   bottom. A muted `Loading…` row at the end; `That's everything.` when all
   sources are exhausted.
 - Empty: one card — h2 `Nothing here yet.` and `( Explore )` btn accent.
+  Bluesky only (§1): the h2 alone — Explore finds nodes, and that needs
+  Telegram (§2.41).
 - Own posts appear in the feed like any other, attributed to me.
 
 ### 2.4 Explore
@@ -389,9 +493,38 @@ Empty, each under its section mark in muted: `Not following anyone yet.`
 (`DIRECT`) · `Nobody at +1 yet.` (`+1`). Labels, not instructions (§3):
 Explore is one tab away and is where following starts.
 
-### 2.8 You
+**Bluesky only** (§1) there is no node graph to draw — no card, no
+`follows:`, no +1 — so the tab draws who the account follows on Bluesky,
+rather than standing empty:
 
 ```
+YOUR NETWORK
+┌ card ─────────────────────────────────┐
+│        ·     ·                         │  you = gold dot at centre; follows = ink dots 8pt, ring 1 only
+│    ·    ●    ·                         │  tap a dot → the profile on Bluesky (system browser, §4)
+│        ·   ·   ·                       │
+└────────────────────────────────────────┘
+BLUESKY · 212                                (section mark, serif count)
+(avatar) Ana Iliovic                          (list rows: display name body, handle mono muted;
+         @ana.bsky.social                      tap → the profile on Bluesky; no Follow button)
+```
+
+- No `+1` section: Bluesky follows are never walked (`PROTOCOL §12.9`), and a
+  ring 2 would be the graph §12.10 says this is not.
+- No `Follow` button: following on Bluesky happens on Bluesky.
+- Empty: `Not following anyone yet.` under `BLUESKY`.
+- The list pages as it scrolls; the ring draws the accounts loaded so far.
+- The §2.18 filter applies: a blocked account is not a dot and not a row.
+- **Both** signed in, the tab is the node graph above, unchanged. Bluesky
+  follows reach the feed (§2.36), not the graph — `PROTOCOL §12`'s line that
+  the graph lives on Telegram holds as soon as there is a Telegram graph.
+
+### 2.8 You
+
+The avatar tab (§1) opens it.
+
+```
+                                              ( Settings )   btn ghost sm — top right, pushes §2.20
 (avatar 72pt)   Elijah Lucian                 (h2)
                 @tgs_elijah                   (mono muted)   ( Edit Card ) btn sm
 
@@ -410,20 +543,50 @@ Nothing private yet.
 ( Make a Private Node )     btn neutral sm
 
 ( View as others see it )   ghost
-( Settings )                ghost — pushes §2.20, which holds Sign Out
 
 elijah@lucianlabs.ca                                 muted, → mail composer
 tgsocial 1.0 (12) · TDLib 1.8.x · node @tgs_elijah   mono faint
 ```
 
-`Sign Out` is not on this screen: it lives in Settings with `Delete My Node`
-(§2.20, §2.21), so the two destructive actions sit together and neither is a
+**`Settings` is top right** (Elijah, 2026-09-25: "put "settings" on top right
+of that"), a ghost sm in the header's top-right corner — where §2.6 puts a
+channel's kebab — present in every state (§1) and in the demo. The ghost
+`( Settings )` row that closed the body is gone. The topbar's right is the
+status pill's and stays so.
+
+Neither sign-out is on this screen: they live in Settings with `Delete My
+Node` (§2.20, §2.21), so the destructive actions sit together and none is a
 mis-tap away from `View as others see it`. The contact line is §2.19 and is
 present whether or not a node exists; the 24-hour commitment is said once, on
 Settings' `CONTACT` card, not here as well (§3).
 
 With no node, the body is §2.3's empty card (h2 `Nothing here yet.`,
-`( Set Up )` → §2.2) and `( Settings )` below it.
+`( Set Up )` → §2.2); `Settings` stays top right.
+
+**Both** signed in (§1): the screen above, unchanged. Bluesky lives in
+Settings' `BLUESKY` card (§2.35); the avatar in the header and the tab falls
+back to the Bluesky avatar when the node has no photo (§1).
+
+**Bluesky only** — no node, so no node sections; the Telegram section stands
+where they would be:
+
+```
+                                              ( Settings )   btn ghost sm
+(avatar 72pt)   Elijah Lucian                 (h2 — Bluesky display name, else the handle)
+                @elijah.bsky.social           (mono muted; the header taps through to the profile on Bluesky)
+
+( Compose )                                   btn primary — posts to Bluesky (§2.9)
+
+TELEGRAM                                      (section mark)
+( Sign In with Telegram )                     btn neutral sm → §2.1's Telegram steps
+
+elijah@lucianlabs.ca                          muted, → mail composer
+tgsocial 1.0 (12)                             mono faint
+```
+
+No `Edit Card`, `YOUR FEEDS`, `LISTING`, `PRIVATE` or `View as others see it`:
+each is a node's, and a node is a Telegram channel. `( Compose )` is absent
+while Bluesky has ended the session, until `Sign In Again` (§2.39).
 
 **Edit Card** modal: `NAME` input, `BIO` input, `LINK` input, `( Save )`.
 **Manage feeds**: the Setup feeds card.
@@ -443,6 +606,25 @@ tab carries a faint `Private` pill (§2.28). Signed in to Bluesky, the sheet
 gains `Also post to Bluesky` (§2.38). With no feeds to post to, the tabs' place
 reads `No feeds yet.` (muted) — a label (§3); `( Manage )` on You is where
 feeds are picked.
+
+**Bluesky only** (§1) the sheet posts to Bluesky directly (`PROTOCOL §12.8`,
+direct post) — there is no Telegram post for it to follow:
+
+```
+POST TO
+Bluesky · @elijah.bsky.social                (mono muted, in the tabs' place — one destination, no control)
+[ textarea, 6 rows, placeholder "Say it." ]
+212 / 300                                     (mono faint)
+( Add Photo )                                 (btn ghost sm — native; web is text only)
+( Post )      ( Cancel )
+```
+
+- The counter is §2.38's: graphemes, `bad` past 300, `Post` disabled, and the
+  line reads `Too long for Bluesky.` The app never cuts the sentence.
+- One photo at most, posted as the post's image.
+- Toasts: `Posted.` · `Bluesky didn't take it — <error>.` · `You're offline.`
+  No retry button, for §2.38's reason.
+- No `Also post to Bluesky` row: it already is.
 
 ### 2.10 Status sheet
 
@@ -473,6 +655,11 @@ Bluesky           Not signed in              (§2.35 — present with any Bluesk
   success, failure, or timeout (30 s).
 - The sheet updates live while open. `Refresh Now` re-runs the feed refresh
   and re-reads my card.
+- **Bluesky only** (§1): `Telegram` reads `Not signed in`, and `Connection`,
+  `Node` and `TDLib` are absent — each describes a TDLib client that is not
+  running (`PROTOCOL §12.11`). The pill reads `Syncing` while `Pending` is
+  non-empty, `Offline` while the device has no network, else `Synced`.
+  `Refresh Now` re-reads the Bluesky sources.
 
 ### 2.11 Media viewers and players
 
@@ -784,7 +971,9 @@ copied out of somebody else's deployment still lands on the right screen here.
 
 **Native.** iOS and Android register these paths as universal/app links, so a
 tapped link opens the installed app on that screen. An unsigned-in app shows
-Sign in naming the destination, then lands there.
+Sign in naming the destination, then lands there. A Bluesky-only app (§1)
+shows the destination's screen as §2.41's Telegram card — `Sign in to Telegram
+to see @<name>.` — and lands there after Telegram's sign-in.
 
 ### 2.14 Connector (Mac only)
 
@@ -844,10 +1033,17 @@ Behaviour:
   preference.
 - Activity streams live while the screen is open, newest first, refusals
   in `bad`. `Clear Activity` clears the on-screen ring, not the log file.
-- Signing out turns the bridge off and wipes the token.
+- Signing out of Telegram turns the bridge off and wipes the token.
 
 On iOS and Android the Connector tab does not exist and the bridge is not
 compiled in — a phone is not a host for a local service an assistant dials.
+
+**Bluesky only** (§1) the tab is still there — the shell does not change shape
+with the account — and its body is §2.41's Telegram card, `Sign in to Telegram
+to use the Connector.` with `( Sign In with Telegram )`. The bridge does not
+listen: every source it serves is a Telegram channel, and Bluesky is not
+something it pipes (§2.40). Signing out of Telegram turns the bridge off and
+wipes the token, whether or not Bluesky stays (`CONNECTOR.md §2`).
 
 ### 2.15 Report a post or a comment
 
@@ -1077,8 +1273,9 @@ does not imply a takedown it cannot perform.
 
 ### 2.20 Settings
 
-A pushed screen, reached from You (§2.8) by `( Settings )` (ghost). It holds
-the safety lists, the contact card, and the two destructive actions. Every
+A pushed screen, reached from You (§2.8) by `( Settings )` (ghost sm, top
+right). It holds the safety lists, the contact card, and one card per network,
+each with its own sign-in or sign-out. Every
 list row is 40pt with the hit target as an overlay (`COMPONENTS.md` rule 6).
 
 ```
@@ -1111,16 +1308,32 @@ BLUESKY                                      (§2.35 — always, outside the dem
 
 CONTACT                                      (§2.19)
 
-( Sign Out )                                 (btn danger)
+TELEGRAM                                     (section mark — always, outside the demo)
+Phone                 +1 604 ••• 0199        (list row, value mono)
+( Sign Out of Telegram )                     (btn danger)
 ( Delete My Node )                           (btn danger — present only with a node)
 ```
+
+Signed out of Telegram (Bluesky only, §1), the `TELEGRAM` card is:
+
+```
+TELEGRAM                                     (section mark)
+( Sign In with Telegram )                    (btn neutral sm → §2.1's Telegram steps)
+```
+
+— no `Phone` row, no `Delete My Node`: the app created nothing on Bluesky, and
+the Bluesky account is Bluesky's to delete. `PRIVATE` is absent too; a private
+node is a Telegram channel.
 
 - The screen opens on the lists themselves. The `SAFETY` paragraph that used to
   head it — the filter is always on, has no switch, and the lists live on this
   device only — is §2.18's and `PROTOCOL §7.1`'s to say, not the screen's (§3).
-- `Sign Out` moves here from You and keeps its confirm (§4). `Delete My Node`
-  sits below it (§2.21) — the order is deliberate: the reversible destructive
-  action comes before the irreversible one.
+- **Each network signs out in its own card.** `Sign Out of Telegram` keeps its
+  confirm (§4) and `Sign Out of Bluesky` its own (§2.35); either leaves the
+  other signed in, and the last one out lands on Sign in (§4). `Delete My Node`
+  sits below Telegram's sign-out (§2.21) — the order is deliberate: the
+  reversible destructive action comes before the irreversible one, and both
+  are last on the screen.
 - Toasts: `Unblocked @tgs_ana.` · `Unmuted WaveLoop devlog.` ·
   `Unhidden. It's back in your feed.`
 - A hidden row names its channel and message id, never the content: showing a
@@ -1131,8 +1344,9 @@ CONTACT                                      (§2.19)
 ### 2.21 Delete my node
 
 Setup (§2.2) creates two public channels a person cannot remove from anywhere
-else in the app, so the app removes them. Last item in Settings, below
-Sign Out. With a private node the same action removes the private channels
+else in the app, so the app removes them. Last item in Settings, in the
+`TELEGRAM` card below `Sign Out of Telegram`; absent without a node, so absent
+for a Bluesky-only reader. With a private node the same action removes the private channels
 first, and the copy grows to say so (§2.33). What the modal no longer says on screen, and still
 does: the public card other people read disappears, and the names are released
 for anyone to take.
@@ -1161,9 +1375,11 @@ exists, with no way back to it in an app that is now at Setup.
 
 Outcomes:
 
-- **Both deleted.** Local state is wiped exactly as Sign Out wipes it, the
-  session stays signed in, and the app lands on Setup (§2.2) with nothing
-  filled in. Toast: `Your node is gone.`
+- **Both deleted.** Telegram's local state is wiped exactly as `Sign Out of
+  Telegram` wipes it (`PROTOCOL §7`), the Telegram session stays signed in, and the app lands on Setup (§2.2) with nothing
+  filled in. Toast: `Your node is gone.` A Bluesky session is untouched; a
+  link to the node (§2.37) ends with the card, and the record left in the
+  Bluesky repo attributes nothing on its own (`PROTOCOL §12.3`).
 - **No comments channel.** Step one is skipped silently; there is nothing to
   say about a channel that was never made.
 - **Not the owner** (`chat.canBeDeletedForAllUsers` is false on either
@@ -1199,28 +1415,28 @@ the sign-in screen where any reader can find it, which also makes it the one
 route to `Delete My Node` (§2.21) that needs no account — the account-deletion
 control cannot be demonstrated by someone who cannot make an account.
 
-**The entry point.** On §2.1 **step 1 only**, below the card that holds the
-phone field and above the contact line:
+**The entry point.** On §2.1 **step 1 only**, below the `TELEGRAM` and
+`BLUESKY` cards and above the contact line:
 
 ```
-( Look Around First )                       (btn ghost, outside the card)
+( Look Around First )                       (btn ghost, outside the cards)
 ```
 
-It is ghost, it is outside the card, and it sits below the gold `Send Code` —
-the card still begins at `PHONE NUMBER` and ends at the one gold button, so the
-primary action keeps the only fill on the screen. The line that used to sit
+It is ghost and it is outside both cards, so the two sign-ins stay the
+screen's two filled buttons and the demo reads as the third, lesser way in. The line that used to sit
 under it went with the rest of the on-screen explanation (§3): the `Demo` pill
 and strip below say what the demo is from its first frame. It is absent on
-step 2 (code), step 3 (2FA) and the other-device and registration steps: once
-a number is in flight the screen has one job. Tapping it enters the demo at Feed (§2.3)
+step 2 (code), step 3 (2FA), the other-device and registration steps, Bluesky's
+waiting state and §2.1's offer: once a sign-in is in flight the screen has one
+job. Tapping it enters the demo at Feed (§2.3)
 — at Feed even when the visit arrived on a public link (§2.13): that
 destination is parked for the length of the demo, not spent by it, and it is
 named on §2.1 again when the demo is left.
 
 **Leaving.** The `Demo` pill (below) opens the demo sheet, whose first action is
-`( Leave Demo )`; Settings (§2.20) carries the same button where `Sign Out`
-sits in a real session. Either one returns to §2.1 step 1 with the phone field
-empty, toast `Left the demo.` Reloading the web page or relaunching the app
+`( Leave Demo )`; Settings (§2.20) carries the same button where the
+`TELEGRAM` card sits in a real session. Either one returns to §2.1 step 1 with
+both fields empty, toast `Left the demo.` Reloading the web page or relaunching the app
 also leaves it, because nothing about the demo is written to disk (below).
 
 **What is persistently obvious.** Three things, none of them dismissible:
@@ -1478,8 +1694,10 @@ different truth:
 - A link, a link preview, or a `t.me` link in post text:
   `Links don't open in the demo.`
 
-`Sign Out` is not in the demo at all: Settings carries `( Leave Demo )`
-(btn neutral) in its place, above `( Delete My Node )` (btn danger).
+`Sign Out` is not in the demo at all, and neither network's card is: Settings
+carries `( Leave Demo )` (btn neutral) where the `TELEGRAM` card would be,
+above `( Delete My Node )` (btn danger). A demo is not signed in to anything
+(§1), so it has nothing to sign out of or in to.
 
 #### 2.22.4 No network, and how that is guaranteed
 
@@ -2417,18 +2635,25 @@ Three surfaces, each excluded by construction and each saying so once.
 
 ### 2.35 Bluesky — signing in, the account, signing out
 
-`PROTOCOL §12` reads Bluesky into the feed. The surface follows the same rule
-§2.27 set for private: **Bluesky is something added to your setup, not a second
-account.** No new tab, no second profile, nothing at first launch. Someone who
-never opens Settings never sees any of this, and the app looks exactly as it
-does today — except that a node they follow may now carry Bluesky posts, which
-needs nothing from them (§2.36).
+`PROTOCOL §12` reads Bluesky into the feed. **Bluesky is a peer of Telegram at
+sign-in, and never a second profile** (Elijah, 2026-09-25: "it should allow
+combined logins to telegram and blueky"). Either network alone signs in, or
+both (§1); there is no new tab and no second You. A reader who signs in to
+Telegram alone and says `Not Now` to §2.1's offer sees none of this beyond one
+card in Settings — except that a node they follow may carry Bluesky posts,
+which needs nothing from them (§2.36).
 
-**Where it lives.** Settings (§2.20) gains a `BLUESKY` card between `PRIVATE`
-and `CONTACT`. It is always there outside the demo (§2.40), signed in or not,
-because the tag toggle needs no account. It is not on Sign in (§2.1), not in Setup (§2.2) and not on
-You (§2.8): those screens are about Telegram, and a second sign-in on the way
-in is a second thing to decide before the app has shown anything.
+**Where it lives.** On Sign in (§2.1), the `BLUESKY` card beside Telegram's,
+and once as the offer after Telegram's sign-in. After that, Settings (§2.20):
+a `BLUESKY` card between `PRIVATE` and `CONTACT`, always there outside the demo
+(§2.40), signed in or not, because the tag toggle needs no account. Not in
+Setup (§2.2), which makes a Telegram channel, and not on You (§2.8), which is
+the node's — except for a Bluesky-only reader, whose You is the account
+(§2.8).
+
+The sign-in below is the sheet Settings opens. §2.1's `BLUESKY` card runs the
+same steps inline — same handle rules, same browser, same waiting state, same
+toasts — with the card in place of the sheet.
 
 Signed out of Bluesky:
 
@@ -2546,9 +2771,13 @@ Your Bluesky follows leave your feed.         (muted — the consequence, one se
 
 Toast: `Signed out of Bluesky.` A link to the node stays — it is two public
 lines, not a sign-in (`PROTOCOL §12.8`) — and the confirm does not say so (§3).
-Signing out of Telegram (§4) signs out of Bluesky too — it clears local state,
-and the session is local state — and its confirm gains a line when a session
-exists: `You'll be signed out of Bluesky too.`
+
+**Sign-outs are independent.** Signing out of Bluesky leaves Telegram signed
+in, and signing out of Telegram (§4) leaves Bluesky signed in: each clears its
+own network's local state (`PROTOCOL §7`). The one that leaves neither signed
+in is the last one out, and it wipes everything but the safety lists and lands
+on Sign in (§2.1). The confirms do not change for being last — the consequence
+each states is still the true one.
 
 **The Status sheet** (§2.10) gains one row, under `Feed`:
 
@@ -2774,7 +3003,12 @@ what it can.
   session. One toast, once: `Bluesky signed you out.` The Settings card shows the account row with `Signed out by
   Bluesky` in muted and `( Sign In Again )`, which opens §2.35's sheet with the
   handle filled in. Status sheet: `Bluesky  Sign in again`. The compose toggle
-  is absent until then.
+  is absent until then. Bluesky only (§1), the reader stays signed in — the
+  session is held, not live — and the app stays open: Feed paints its cache
+  and the tag, Graph its last list, You loses `( Compose )`, and `Sign In
+  Again` is in Settings' `BLUESKY` card as above, with `( Sign Out of Bluesky )`
+  (ghost) under it: an ended session is held, so it can be signed out of like a
+  live one — for a Bluesky-only reader that is the last one out (§4).
 - **A server is down** — the account's PDS, or the AppView. That source is left
   out of this refresh and tried again on the next (`PROTOCOL §12.5` rule 6);
   there is no toast for a failed read, because it happens again by itself in a
@@ -2858,6 +3092,62 @@ block records. A tgsocial block is never sent to Bluesky.
   real network's name would be exactly the screenshot §2.22's strip exists to
   prevent.
 
+### 2.41 Which network, which screen
+
+§1 names four states; Sign in (§2.1) is the fourth. This is every screen in
+the other three, with its words. Where a cell says "as §N", the screen is that
+section's, unchanged.
+
+**The Telegram card.** A screen whose content needs Telegram, reached by a
+Bluesky-only reader, keeps its topbar and tab bar and shows one card in place
+of its body:
+
+```
+┌ card ─────────────────────────────────┐
+│ Sign in to Telegram to find nodes.     │  (muted — the screen's one helper line, §3)
+│ ( Sign In with Telegram )              │  (btn primary — the screen's one action)
+└───────────────────────────────────────┘
+```
+
+The line is `Sign in to Telegram to <verb>.` with the verb the screen's own.
+The button runs §2.1's Telegram steps and comes back to the screen it left,
+now filled. A Telegram feature is **not** gated this way where it is a control
+on a screen Bluesky-only readers use (Comment, Follow, Edit Card): those
+controls are absent, because the thing they act on — a Telegram post, a node,
+a card — is not on the screen.
+
+| Screen | Telegram only | Bluesky only | Both |
+| --- | --- | --- | --- |
+| Tab bar (§1) | `Feed · Explore · Graph ·` avatar: node photo, else initial | same four; avatar: Bluesky avatar, else initial | node photo, else Bluesky avatar, else initial |
+| Status pill (§1, §2.10) | `Synced` · `Syncing` · `Offline` from TDLib | same words, from Pending and the device's network | as Telegram only |
+| Status sheet (§2.10) | as §2.10; `Bluesky` row only with a Bluesky source (the tag) | `Telegram  Not signed in`; no `Connection`, `Node`, `TDLib` | as §2.10 with `Bluesky  @elijah.bsky.social · 5 sources` |
+| §2.1's offer | h1 `Also sign in to Bluesky?`, once | h1 `Also sign in to Telegram?`, once | not shown |
+| Setup (§2.2) | as §2.2, when no node | never | as §2.2, when no node |
+| Feed (§2.3) | Telegram sources, and the tag when on | following source and tag (§2.36); no Work control | all of `PROTOCOL §12.5`'s sources |
+| Feed, empty | `Nothing here yet.` `( Explore )` | `Nothing here yet.` | `Nothing here yet.` `( Explore )` |
+| Explore (§2.4) | as §2.4 | Telegram card: `Sign in to Telegram to find nodes.` | as §2.4 |
+| Node profile (§2.5), from a link | as §2.5 | Telegram card: `Sign in to Telegram to see @tgs_ana.` | as §2.5 |
+| Feed channel (§2.6), from a link | as §2.6 | Telegram card: `Sign in to Telegram to see @waveloop_devlog.` | as §2.6 |
+| Thread (§2.12) | as §2.12 | unreachable: a Bluesky post's text opens on Bluesky (§2.36) | as §2.12 |
+| Graph (§2.7) | `DIRECT · 12`, `+1 · 84` | `BLUESKY · 212`, ring 1 only | as Telegram only |
+| You (§2.8) | node, feeds, listing, private; `( Settings )` top right | account, `( Compose )`, `TELEGRAM` `( Sign In with Telegram )`; `( Settings )` top right | as Telegram only |
+| Compose (§2.9) | `POST TO` feed tabs | `POST TO` `Bluesky · @elijah.bsky.social`, counter, one photo | feed tabs and `Also post to Bluesky` (§2.38) |
+| Post sheet (§2.3, §2.36) | as §2.3 | as §2.36; `Block @ana.bsky.social` (no node to name) | both, by post |
+| Settings (§2.20) | lists, `PRIVATE`\*, `BLUESKY` signed out, `CONTACT`, `TELEGRAM` with `Sign Out of Telegram`, `Delete My Node`\* | lists, `BLUESKY` signed in (no `Linked to`), `CONTACT`, `TELEGRAM` `( Sign In with Telegram )` | lists, `PRIVATE`\*, `BLUESKY` signed in with `Linked to`\*, `CONTACT`, `TELEGRAM` with both buttons\* |
+| Sign-out confirm (§4, §2.35) | `Sign out of Telegram?` `Your node stays on Telegram.` → Sign in | `Sign out of Bluesky?` `Your Bluesky follows leave your feed.` → Sign in | either one; the other stays |
+| Delete My Node (§2.21) | with a node | absent | with a node |
+| Work, Private (§2.23–§2.34) | as specified | absent: each is on a node | as specified |
+| Connector (§2.14, Mac) | as §2.14 | Telegram card: `Sign in to Telegram to use the Connector.`; the port is closed | as §2.14; Bluesky is never a source (§2.40) |
+| Public link (§2.13), in the app | the screen | the Telegram card, then the screen | the screen |
+| Demo (§2.22) | — | — | — |
+
+\* present when §2.20, §2.21, §2.33 or §2.37 say so: a node, a private node,
+a verified link.
+
+The demo row is empty on purpose: the demo is entered from Sign in, is signed
+in to neither network, and is its own world (§2.22) — no `BLUESKY` card, no
+`TELEGRAM` card, `( Leave Demo )` in their place.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -2875,7 +3165,8 @@ be right. Four rules, for every build:
 1. **At most one short helper line per screen**, and only where a person would
    otherwise be stuck (`Finish in your browser.` on §2.35's waiting state; the
    Connector's `Let an assistant read your feeds.`; the vouch sheet's
-   `You can't remove a vouch someone wrote. Report it or block them.`).
+   `You can't remove a vouch someone wrote. Report it or block them.`; §2.41's
+   `Sign in to Telegram to find nodes.`).
 2. **Empty states are a short label** (`No members yet.`, `Nothing here yet.`),
    plus at most one action.
 3. **A confirm states its consequence in one sentence** (`Their posts and
@@ -2898,7 +3189,9 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `private`, `private node`, `private feed`, `invite`, `member`, `request`,
 `approve`, `unconfirmed` (§2.27–§2.34),
 `Bluesky`, `Bluesky account`, `link`, `linked`, `drop`, `Also post to
-Bluesky`, `Sign In with Bluesky` (§2.35–§2.40).
+Bluesky`, `Sign In with Bluesky` (§2.35–§2.40),
+`Sign In with Telegram`, `Sign Out of Telegram`, `Sign Out of Bluesky`,
+`Also sign in to Bluesky?`, `Also sign in to Telegram?` (§2.1, §2.41).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
 
@@ -2917,6 +3210,17 @@ one has none of them (`PROTOCOL §10.8`). And naming it "the professional
 network" would name a second network, which is exactly what §2.24 decided it is
 not. `Verified` is reserved for the feed backlink (`PROTOCOL §3`) and appears
 nowhere on a work card.
+
+**Signing in is `Sign in`, on both networks** — never "connect", "log in",
+"link" or "add account". The button is `Sign In with Telegram` or `Sign In
+with Bluesky`, the state is `Signed in` / `Not signed in`, the way out is `Sign
+Out of Telegram` or `Sign Out of Bluesky`. One verb for both, because the two
+are peers (§2.1) and a reader should not have to wonder whether "connecting"
+Telegram is a different act from signing in to Bluesky. `Link` is §2.37's and
+means the two public lines, never a sign-in. `Connected` survives in one place,
+`Connection` on the Status sheet (§2.10) and the demo's `Telegram · Not
+connected` (§2.22.5), where it names TDLib's network connection, not an
+account.
 
 And never, on the Bluesky surfaces: "connect", "sync" (of an account — §1's
 `Syncing` pill is unchanged), "import",
@@ -2937,14 +3241,23 @@ at all, because it is not shown.
   rolled back with a toast on failure: `Couldn't update your card.` plus
   TDLib's message.
 - Network errors: status pill `Offline`; reads serve cache; writes toast
-  `You're offline.`
+  `You're offline.` When the network returns, the feed refreshes by itself.
+  Signed in to Telegram, TDLib's `Connected` is the signal; Bluesky only, it is
+  the device's network (§2.10).
 - Rate limits (`FLOOD_WAIT_n`): toast `Telegram asked us to wait n s.` and
   back off that long before retrying automatically.
-- Sign out (Settings, §2.20) asks once (modal: `Sign out of tgsocial? Your
-  node stays on Telegram.` `( Sign Out )` danger, `( Cancel )` ghost) then
-  `logOut` and wipes local state — except the safety lists, which survive by
-  design (`PROTOCOL §7`). A Bluesky session is local state and goes with it;
-  the modal says so when there is one (§2.35).
+- Sign out of Telegram (Settings, §2.20) asks once (modal: h2 `Sign out of
+  Telegram?`, muted `Your node stays on Telegram.`, `( Sign Out )` danger,
+  `( Cancel )` ghost) then `logOut` and wipes Telegram's local state
+  (`PROTOCOL §7`). A Bluesky session stays, and the app stays open, Bluesky
+  only (§1). Sign out of Bluesky is §2.35's.
+- **The last one out** — whichever network leaves nothing signed in — wipes
+  all local state, UI preferences included, except the safety lists, which
+  survive by design (`PROTOCOL §7.1`), and lands on Sign in (§2.1).
+- **Telegram signs you out** — the session ended from another device, or
+  TDLib reached `authorizationStateClosed` without our `logOut`: toast
+  `Telegram signed you out.`, Telegram's local state goes as above, and the
+  app stays open on Bluesky when a session is held, else lands on Sign in.
 - The safety filter (§2.18) is applied at render on every surface, always,
   with no preference behind it. Blocked, muted and reported content never
   paints, and nothing about those lists is written to the card or leaves the
