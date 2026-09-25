@@ -1213,7 +1213,7 @@
     }
   },
   "atproto": {
-    "$comment": "PROTOCOL §12 — atproto sources. `did`: normaliseDid(in). `parse`: atprotoDidOf(public card text) → DID or null (a second pass; §2 ignores the key, see the §12 case in `parse`). `serialise`: card (+ atprotoDid) → exact text, §12 line last. `recordKey`: linkRecordKey(node). `verify`: atprotoLinkVerified({cardText, node, did, record}) — record is getRecord's {uri, value} or null for RecordNotFound. `sortAt`: atprotoSortAt(post) in seconds, `feedTime`: atprotoFeedTime(entry). `tid`: tidMicros(rkey). `admit`: atprotoItem(entry) !== null. `merge`: scenarios run through the §4.8 merge — take everything, and when takeNext blocks on a source feed it that source's next page (Telegram: pushMessages; atproto: pushAtprotoPage with admit `tag` → tagSourceItem; `fail` → markExhausted; no pages left → markExhausted); expect is the emitted order, Telegram items as `<key>/<id>`, atproto items by at-uri. `crossPost`: crossPostTarget(post, nodeFeeds). `drop`: dropRefOf(post). `postKey`: safetyKey(link). `clientMetadata`: clientMetadataProblems(doc, fetchedFrom) → problem codes, [] is publishable.",
+    "$comment": "PROTOCOL §12 — atproto sources. `did`: normaliseDid(in). `parse`: atprotoDidOf(public card text) → DID or null (a second pass; §2 ignores the key, see the §12 case in `parse`). `serialise`: card (+ atprotoDid) → exact text, §12 line last. `recordKey`: linkRecordKey(node). `verify`: atprotoLinkVerified({cardText, node, did, record}) — record is getRecord's {uri, value} or null for RecordNotFound. `sortAt`: atprotoSortAt(post) in seconds, `feedTime`: atprotoFeedTime(entry). `tid`: tidMicros(rkey). `admit`: atprotoItem(entry) !== null. `merge`: scenarios run through the §4.8 merge — take everything, and when takeNext blocks on a source feed it that source's next page (Telegram: pushMessages; atproto: pushAtprotoPage with admit `tag` → tagSourceItem; `fail` → markExhausted; no pages left → markExhausted); expect is the emitted order, Telegram items as `<key>/<id>`, atproto items by at-uri. `crossPost`: crossPostTarget(post, nodeFeeds). `drop`: dropRefOf(post). `dropRecord`: dropPlan, §12.12 (its own $comment; web lags it). `postKey`: safetyKey(link). `clientMetadata`: clientMetadataProblems(doc, fetchedFrom) → problem codes, [] is publishable.",
     "did": {
       "cases": [
         {
@@ -2842,6 +2842,912 @@
             "labels": []
           },
           "out": null
+        },
+        {
+          "name": "the media half of a recordWithMedia embed",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7aaaak22",
+            "cid": "bafy3mw2c7aaaak22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "quoting, with my drop",
+              "embed": {
+                "$type": "app.bsky.embed.recordWithMedia",
+                "record": {
+                  "$type": "app.bsky.embed.record",
+                  "record": {
+                    "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c1aaaak22",
+                    "cid": "bafyq"
+                  }
+                },
+                "media": {
+                  "$type": "app.bsky.embed.external",
+                  "external": {
+                    "uri": "https://waveloop.app/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+                    "title": "A drop",
+                    "description": ""
+                  }
+                }
+              },
+              "createdAt": "2026-09-21T18:02:00.250Z"
+            },
+            "indexedAt": "2026-09-21T18:02:00.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "a URL in the text when there is no embed and no facet",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7baaak22",
+            "cid": "bafy3mw2c7baaak22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "new one https://waveloop.app/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2 #waveloop",
+              "createdAt": "2026-09-21T18:02:00.250Z"
+            },
+            "indexedAt": "2026-09-21T18:02:00.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "a subdomain of waveloop.app is WaveLoop",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7caaak22",
+            "cid": "bafy3mw2c7caaak22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "https://www.waveloop.app/drop/?d=did:plc:ana2ana2ana2ana2ana2ana2&r=3drop2drop2d2",
+              "createdAt": "2026-09-21T18:02:00.250Z"
+            },
+            "indexedAt": "2026-09-21T18:02:00.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "the first drop link decides: somebody else's first means no drop, whatever follows",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7daaak22",
+            "cid": "bafy3mw2c7daaak22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "theirs https://waveloop.app/drop/?at=at://did:plc:bob2bob2bob2bob2bob2bob2/app.waveloop.social.drop/3drop2drop2d2 then mine https://waveloop.app/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+              "createdAt": "2026-09-21T18:02:00.250Z"
+            },
+            "indexedAt": "2026-09-21T18:02:00.900Z",
+            "labels": []
+          },
+          "out": null
+        },
+        {
+          "name": "an at= whose collection is not the drop's is not a drop link",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7eaaak22",
+            "cid": "bafy3mw2c7eaaak22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "https://waveloop.app/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7eaaak22",
+              "createdAt": "2026-09-21T18:02:00.250Z"
+            },
+            "indexedAt": "2026-09-21T18:02:00.900Z",
+            "labels": []
+          },
+          "out": null
+        }
+      ]
+    },
+    "dropRecord": {
+      "$comment": "PROTOCOL §12.12 — dropPlan({ref, response, thumb}) → what the card renders. `response` is getRecord's JSON (or its error body); `thumb` is whether the post view carries an image for the poster (default true, §12.12 rule 7). `render` is the kind, or `link` for rule 8's fallback, in which case nothing else is returned. `onScreen` and `onTap` name the blob fields fetched (rule 7), in that order; `aspect` is aspectRatio width/height or null; `shift` (stereo) is the starting fraction of width (rule 10). iOS runs these; web and Android lag §12.12.",
+      "cases": [
+        {
+          "name": "stereo: both eyes load on screen, the spatial HEIC never; shift is disparityAdjust / 1000",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "stereo",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "left": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1400000
+              },
+              "right": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1400000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreidddddddd"
+                },
+                "mimeType": "image/heic",
+                "size": 9000000
+              },
+              "aspectRatio": {
+                "width": 4,
+                "height": 3
+              },
+              "stereo": {
+                "baselineMm": 20,
+                "hfovDeg": 70,
+                "disparityAdjust": 12
+              }
+            }
+          },
+          "out": {
+            "render": "stereo",
+            "onScreen": [
+              "left",
+              "right"
+            ],
+            "onTap": [],
+            "aspect": 1.3333333333333333,
+            "shift": 0.012
+          }
+        },
+        {
+          "name": "stereo: disparityAdjust outside -200..200 is ignored, not clamped; no aspectRatio is null",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "stereo",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "left": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1400000
+              },
+              "right": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "image/png",
+                "size": 1400000
+              },
+              "stereo": {
+                "disparityAdjust": 500
+              }
+            }
+          },
+          "out": {
+            "render": "stereo",
+            "onScreen": [
+              "left",
+              "right"
+            ],
+            "onTap": [],
+            "aspect": null,
+            "shift": 0
+          }
+        },
+        {
+          "name": "stereo without its right eye is its link card",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "stereo",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "left": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1400000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "stereo whose eye declares more than the 5 MB cap is its link card, refused before any request",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "stereo",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "left": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 6000000
+              },
+              "right": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1400000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "depth: the image and the map load on screen",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "depth",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/png",
+                "size": 8000000
+              },
+              "depth": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "image/png",
+                "size": 400000
+              },
+              "aspectRatio": {
+                "width": 1600,
+                "height": 900
+              }
+            }
+          },
+          "out": {
+            "render": "depth",
+            "onScreen": [
+              "media",
+              "depth"
+            ],
+            "onTap": [],
+            "aspect": 1.7777777777777777
+          }
+        },
+        {
+          "name": "depth whose map is a webp is its link card (the depth field accepts png and jpeg)",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "depth",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/png",
+                "size": 8000000
+              },
+              "depth": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "image/webp",
+                "size": 400000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "model with usdz: the usdz loads on tap, the GLB never",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "model",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "model/gltf-binary",
+                "size": 3000000
+              },
+              "usdz": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreicccccccc"
+                },
+                "mimeType": "model/vnd.usdz+zip",
+                "size": 4000000
+              },
+              "aspectRatio": {
+                "width": 1,
+                "height": 1
+              }
+            }
+          },
+          "out": {
+            "render": "model",
+            "onScreen": [],
+            "onTap": [
+              "usdz"
+            ],
+            "aspect": 1
+          }
+        },
+        {
+          "name": "model with only a GLB is its link card",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "model",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "model/gltf-binary",
+                "size": 3000000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "audio: media on tap",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "audio",
+              "app": "tide",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "audio/mp4",
+                "size": 2400000
+              },
+              "durationMs": 93000,
+              "aspectRatio": {
+                "width": 1200,
+                "height": 630
+              }
+            }
+          },
+          "out": {
+            "render": "audio",
+            "onScreen": [],
+            "onTap": [
+              "media"
+            ],
+            "aspect": 1.9047619047619047
+          }
+        },
+        {
+          "name": "audio whose media is an image is its link card",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "audio",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/png",
+                "size": 2400000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "video: media on tap; a .mov is video/quicktime and is video",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "video",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "video/quicktime",
+                "size": 13900000
+              },
+              "durationMs": 8000
+            }
+          },
+          "out": {
+            "render": "video",
+            "onScreen": [],
+            "onTap": [
+              "media"
+            ],
+            "aspect": null
+          }
+        },
+        {
+          "name": "video over the 50 MB cap is its link card",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "video",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "video/mp4",
+                "size": 60000000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "image: poster in the card, media on tap",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "image",
+              "app": "infininote",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/png",
+                "size": 22000000
+              }
+            }
+          },
+          "out": {
+            "render": "image",
+            "onScreen": [],
+            "onTap": [
+              "media"
+            ],
+            "aspect": null
+          }
+        },
+        {
+          "name": "the legacy blob form (cid, no size) is a blob; the cap then holds on the wire alone",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "image",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "cid": "bafkreibbbbbbbb",
+                "mimeType": "image/jpeg"
+              }
+            }
+          },
+          "out": {
+            "render": "image",
+            "onScreen": [],
+            "onTap": [
+              "media"
+            ],
+            "aspect": null
+          }
+        },
+        {
+          "name": "a CID that is not base32 CIDv1 is no blob, so the image has no media",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "image",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "QmNotBase32&did=x"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "no image on the post view: the preview loads from the PDS on screen",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "audio",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "audio/wav",
+                "size": 2400000
+              }
+            }
+          },
+          "thumb": false,
+          "out": {
+            "render": "audio",
+            "onScreen": [
+              "preview"
+            ],
+            "onTap": [
+              "media"
+            ],
+            "aspect": null
+          }
+        },
+        {
+          "name": "a kind the lexicon does not name yet is its link card, not an error",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "hologram",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "application/octet-stream",
+                "size": 1000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "a record with no kind is not a drop",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "a record read from another repo proves nothing",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.waveloop.social.drop",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "image",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "a record of another collection is not a drop",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+            "cid": "bafyreidropdropdropdropdropdropdropdropdropdropdropdrop",
+            "value": {
+              "$type": "app.bsky.feed.post",
+              "createdAt": "2026-09-25T18:00:00.000Z",
+              "kind": "image",
+              "preview": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreiaaaaaaaa"
+                },
+                "mimeType": "image/jpeg",
+                "size": 180000
+              },
+              "media": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibbbbbbbb"
+                },
+                "mimeType": "image/jpeg",
+                "size": 1000
+              }
+            }
+          },
+          "out": {
+            "render": "link"
+          }
+        },
+        {
+          "name": "RecordNotFound is its link card",
+          "ref": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+          "response": {
+            "error": "RecordNotFound",
+            "message": "Could not locate record"
+          },
+          "out": {
+            "render": "link"
+          }
         }
       ]
     },

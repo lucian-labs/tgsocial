@@ -207,6 +207,9 @@ final class AppModel {
     @ObservationIgnored private(set) var privateLayer: PrivateRepository!
     /// PROTOCOL §12: Bluesky, additive. Observable — Settings, compose and the feed read its state.
     private(set) var bluesky: BlueskyService!
+    /// PROTOCOL §12.12: WaveLoop drops read into their cards. Settable so a test can hand in one
+    /// over a stub PDS; the app builds it once in `init`.
+    @ObservationIgnored var drops: DropStore!
     #if targetEnvironment(macCatalyst)
     /// CONNECTOR.md: the local bridge and the switches that govern it. Mac only.
     private(set) var connector: ConnectorService!
@@ -237,6 +240,8 @@ final class AppModel {
     var modalLocked = false
     /// The full-screen media viewer (PRODUCT §2.11); non-nil hides topbar and tab bar.
     var viewer: ViewerRequest?
+    /// PRODUCT §2.36.1: the drop's full-screen viewer — the same chrome, its own content.
+    var dropViewer: DropViewerRequest?
     var toast: HPToastMessage?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     /// Screens with their own post list (Feed channel) register here to receive live
@@ -427,8 +432,11 @@ final class AppModel {
         // because a full-width card rendition is ~5 MB against a strip's ~0.7 MB.
         let pixelBudget = ImageMemoryCache.budget(availableBytes: ImageMemoryCache.availableAppMemory())
         let stripBudget = pixelBudget / 4
-        media = MediaLoader(td: td, activity: activity,
-                            images: ImageMemoryCache(byteLimit: pixelBudget - stripBudget))
+        // The photo share is one cache with three readers: TDLib renditions, Bluesky's CDN images
+        // and WaveLoop drops (PROTOCOL §12.12 rule 9) — one bound for every decoded photo pixel.
+        let photoCache = ImageMemoryCache(byteLimit: pixelBudget - stripBudget)
+        BlueskyImages.budget = photoCache
+        media = MediaLoader(td: td, activity: activity, images: photoCache)
         spectrograms = SpectrogramStore(byteLimit: stripBudget)
         nodes = NodeRepository(td: td, store: store, sends: sends, activity: activity)
         cardWriter = nodes
@@ -440,6 +448,7 @@ final class AppModel {
         privateRecord = privateLayer.record
         bluesky = makeBluesky?(store, activity) ?? BlueskyService(store: store, activity: activity)
         feed.atproto = bluesky
+        drops = DropStore(reader: bluesky.reader, images: photoCache, activity: activity)
         confirmPrivateOnCard = store.load(Bool.self, LocalStore.privateConfirmOff) != true
         myNode = store.load(MyNode.self, LocalStore.myNode)
         myCard = store.load(Card.self, LocalStore.myCard)

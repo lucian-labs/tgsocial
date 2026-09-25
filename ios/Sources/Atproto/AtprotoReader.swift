@@ -12,7 +12,8 @@ struct LinkCheck: Codable, Equatable {
 }
 
 actor AtprotoReader {
-    private let transport: HTTPTransport
+    // Internal, not private: a drop's getRecord (§12.12 rule 2) runs inside `limited` from DropStore.
+    let transport: HTTPTransport
     let identity: AtprotoIdentity
     private let now: @Sendable () -> Date
 

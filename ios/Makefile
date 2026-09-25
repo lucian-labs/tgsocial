@@ -33,22 +33,31 @@ XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 XCB_MAC := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-clonedSourcePackagesDirPath $(PACKAGES) -derivedDataPath $(MAC_DERIVED)
 
-.PHONY: gen build test device archive export upload clean mac-tdlib mac-build mac-test
+.PHONY: gen build test device archive export upload clean mac-tdlib mac-build mac-test metal-check
+
+# Sources/Components/DropDepth.metal (the depth drop's parallax, PROTOCOL §12.12 rule 10) needs the
+# Metal compiler, which Xcode 26 ships as a separate download. Checked before any build so a
+# missing toolchain is one line naming the fix, not a compile error deep in xcodebuild's log.
+metal-check:
+	@xcrun -sdk iphoneos metal --version >/dev/null 2>&1 || ( \
+	  echo "The Metal toolchain is missing (Xcode 26 ships it separately). Install it once:"; \
+	  echo "  xcodebuild -downloadComponent MetalToolchain"; \
+	  echo "See docs/BUILDING.md §1."; exit 1)
 
 gen:
 	@test -f Secrets.xcconfig || (echo "Secrets.xcconfig missing — copy Secrets.xcconfig.example and fill it in." && exit 1)
 	xcodegen generate
 
-build:
+build: metal-check
 	$(XCB) -configuration Debug -destination '$(SIM)' build
 
 # XCTest sees only the one Info.plist this build made, so the redirect-scheme build phase's fork
 # cases are measured here first (PROTOCOL §12.7 step 6, scripts/redirect-scheme.sh).
-test:
+test: metal-check
 	sh scripts/redirect-scheme.test.sh
 	$(XCB) -configuration Debug -destination '$(SIM)' test
 
-device:
+device: metal-check
 	@test -n "$(DEVICE_ID)" || (echo "DEVICE_ID is unset. Pair a phone, then:" && \
 	  echo "  xcrun devicectl list devices" && \
 	  echo "  make device DEVICE_ID=<identifier>" && exit 1)
@@ -56,7 +65,7 @@ device:
 	xcrun devicectl device install app --device $(DEVICE_ID) $(DERIVED)/Build/Products/Debug-iphoneos/tgsocial.app
 	xcrun devicectl device process launch --device $(DEVICE_ID) $(BUNDLE_ID)
 
-archive:
+archive: metal-check
 	$(XCB) -configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates $(ASC_AUTH) \
 		CURRENT_PROJECT_VERSION=$(BUILD_NUMBER) -archivePath $(ARCHIVE) archive
 
@@ -74,12 +83,12 @@ mac-tdlib:
 	$(XCB_MAC) -resolvePackageDependencies
 	python3 scripts/tdlib-maccatalyst.py $(PACKAGES)
 
-mac-build: mac-tdlib
+mac-build: metal-check mac-tdlib
 	$(XCB_MAC) -configuration Debug -destination '$(MAC_DEST)' -allowProvisioningUpdates $(ASC_AUTH) build
 
 # The Connector suite lives here: the bridge is only compiled for Catalyst, so
 # `make test` on the simulator cannot reach it.
-mac-test: mac-tdlib
+mac-test: metal-check mac-tdlib
 	$(XCB_MAC) -configuration Debug -destination '$(MAC_DEST)' -allowProvisioningUpdates $(ASC_AUTH) test
 
 clean:

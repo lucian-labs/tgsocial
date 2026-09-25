@@ -4,37 +4,43 @@
 // the same steps inline (SignInScreen.swift); after that, the Settings card is the door. Nothing
 // here is in the demo (§2.40).
 
+import ImageIO
 import SwiftUI
 
 // MARK: - Images from Bluesky's CDN
 
-/// Bluesky media arrives as https URLs (the AppView's CDN), not TDLib files, so it has its own small
-/// loader: decoded once, downsampled to the width it draws at, held in an NSCache the system can
-/// purge. Kept apart from `ImageMemoryCache` on purpose — that budget is TDLib's renditions.
+/// Bluesky media arrives as https URLs (the AppView's CDN), not TDLib files, so it has its own
+/// loader — but not its own memory. The pixels go into the app's one decoded-image budget (`budget`,
+/// set by AppModel to the photo cache MediaLoader and the drop store share, PROTOCOL §12.12 rule 9);
+/// a second NSCache here raised that bound by 48 MB with no count limit and no purge on a warning.
+/// Decoded through ImageIO's thumbnail path straight from the bytes, so a 4032 × 3024 image never
+/// exists at full size on its way to a 1320-pixel card.
 enum BlueskyImages {
-    static let cache: NSCache<NSString, UIImage> = {
-        let c = NSCache<NSString, UIImage>()
-        c.totalCostLimit = 48 * 1024 * 1024
-        return c
-    }()
+    /// The shared budget; a small cache of its own only where no AppModel set one (a unit test).
+    @MainActor static var budget = ImageMemoryCache(byteLimit: ImageMemoryCache.minimumBudget, countLimit: 64)
 
+    @MainActor
     static func load(_ url: String, maxPoints: CGFloat) async -> UIImage? {
-        let key = "\(url)#\(Int(maxPoints))" as NSString
-        if let hit = cache.object(forKey: key) { return hit }
+        let pixels = max(Int((maxPoints * ScreenPixels.scale).rounded()), 1)
+        let key = ImageMemoryCache.key("bsky:" + url, ImageRendition(maxPixelSize: pixels, tag: "p\(pixels)"))
+        let cache = budget
+        if let hit = cache.image(key) { return hit }
         guard let u = URL(string: url), let (data, _) = try? await URLSession.shared.data(from: u) else { return nil }
-        let image: UIImage? = await Task.detached(priority: .utility) {
-            guard let full = UIImage(data: data) else { return nil }
-            let scale = await UIScreen.main.scale
-            let target = maxPoints * scale
-            let longest = max(full.size.width, full.size.height)
-            guard longest > target, longest > 0 else { return full }
-            let f = target / longest
-            return full.preparingThumbnail(of: CGSize(width: full.size.width * f, height: full.size.height * f)) ?? full
-        }.value
-        if let image {
-            cache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * image.scale * image.scale * 4))
-        }
+        let image: UIImage? = await Task.detached(priority: .utility) { decode(data, maxPixelSize: pixels) }.value
+        if let image { cache.insert(image, key: key) }
         return image
+    }
+
+    nonisolated static func decode(_ data: Data, maxPixelSize: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return UIImage(data: data) }
+        return UIImage(cgImage: cg)
     }
 }
 
@@ -94,7 +100,7 @@ struct BlueskyPostCard: View {
                                   onOpen: { model.open(b.webURL) },
                                   onDetails: { model.modal = .postSheet(post) })
                 }
-                BlueskyMediaBlock(post: b)
+                BlueskyMediaBlock(post: b, feedPost: post)
                 HPMonoSmall(Self.footer(b), color: HPTokens.Colors.faint)
                     .lineLimit(1)
                     .padding(.top, HPTokens.Space.rowGap)
@@ -124,15 +130,24 @@ struct BlueskyPostCard: View {
     }
 }
 
-/// §2.36's media table for v1: images, link card, video still, quote row.
+/// §2.36's media table: images, link card, video still, quote row — and a WaveLoop drop by its
+/// poster, whose link card becomes the drop (§2.36.1) on iOS and Mac, never in the demo.
 struct BlueskyMediaBlock: View {
     @Environment(AppModel.self) private var model
     let post: BlueskyPost
+    /// The feed's post around it, carried for the dock (§2.11). Nil where there is none.
+    var feedPost: Post?
 
     var body: some View {
         VStack(alignment: .leading, spacing: HPTokens.Space.rowGap) {
             if !post.images.isEmpty { images }
-            if let ext = post.external { linkCard(ext) }
+            if let ext = post.external {
+                if let ref = post.dropRef, !model.isDemo, model.drops != nil {
+                    DropCard(post: post, external: ext, ref: ref, feedPost: feedPost)
+                } else {
+                    linkCard(ext)
+                }
+            }
             if post.hasVideo { videoStill }
             if let handle = post.quoteHandle, let uri = post.quoteUri {
                 Button { model.open(Atproto.bskyPostUrl(uri) ?? uri) } label: {

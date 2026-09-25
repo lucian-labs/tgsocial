@@ -380,6 +380,10 @@ extension AppModel {
         // Bluesky's share goes from memory too, not only from disk (§2.35): the session (revoked,
         // best effort), the toggles, the caches.
         await bluesky.endForLastOneOut()
+        // PROTOCOL §7: the drop caches are discardable and go with the last one out — a drop is
+        // read signed out, so neither network's own sign-out touches them.
+        drops.clear()
+        dropViewer = nil
         store.clear()
         clearTelegramMemory()
         feedMode = .all

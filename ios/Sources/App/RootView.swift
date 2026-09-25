@@ -41,7 +41,17 @@ struct RootView: View {
                 .transition(.opacity)
             }
         }
+        .overlay {
+            // PRODUCT §2.36.1: the drop's viewer, the same full-screen chrome. Never in the demo,
+            // which reads no drop (PROTOCOL §12.12 rule 12).
+            if let request = model.dropViewer {
+                DropViewerOverlay(request: request)
+                    .id(request.id)
+                    .transition(.opacity)
+            }
+        }
         .animation(HPMotion.toast, value: model.viewer != nil)
+        .animation(HPMotion.toast, value: model.dropViewer != nil)
         // The scrim's dismissal goes through the model so a run that must not be interrupted can
         // refuse it (PRODUCT §2.21: the delete modal is not dismissible while it runs).
         .hpModal(isPresented: Binding(get: { model.modal != nil }, set: { if !$0 { model.dismissModal() } })) {
@@ -89,6 +99,20 @@ struct RootView: View {
     /// Bluesky or both (PRODUCT §1), and no branch here decides that for itself. The demo is `.app`
     /// — it IS the app on an invented network (§2.22), the same stack, not a second one.
     @ViewBuilder private var content: some View {
+        #if DEBUG
+        // Debug/DropGallery.swift: every drop kind over a stub PDS, for looking at §12.12 on a
+        // screen while no real drop exists. `-DropGallery` at launch; absent from Release.
+        if DropGalleryLaunch.requested {
+            DropGallery()
+        } else {
+            routed
+        }
+        #else
+        routed
+        #endif
+    }
+
+    @ViewBuilder private var routed: some View {
         switch model.root {
         case .secretsMissing: SecretsMissingScreen()
         case .signIn: SignInScreen(mode: .both)
@@ -151,7 +175,7 @@ struct BottomChrome: View {
     private var showsDock: Bool { model.audio.current != nil }
 
     var body: some View {
-        if model.viewer == nil, showsTabs || showsDock {
+        if model.viewer == nil, model.dropViewer == nil, showsTabs || showsDock {
             VStack(spacing: HPTokens.Space.rowGap) {
                 if let item = model.audio.current {
                     // §2.11.2: the dock's mini waveform is a VIEW of the strip's analysis, so it is

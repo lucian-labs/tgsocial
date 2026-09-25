@@ -677,6 +677,7 @@ off to Telegram or the browser except the explicit `Open in Telegram` button.
 | Sticker | Rendered static (webp/png); animated stickers show their thumbnail | — |
 | Link preview | `linkPreview` title/description/thumbnail as a bordered row | Opens the link in the system browser (links are the one exception) |
 | Poll, location, contact, other | A muted one-line summary (`Poll · 3 options`, `Location`) | `Open in Telegram` |
+| WaveLoop drop (a Bluesky post, iOS and Mac) | Per kind, §2.36.1: sound, video and image as the rows above; a stereo pair and a depth photo move inside the card; a model is its poster | The same viewers and players; stereo, depth and model get the 3D viewer of §2.36.1 |
 
 #### 2.11.1 The spectrogram strip
 
@@ -808,7 +809,9 @@ Player rules (all platforms):
   visible, 32 when tapped; the viewer streams video as soon as the
   downloaded prefix allows (native: local file URL; web: `readFilePart`
   blobs / `MediaSource` when supported, otherwise wait for full download
-  with the ring).
+  with the ring). A WaveLoop drop's files come from the owner's PDS, which
+  ignores `Range`, so they download whole to disk before anything plays or
+  decodes (`PROTOCOL §12.12` rule 5), under the same ring.
 - The full-screen viewer hides the topbar and the floating tab bar, supports
   swipe between the media items of one post (albums), and restores scroll
   position on dismiss.
@@ -2854,7 +2857,7 @@ that profile on Bluesky, tag facets are plain text. Telegram's entity rules
 | Bluesky embed | Renders as |
 | --- | --- |
 | Images (1–4) | §2.11.3's mosaic, then the carousel: the view's `thumb` in the card, `fullsize` in the viewer; alt text is the image's accessibility label. |
-| External link | A link card: its thumb (12pt radius, full width), title in body 600, domain in mono faint. Tap opens the link (§4). A WaveLoop drop is one of these, domain `waveloop.app`. A cross-post from a node you follow never renders — you already have the Telegram original (`PROTOCOL §12.5` rule 7). |
+| External link | A link card: its thumb (12pt radius, full width), title in body 600, domain in mono faint. Tap opens the link (§4). A WaveLoop drop by its poster starts as one of these, domain `waveloop.app`, and becomes the drop itself on iOS and Mac (§2.36.1). A cross-post from a node you follow never renders — you already have the Telegram original (`PROTOCOL §12.5` rule 7). |
 | Video | The video's still, full width, with the ▶ glyph and `Plays on Bluesky` in faint. Tap opens the post on Bluesky. |
 | Quote | Its media, if any, as above, then one faint row `Quoting @handle` that opens the quoted post on Bluesky. |
 | Anything else | Text only. |
@@ -2865,10 +2868,11 @@ client would have to vendor and ship, and Android needs ExoPlayer's HLS
 module. Playing it on two builds and not the third breaks §0's one-app,
 same-screens promise, so v1 plays it on none and says where it plays.
 
-**Not in v1**, and why: a WaveLoop drop's own media inline (audio in the §2.11
-player, stereo and depth images) — each card would cost a DID resolution, a
-`getRecord` and a blob of up to 50 MB from the owner's PDS, none of it
-measured; and a thread screen for Bluesky replies, which is Bluesky's app.
+**Not in v1**, and why: a thread screen for Bluesky replies, which is
+Bluesky's app. A WaveLoop drop's own media was on this list — each card costs a
+DID resolution, a `getRecord` and a blob of up to 50 MB from the owner's PDS —
+and is now §2.36.1, with those costs bounded by `PROTOCOL §12.12`: read only
+for a card on screen, blobs by kind, one disk cache, one image budget.
 
 **A node profile** (§2.5) with a verified link gains one row at the top of
 `FEEDS`, and the profile's merged posts include that account's:
@@ -2884,6 +2888,107 @@ FEEDS
 An unverified link shows nothing at all — no row, no greyed row, no
 `Unconfirmed` (`PROTOCOL §12.3` says why) — to everyone but the node's owner,
 who sees §2.37's pending state on their own screen.
+
+#### 2.36.1 WaveLoop drops
+
+A Bluesky post that announces a WaveLoop drop by its own poster
+(`PROTOCOL §12.6`) renders the drop — a sound, a picture, a video, a stereo
+pair, a depth photo or a model — inside its card, read from the poster's own
+repo (`PROTOCOL §12.12`). The post around it is §2.36's, unchanged: header,
+`Bluesky` pill, text, footer, sheet, Share, safety. Only the link card's image
+changes.
+
+**iOS and Mac only, for now.** Web and Android show every drop as the plain
+link card. That is a gap in those two ports, not a design: §0's same-screens
+promise holds for them the day they implement §12.12, and until then they give
+the answer this section falls back to anyway.
+
+**Nothing here is "3D video".** WaveLoop has no such kind (`PROTOCOL §12.10`).
+The 3D drops are a stereo pair and a depth photo, which are stills that move
+when you look at them, and a model.
+
+**States.** A drop card passes through these, and any of them may be the last:
+
+| State | The card shows |
+| --- | --- |
+| First paint | §2.36's link card as it is today: the poster (the post's own thumb), the title, `waveloop.app`. |
+| Record read | The card has been on screen for 300 ms (`PROTOCOL §12.12` rule 1). The poster takes the drop's aspect ratio — its `aspectRatio`, clamped to 0.5–2 like a single image — and gains the kind pill. Stereo and depth gain their controls row. |
+| Loading | A gold determinate ring over the poster (§2.11), progress in bytes across every file the kind needs. Stereo and depth load as soon as the record is read; the rest when tapped. Tapping the ring cancels, and tapping the poster starts again. A stereo or depth card scrolled away mid-download stops downloading, and starts again when it is back on screen. A cancel is never a failure: it leaves the poster, not the link card. |
+| Ready | The drop replaces the poster in the same box, so nothing below it moves. |
+| Can't be read | The link card, exactly as at first paint. No pill, no error text, no toast. |
+
+The last row covers every failure the card was not asked for: the record is
+gone, the server is down, the kind is one this build does not know, a file is
+over its cap or missing (`PROTOCOL §12.12` rule 8). The link card still opens
+the drop on waveloop.app, so nothing is lost but the inline view.
+
+```
+┌ card ──────────────────────────────────────┐
+│ (avatar) Ana Iliovic        2h ago · Share │
+│          @ana.bsky.social  [Bluesky]       │
+│                                            │
+│ New one #waveloop · waveloop.app/drop      │
+│ ┌ media ─────────────────────────────────┐ │
+│ │                                        │ │  the drop, at its aspect ratio
+│ │ [3D · Stereo]                          │ │  kind pill, bottom left, over the scrim
+│ └────────────────────────────────────────┘ │
+│ [ Wiggle | Anaglyph | Side by Side ]       │  HPTabs, sm — stereo and depth only
+│ Dusk at the pier                           │  the link card's title, body 600
+│ waveloop.app                               │  mono faint; title and domain open the drop link
+│                                            │
+│ 12 likes · 3 replies                       │
+└────────────────────────────────────────────┘
+```
+
+**Per kind.**
+
+| Kind | In the card | On tap |
+| --- | --- | --- |
+| Audio | The poster, then §2.11's player row: play/pause circle, the link card's title, the account's name as performer, the duration from the drop until the file says otherwise. The strip is the hairline until the file is local — play is what downloads it — then fills in (§2.11.1). The now-playing row and one-at-a-time rule are §2.11's. | Same row; no full screen, as §2.11. |
+| Video | The poster, the ▶ glyph and the duration pill. | Downloads under the ring, then plays inline as a §2.11 video; full screen is §2.11's player. |
+| Image | The poster. | §2.11's photo viewer: the ring over the poster until the full image is in, then zoom, `Save` and `Close`. |
+| Stereo | Moving. `Wiggle` by default — the two eyes alternating, 110 ms each; `Anaglyph` for red-cyan glasses; `Side by Side` for free viewing. Kind pill `3D · Stereo`. | The 3D viewer: the same three, plus `Swap` (side by side only: parallel ↔ cross-eyed) and `◂` `▸` to converge the eyes. No zoom. |
+| Depth | Moving: the picture shifts by depth as you look at it, and sways by itself after 1.8 s untouched. `Sway` as a toggle. Kind pill `3D · Depth`. | The 3D viewer: `Sway`, `Depth −`, `Depth +`, and drag. No zoom. |
+| Model (with a USDZ) | The poster. Kind pill `3D · Model`. | The 3D viewer: the ring until the model is in, then the model turning slowly on its own. Drag orbits, pinch zooms, `Spin` stops and starts the turning, `AR` places it in the room. |
+| Model (GLB only), any other kind | The link card. | Opens the drop on waveloop.app, where the model renders. |
+
+**iPhone and iPad, and Mac.** The same card and the same viewer; the input
+differs, because the hardware does (`PROTOCOL §12.12` rule 11).
+
+| | iPhone and iPad | Mac |
+| --- | --- | --- |
+| Depth in the card | Tilting the device moves it; no permission is asked. Dragging is the feed's scroll, so the card does not take it. | The pointer over the picture moves it; so does a click-drag. A click that does not move opens the viewer, as a tap does on a phone. |
+| Depth in the viewer | Tilt and drag. | Pointer and drag. |
+| Stereo | Tabs and buttons, in the card and in the viewer. | The same. |
+| Model | Drag, pinch, `Spin`, and `AR`, which opens AR Quick Look on the same file. | Drag, pinch or scroll to zoom, `Spin`. No `AR`: a Mac has no camera to place it with. |
+
+**The 3D viewer** is §2.11's full-screen viewer — ink 96%, swipe down or
+`Close` (a depth photo and a model take the drag as their own input, so they
+close with `Close`), topbar and tab bar hidden — with the kind's controls in a row under
+the media and no `Save`: a stereo pair, a depth photo and a model are not one
+image. Every control is a House Pour ghost sm button or an `HPTabs` item;
+`Sway` and `Spin` are single `HPTabs` items, selected while on. Each keeps the
+40pt hit region (`COMPONENTS.md` rule 6) as an overlay past its painted size.
+`◂` and `▸` are glyphs and carry the accessibility labels `Eyes apart` and
+`Eyes together`.
+
+**When nothing moves.** Stereo and depth draw only while the card is on
+screen and the app is in front; a card under the viewer is off screen. The
+wiggle and the parallax are the drop's content, the way a playing video is,
+so `COMPONENTS.md` rule 4 — which is about chrome — does not stop them. With
+Reduce Motion on, stereo opens in `Side by Side` (`Wiggle` is one tap away),
+depth neither sways nor follows the device's tilt, and a model does not turn
+by itself.
+
+**Errors the reader asked for.** A tap whose download fails shows the toast
+`Couldn't load this drop.` and returns the card to its poster, ready to try
+again. A rate limit on a tap is §2.39's `Bluesky asked us to wait n s.` A
+failure the reader did not ask for — the record, or a stereo or depth card's
+files — says nothing (the last row of the states table).
+
+**Memory.** Each drop image is decoded at the size it is drawn and counted in
+the app's one image budget; files sit in one bounded disk cache; one 3D model
+is open at a time (`PROTOCOL §12.12` rules 6, 9 and 11).
 
 ### 2.37 Linking your Bluesky to your node
 
@@ -3191,7 +3296,10 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `Bluesky`, `Bluesky account`, `link`, `linked`, `drop`, `Also post to
 Bluesky`, `Sign In with Bluesky` (§2.35–§2.40),
 `Sign In with Telegram`, `Sign Out of Telegram`, `Sign Out of Bluesky`,
-`Also sign in to Bluesky?`, `Also sign in to Telegram?` (§2.1, §2.41).
+`Also sign in to Bluesky?`, `Also sign in to Telegram?` (§2.1, §2.41),
+`3D · Stereo`, `3D · Depth`, `3D · Model`, `Wiggle`, `Anaglyph`, `Side by
+Side`, `Swap`, `Sway`, `Depth −`, `Depth +`, `Spin`, `AR`, `Eyes apart`,
+`Eyes together`, `Couldn't load this drop.` (§2.36.1).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
 
@@ -3221,6 +3329,12 @@ means the two public lines, never a sign-in. `Connected` survives in one place,
 `Connection` on the Status sheet (§2.10) and the demo's `Telegram · Not
 connected` (§2.22.5), where it names TDLib's network connection, not an
 account.
+
+And never, on WaveLoop drops: "3D video", "spatial", "immersive",
+"hologram", "VR". WaveLoop has no 3D video (`PROTOCOL §12.10`), and "spatial"
+and "immersive" name Apple Vision presentation that an iPhone or a Mac screen
+does not do; a stereo pair here is two flat pictures shown by turns, side by
+side or in red and cyan, and the labels say which.
 
 And never, on the Bluesky surfaces: "connect", "sync" (of an account — §1's
 `Syncing` pill is unchanged), "import",

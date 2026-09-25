@@ -346,6 +346,9 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - The **private record** (§7.2), if the client implements §11.
 - A **Bluesky session** and the link-verification cache (§12.7, §12.3), if
   the client implements §12. Both discardable.
+- The **drop caches** (§12.12 rules 3 and 6): parsed drop records in memory,
+  drop blobs on disk. Discardable, and cleared by the last one out; neither
+  network's own sign-out touches them, since a drop is read signed out.
 
 **Signing out is per network** (`PRODUCT §1`, `§4`). Telegram's `logOut`
 clears Telegram's part: TDLib's database, `myNode`, the card cache, Telegram
@@ -1346,6 +1349,7 @@ tag on (§12.6).
 | **Author source** | One account's posts, read with `app.bsky.feed.getAuthorFeed`. There is one for every verified link on a node whose feeds are in the merge. |
 | **Following source** | The signed-in account's Following feed, read with `app.bsky.feed.getTimeline` — one source however many accounts it follows. |
 | **Tag source** | WaveLoop drops announced under `#waveloop`, read with `app.bsky.feed.searchPosts` (§12.6). Off until the reader turns it on. |
+| **Drop** | An `app.waveloop.social.drop` record in its owner's repo and the blobs it names (§12.6), read from the owner's PDS after its announcement is on screen (§12.12). Never a source: it rides inside a post the merge already placed. |
 | **Session** | A Bluesky OAuth session held on this device (§12.7). Local state (§7); never published, never on a card. |
 
 ### 12.2 The key
@@ -1475,6 +1479,8 @@ both halves each; that is §1's co-admin case, and §2.3's rule (earliest in my
 | `app.bsky.feed.searchPosts` (tag source) | signed in: the session's PDS with `atproto-proxy: did:web:api.bsky.app#bsky_appview`; signed out: AppView | DPoP / none |
 | `app.bsky.feed.getTimeline` (following source) | the session's PDS with the same `atproto-proxy` header | DPoP |
 | `app.bsky.graph.getFollows` (Graph, Bluesky alone — §12.11) | AppView | none |
+| `com.atproto.repo.getRecord` (a drop — §12.12) | the drop owner's PDS | none |
+| `com.atproto.sync.getBlob` (a drop's blobs — §12.12) | the drop owner's PDS | none |
 
 **AppView hosts**, in order: `https://public.api.bsky.app`, then
 `https://api.bsky.app`, failing over on a network error, a 403 or a 5xx, and
@@ -1504,7 +1510,9 @@ request per page whatever the account follows. A client SHOULD keep at most
 four atproto requests in flight and SHOULD NOT refresh atproto sources more
 often than every 60 seconds. The AppView's limits for unauthenticated reads
 were not measured; a 429 is treated as §4 treats `FLOOD_WAIT`: back off for the
-`Retry-After` (or `RateLimit-Reset`) it sends, else 60 seconds.
+`Retry-After` (or `RateLimit-Reset`) it sends, else 60 seconds. A drop's
+`getRecord` counts against the four; its blob downloads have a lane of their
+own (§12.12 rule 5), under the same back-off.
 
 ### 12.5 atproto sources in the §4.8 merge
 
@@ -1605,18 +1613,36 @@ How WaveLoop represents a drop, which is what a reader recognises:
 - **The drop link**: `https://waveloop.app/drop/?at=<drop at-uri>`, or the
   older `?d=<did>&r=<rkey>`.
 
-A reader finds the drop the way WaveLoop's own reader does — the external
-embed's `uri`, then link facets, then URLs in the text; first hit wins — and
-admits the post **only when the drop is in the poster's own repo**. The tag is
-open to anyone, and so is pasting somebody else's drop link; the owner check is
-what makes a hit a drop by the person shown on it. A `d=` that is a handle is
-not resolved: attribution here runs on DIDs, and a handle is a claim until it
-is. Vectors: `atproto.drop`, and the merge scenario that mixes a drop, a bare
-hashtag, somebody else's drop and a duplicate.
+A reader finds the drop the way WaveLoop's own reader does, from three places
+in this order:
 
-In v1 the announcement renders as any atproto post (§12.5) with its external
-card, and the drop link opens on waveloop.app. The drop record and its blobs
-are not fetched (`PRODUCT §2.36` says what that costs).
+1. the external embed's `uri` — `app.bsky.embed.external`, or the `media` half
+   of `app.bsky.embed.recordWithMedia`;
+2. the `uri` of each `#link` facet, in facet order;
+3. each `http://` or `https://` URL in the text, in text order.
+
+A candidate is a drop link when its host is `waveloop.app` or a subdomain of it
+(a look-alike such as `waveloop.app.example` is not), its path begins `/drop`,
+and it carries either `at=` — an at-uri whose collection is
+`app.waveloop.social.drop` — or `d=` (a DID) and `r=` (a record key). The
+**first** candidate that is a drop link decides, and the post has a drop **only
+when that drop is in the poster's own repo**: its DID is the post author's. A
+later candidate is not consulted, so a post that pastes somebody else's drop
+first has no drop, whatever follows. The tag is open to anyone, and so is
+pasting somebody else's drop link; the owner check is what makes a hit a drop
+by the person shown on it. A `d=` that is a handle is not resolved: attribution
+here runs on DIDs, and a handle is a claim until it is. Vectors:
+`atproto.drop`, and the merge scenario that mixes a drop, a bare hashtag,
+somebody else's drop and a duplicate.
+
+The drop ref is `at://<did>/app.waveloop.social.drop/<rkey>`, always in DID
+form. It is recognised on a post from any source — a linked account, the
+following source or the tag — not only the tag source, because WaveLoop
+members post drops to their ordinary Bluesky feeds too. Admission, the merge
+and the card's first paint use the post view alone; the post renders as any
+atproto post (§12.5) with its external card, and §12.12 reads the drop itself
+into that card afterwards. A drop that cannot be read leaves the post exactly
+as it was.
 
 The tag source is trollable by construction — anyone can announce a drop. It is
 off until the reader turns it on, it passes through every filter in §12.9, and
@@ -1908,6 +1934,22 @@ or deletes it.
   measured; and a Following that kept reading after `Sign Out of Bluesky`
   would make sign-out mean something other than what it says.
 - **DMs.** `transition:chat.bsky` is not requested.
+- **Stereo or spatial video.** WaveLoop's drop lexicon has six kinds and none
+  of them is a moving 3D picture: `video` is a flat mp4, and the 3D kinds —
+  `stereo`, `depth`, `model` — are stills and a mesh (§12.12). MV-HEVC spatial
+  video or side-by-side video would need a new `kind` in WaveLoop's lexicon
+  first, and no WaveLoop instrument makes either (checked 2026-09-25). On an
+  iPhone or a Mac, AVFoundation shows MV-HEVC as one flat view anyway. Nothing
+  here reads it; a drop of a kind this section does not name renders as its
+  link card (§12.12 rule 8), so a future kind degrades instead of breaking.
+- **Render a GLB.** A `model` drop's `media` is glTF binary, and no Apple
+  framework reads glTF (`MDLAsset.canImportFileExtension("glb")` is false on
+  macOS 26.5; SceneKit, RealityKit and ModelIO have no glTF symbol in the 26.2
+  SDK). A glTF dependency for a kind nothing produces yet was declined; the
+  model renders from its optional `usdz`, or as its link card (§12.12 rule 7).
+- **Play Bluesky's own video embed.** Still `Plays on Bluesky` (`PRODUCT
+  §2.36`). Drops are iOS/Catalyst-first (§12.12), which weakens §2.36's parity
+  argument for HLS without deciding it; reversing that is its own decision.
 
 ### 12.11 Signed in to Bluesky alone
 
@@ -1954,3 +1996,242 @@ what it is not.
 - **Sign-outs** are §7's: Bluesky's is the last one out, and clears everything
   but the safety lists. Telegram's, when a session is held, clears Telegram's
   part and writes `telegramSignedOut`, and the reader lands here.
+
+### 12.12 Reading a drop
+
+§12.6 finds a drop ref on a post, and admission, the merge and the first paint
+never need more than that. This section reads the drop itself — its record and
+its blobs, from the owner's PDS — into a card that is already on screen, so a
+WaveLoop drop renders as what it is: a sound, a picture, a video, a stereo
+pair, a depth photo or a model (`PRODUCT §2.36.1`). It is additive in the
+strongest sense: every failure here leaves the post exactly the §12.5 card it
+already was.
+
+**Platforms.** iOS and Mac Catalyst implement this section. Web and Android
+lag it and render every drop as its link card, which is rule 8's fallback, so
+they are behind the spec, not in conflict with it. WaveLoop's own viewer at
+`waveloop.app/drop/` is the reference rendering for rule 10's constants.
+
+**Measured on 2026-09-25.** The relay's
+`com.atproto.sync.listReposByCollection?collection=app.waveloop.social.drop`
+answered `{"repos":[]}` on `bsky.network` and both `relay1` hosts, while the
+same call for another collection listed repos: **no drop exists on the network
+yet.** Nothing below has been run against a real one. Its constants come from
+WaveLoop's lexicon and viewer, and the tests use synthetic records and blobs
+(`atproto.dropRecord`, and fixtures ported from the viewer's demo generators).
+
+The PDS's `getBlob`, measured against a Bluesky-hosted PDS with a 742,493-byte
+JPEG blob and a 13.9 MB video blob:
+
+| Request | Answer |
+| --- | --- |
+| `Range: bytes=0-1023` | `200`, the whole blob (`content-length` equal to its size), no `Accept-Ranges`, no `Content-Range` |
+| headers on every blob | `content-type` as stored, `access-control-allow-origin: *`, `cache-control: private`, `content-security-policy: default-src 'none'; sandbox`, `x-content-type-options: nosniff` |
+| rate limit | `ratelimit-policy: 3000;w=300` — 3000 requests per 300-second window, `RateLimit-*` exposed to the page |
+| a CID the repo does not hold | `400 {"error":"InvalidRequest","message":"Blob not found"}` |
+| `getRecord` for a drop that does not exist | `400 {"error":"RecordNotFound"}` |
+
+Twelve rules.
+
+1. **When.** A drop is read when its card has been on screen for 300 ms, or is
+   tapped — never at admission, in the merge, or ahead of the scroll position.
+   A fling past a card reads nothing. A post the `PRODUCT §2.18` filter hides is never
+   read, and neither is a drop whose post the reader hid, blocked or muted
+   (§12.9): what never paints never costs a request. One read per drop ref per
+   refresh at most, whatever number of cards show it.
+
+2. **Resolving.** The owner's DID document gives the PDS, exactly as §12.3 step
+   1, from the same DID-document cache. Then
+   `GET <pds>/xrpc/com.atproto.repo.getRecord?repo=<did>&collection=app.waveloop.social.drop&rkey=<rkey>`,
+   with no authentication. The record is a drop **only if** the response's
+   `uri` is exactly the drop ref, `value.$type` is
+   `app.waveloop.social.drop`, and `value.kind` and `value.createdAt` are
+   non-empty strings (the lexicon's two required fields). The `uri` check is
+   §12.3's: a record read out of another repo proves nothing, and §12.6's owner
+   check is only worth something if the bytes come from that owner. The
+   response's `cid` is kept beside the record.
+
+3. **The record cache.** In memory, count-bounded: at most **64** drop refs,
+   least recently used out first. It holds the parsed record and its `cid`, or
+   a definitive no — `RecordNotFound`, a DID `plc.directory` answers 404 or 410
+   for, a DID document with no `#atproto_pds`, or a record rule 2 refuses —
+   which lasts the session. A network error, a 5xx or a 429 is not an answer:
+   nothing is cached, and the card tries again the next time it comes on
+   screen after the back-off. A record is a few hundred bytes; 64 is about one
+   screenful of drops many times over, and costs nothing worth measuring.
+
+4. **Blob references.** A blob field is
+   `{"$type":"blob","ref":{"$link":<cid>},"mimeType":…,"size":…}`, or the
+   legacy `{"cid":<cid>,"mimeType":…}`, which has no `size`. Its URL is
+   `<pds>/xrpc/com.atproto.sync.getBlob?did=<did>&cid=<cid>`. A field is
+   **absent** — as though the record did not carry it — when:
+   - its CID is not a base32 CIDv1 string (`b` then eight or more of
+     `[a-z2-7]`). The CID goes into a URL, and this is what keeps it a CID;
+   - its `mimeType` is outside what the field accepts (table below);
+   - its declared `size` is over the field's cap. Refused before any request.
+
+   | Field | Accepts | Cap (bytes, the lexicon's `maxSize`) |
+   | --- | --- | --- |
+   | `preview` | `image/jpeg`, `image/png`, `image/webp` | 1,000,000 |
+   | `left`, `right` | `image/jpeg`, `image/png`, `image/webp` | 5,000,000 |
+   | `depth` | `image/png`, `image/jpeg` | 5,000,000 |
+   | `media` | by `kind`: `audio/*`; `video/*`; `image/*` for `image` and `depth`; `model/gltf-binary` or `application/octet-stream` for `model`; anything for `stereo` (never fetched, rule 7) | 50,000,000 |
+   | `usdz` | `model/vnd.usdz+zip` | 50,000,000 |
+
+   The cap holds on the wire as well: a response whose `content-length` is
+   over the cap, or larger than the declared `size`, is aborted before its
+   body is read, and a body that runs past either is aborted at that byte.
+   A legacy reference with no `size` is capped by the table alone.
+
+5. **The blob lane.** `getBlob` ignores `Range` (the table above), so nothing
+   streams: every blob is a whole-file download to disk before anything plays,
+   decodes or loads it — `AVPlayer` cannot seek into a response that always
+   starts at byte 0, and a cancelled download starts again from zero. Blob
+   downloads run in a lane of their own, **at most two in flight**, apart from
+   §12.4's four: a 50 MB video holding one of the four for a minute would stall
+   every feed page behind it. A 429 from a PDS backs off that host under
+   §12.4's rule. A download the reader asked for (a tap) goes ahead of one the
+   scroll asked for (rule 7's on-screen blobs), and an on-screen download is
+   cancelled when its card leaves the screen — its scroll view's visible
+   bounds, which in a list that keeps every row alive is the only sign it
+   left; a tapped one runs until the reader cancels it or leaves the viewer.
+   A card back on screen starts a fresh download rather than waiting on the
+   cancelled one, and a cancel is not a failure under rule 8.
+
+6. **The blob cache.** One disk cache in the platform's discardable cache
+   directory, keyed by CID, at most **16 files and 200 MB** — four blobs at the
+   50 MB cap — least recently used out first, with the file being played,
+   decoded or shown pinned until it is released. A CID names its bytes, so an
+   entry is never stale and is never revalidated. A download lands in a
+   temporary file and enters the cache only when complete; a client SHOULD
+   first check it against the CID where the CID is the raw-codec SHA-256 form
+   every atproto blob uses (`bafkrei…`), and discard a mismatch as a failed
+   read — a cache keyed by content address is only honest if the content was
+   checked. A blob over 50 MB never reaches the cache (rule 4). Decoded pixels
+   are not here; they are rule 9's.
+
+7. **Which blobs, per kind, and when.** The **poster** is the announcement's
+   own image from the post view, already hydrated to the AppView's CDN: the
+   external embed's `thumb` (WaveLoop sets it from `preview`), else the first
+   image's `thumb`, else the video's `thumbnail`. `preview` is fetched from the
+   PDS only when the post view carries none of those. Beyond the poster:
+
+   | `kind` | Needs | Fetched on screen | Fetched on tap | Never fetched |
+   | --- | --- | --- | --- | --- |
+   | `audio` | `media` | — | `media` | — |
+   | `video` | `media` | — | `media` | — |
+   | `image` | `media` | — | `media` | — |
+   | `stereo` | `left`, `right` | `left`, `right` | — | `media` (the original spatial HEIC, up to 50 MB, which no renderer here reads) |
+   | `depth` | `media`, `depth` | `media`, `depth` | — | — |
+   | `model` | `usdz` | — | `usdz` | `media` (GLB: §12.10) |
+
+   Stereo and depth animate inside the card, so their blobs load when the card
+   is on screen; everything else shows its poster until the reader asks.
+
+8. **Fallback: the link card, never an error.** The post stays exactly the
+   §12.5 card — poster, title, `waveloop.app`, tap opens the drop link — when
+   the record cannot be read or rule 2 refuses it; when `kind` is not one of
+   the six (`kind` is an open set in the lexicon, `knownValues`, so WaveLoop
+   may add one tomorrow); when a field the kind needs is absent (rule 4); and
+   when a blob the card fetched fails. A `model` drop with no `usdz` is this
+   case. Nothing on the card says a drop failed: the link card is a whole,
+   working answer, and it is the one web and Android give today.
+
+9. **Decoded pixels share the one image budget.** Every drop image — poster,
+   eye, depth map, full image — decodes from its file at the size it is drawn
+   (on iOS an ImageIO thumbnail decode, never a full decode followed by a resize) and
+   is charged to the client's single decoded-image budget, the one TDLib
+   renditions use; a drop never opens a second in-memory image cache.
+   Renditions:
+   - **card**: the media's drawn width × screen scale. An eye on a 440 pt, 3×
+     phone at 4:3 is at most 1320 × 990 × 4 bytes ≈ 5.2 MB, so a stereo pair is
+     ≈ 10.5 MB;
+   - **depth map**: one 8-bit channel at half the card width, ≈ 0.33 MB for the
+     same card; a depth map is smooth, and rule 10 reads one channel of it;
+   - **full screen**: `image` decodes at the viewer's size on tap and zooms
+     like any photo. `stereo` and `depth` are drawn fit to the screen from
+     their card renditions (in portrait, the same width) and do not zoom: a
+     zoomable decode of both eyes at the screen's long edge is about 2 × 25 MB,
+     more than the 48 MB photo share of the 64 MB ceiling.
+
+   The decoded renditions are purged on a memory warning with everything else
+   in that budget. The disk cache (rule 6) is not memory and stays.
+
+10. **Rendering, the same numbers as WaveLoop's viewer.** So that a drop looks
+    the same on waveloop.app and here.
+    - **Stereo.** Each eye is cover-fit into its box and shifted horizontally
+      by `dx × box width`: the left eye by `+shift/2`, the right by
+      `−shift/2`. `shift` starts at `stereo.disparityAdjust / 1000` (0 when
+      absent or outside the lexicon's −200…200) and moves by **0.004** per
+      converge step, kept within ±0.2. Three modes. **Wiggle** (the default):
+      one box, the eye shown is `floor(t / 110 ms) mod 2` — left, then right,
+      110 ms each, the wigglegram beat. **Anaglyph**: one box, red from the
+      left eye and green and blue from the right (the viewer's multiply-red,
+      multiply-cyan, add). **Side by side**: two half-width boxes with a 2 pt
+      divider in the background colour, parallel by default; **swap**
+      exchanges the eyes, which makes it cross-eyed. `stereo.baselineMm` and
+      `hfovDeg` are not used, as they are not by WaveLoop's viewer.
+    - **Depth.** A per-pixel parallax, not a mesh. With `v` the pixel's
+      position in the media in 0…1 (y down):
+      `uv = (v − 0.5) × zoom + 0.5`, `d = depth(uv) − 0.5` (the map's value in
+      0…1, near = white),
+      `colour = image(clamp(uv + shift × d, 0.002, 0.998))`, where
+      `zoom = 1 − 1.2 × amp` hides the edge smear and
+      `shift = (cx × amp, cy × amp × 0.6)`. `amp` starts at **0.04**; each
+      `Depth +` multiplies it by 1.3 and each `Depth −` divides by 1.3, within
+      **0.005…0.12**. `(cx, cy)` eases toward a target `(gx, gy)` in −1…1 by
+      0.08 per 1/60 s — per frame `k = 1 − 0.92^(Δt × 60)`, so a 120 Hz display
+      eases at the viewer's 60 Hz rate. The target is the latest input (rule
+      11); after **1.8 s** with no input it is the sway —
+      `gx = 0.7 sin(0.9 t)`, `gy = 0.35 sin(1.3 t + 1.2)`, `t` in seconds — or
+      `(0, 0)` with sway off. Sway is on by default.
+    - **Model.** The `usdz` in a scene viewer: the reader orbits by dragging and
+      zooms by pinching, and the model turns on its own at 32° a second (the
+      viewer's `auto-rotate` default), pausing while touched, until `Spin` is
+      turned off. On
+      iPhone and iPad the same file opens in AR Quick Look. A Mac has no AR.
+    - **Audio, video, image** use the players and viewer every other post
+      uses, over the cached file (`PRODUCT §2.11`).
+
+11. **Input, motion, and when nothing runs.**
+    - **Depth input.** Device motion on iPhone and iPad: the attitude's roll and
+      pitch relative to the attitude when the view came on screen, each ÷ 18°
+      and clamped to −1…1 (the viewer's tilt mapping), axes following the
+      interface orientation. On iOS this needs no permission prompt, unlike
+      the web's `DeviceOrientationEvent`. The pointer on a Mac: its position
+      over the media mapped to −1…1. Dragging, in the full-screen viewer on
+      every device and in the card on a Mac; in the card on a phone a drag is
+      the feed's scroll, and taking it would break scrolling. In a Mac card a
+      press that ends within 4 pt of where it began is a click, and opens the
+      viewer as a tap does on a phone. One device-motion
+      source for the whole app, started while a depth view is on screen and
+      stopped when none is.
+    - **Pausing.** Wiggle and depth draw only while on screen and the app is
+      active. A card under the full-screen viewer is off screen. At most one
+      model scene exists across the app, the way one video plays at a time, and
+      it is torn down when its viewer closes.
+    - **Reduce Motion.** Stereo opens in side by side, and wiggle is still one
+      tap away; depth neither sways nor follows device motion, and follows
+      drag and the pointer only; a model does not auto-rotate. Wiggle
+      alternates two views of one scene that differ by a horizontal shift, not
+      a whole-frame change in brightness; Reduce Motion is still the reader's
+      word on moving images, so it is honoured.
+
+12. **What a drop does not change.** The post's attribution, time, footer,
+    sheet, share link and safety controls are §12.5's and `PRODUCT §2.36`'s,
+    unchanged. A drop is not a source and never enters the merge. Its `text`,
+    `app` and `tags` are not rendered: the announcement's own text is the
+    post's words, it is what the AppView's labels were applied to (§12.9), and
+    a second caption from a record no labeler was asked about would put
+    unlabelled words on the card. Labels on the post and its author already
+    decided whether the post, and so its drop, paints at all. Reading a drop
+    tells the owner's PDS host the reader's address and which drop they looked
+    at — the exposure §12.3's link check already has, limited here to posts on
+    screen. No drop is read in the demo (`PRODUCT §2.22.4`), by the public
+    reader or by the Connector.
+
+Vectors: `atproto.dropRecord` — a getRecord answer and the drop ref in; out,
+what renders (`audio`, `video`, `image`, `stereo`, `depth`, `model`, or `link`
+for rule 8), which fields load on screen and on tap, the aspect ratio, and
+stereo's starting shift. Web and Android do not run them yet, as they do not
+implement this section.

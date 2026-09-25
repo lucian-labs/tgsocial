@@ -19,6 +19,18 @@ Requirements: a Mac with Xcode 16+ (26 recommended), [xcodegen]
 required — a free Apple ID signs builds that run on your own device for
 7 days at a time (rebuild to renew).
 
+Xcode 26 also needs its **Metal toolchain**, a separate download: the depth
+drop's parallax is a Metal shader (`ios/Sources/Components/DropDepth.metal`,
+PROTOCOL §12.12 rule 10), and without the toolchain the build stops there.
+Install it once:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+Every `make` target that builds checks for it first (`make metal-check`)
+and prints this command if it is missing.
+
 ```bash
 git clone https://github.com/lucian-labs/tgsocial && cd tgsocial/ios
 cp Secrets.xcconfig.example Secrets.xcconfig    # fill in TG_API_ID / TG_API_HASH
@@ -83,6 +95,16 @@ cd web && node test/protocol.test.mjs && node test/smoke.mjs
 
 All three load the same [docs/card-vectors.json](./card-vectors.json), so a
 fork that passes them still speaks the protocol.
+
+WaveLoop drops (PROTOCOL §12.12) had no real example on the network when
+they were built, so a Debug iOS or Mac build launched with `-DropGallery`
+shows one real drop card per kind — stereo, depth, model, image, sound,
+video — over a stubbed PDS, with no sign-in (`ios/Sources/Debug/DropGallery.swift`;
+absent from Release builds):
+
+```bash
+xcrun simctl launch booted ca.lucianlabs.tgsocial -DropGallery
+```
 
 [xcodegen]: https://github.com/yonaskolb/XcodeGen
 [tdlib/td]: https://github.com/tdlib/td
