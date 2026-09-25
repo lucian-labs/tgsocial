@@ -21,6 +21,8 @@ struct SettingsScreen: View {
             hidden
             // PRODUCT §2.33: between HIDDEN and CONTACT, present only when there is a private layer.
             if !model.isDemo { PrivateSettingsSection() }
+            // PRODUCT §2.35: between PRIVATE and CONTACT, always there outside the demo (§2.40).
+            if !model.isDemo { BlueskySettingsSection() }
             contact
 
             // §2.22.3: `Sign Out` is not in the demo at all — there is no session to leave.
@@ -49,27 +51,39 @@ struct SettingsScreen: View {
         } else {
             HPListCard {
                 ForEach(Array(list.enumerated()), id: \.element) { i, username in
-                    let node = model.node(username)
-                    HPListItem(isLast: i == list.count - 1) {
-                        Button { model.path.append(.profile(username: username)) } label: {
-                            HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
-                                NodeAvatar(photo: node?.photo, size: HPTokens.Space.avatarRow,
-                                           initial: String((node?.displayName ?? username).prefix(1)))
-                                VStack(alignment: .leading, spacing: 0) {
-                                    HPBody(node?.displayName ?? "@" + username, strong: true).lineLimit(1)
-                                    HPMonoSmall("@" + username).lineLimit(1)
-                                }
-                            }
-                            .frame(minHeight: HPTokens.Space.touchMin)
-                            .contentShape(Rectangle())
+                    // PROTOCOL §12.9: the list may hold DIDs. A DID is an account, not a node: no
+                    // avatar, and no profile push — a Telegram lookup of `did:plc:…` finds nothing.
+                    if Atproto.normaliseDid(username) != nil {
+                        BlueskyAccountSafetyRow(did: username, action: "Unblock", isLast: i == list.count - 1) { handle in
+                            model.unblockAccount(did: username, handle: handle)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Open \(node?.displayName ?? username)")
-                    } trailing: {
-                        HPButton("Unblock", style: .ghost, size: .small) { model.unblock(username) }
+                    } else {
+                        nodeRow(username, isLast: i == list.count - 1)
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder private func nodeRow(_ username: String, isLast: Bool) -> some View {
+        let node = model.node(username)
+        HPListItem(isLast: isLast) {
+            Button { model.path.append(.profile(username: username)) } label: {
+                HStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
+                    NodeAvatar(photo: node?.photo, size: HPTokens.Space.avatarRow,
+                               initial: String((node?.displayName ?? username).prefix(1)))
+                    VStack(alignment: .leading, spacing: 0) {
+                        HPBody(node?.displayName ?? "@" + username, strong: true).lineLimit(1)
+                        HPMonoSmall("@" + username).lineLimit(1)
+                    }
+                }
+                .frame(minHeight: HPTokens.Space.touchMin)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(node?.displayName ?? username)")
+        } trailing: {
+            HPButton("Unblock", style: .ghost, size: .small) { model.unblock(username) }
         }
     }
 
@@ -83,31 +97,42 @@ struct SettingsScreen: View {
         } else {
             HPListCard {
                 ForEach(Array(list.enumerated()), id: \.element) { i, key in
-                    // PRODUCT §2.32: a private channel shows its title with a `Private` pill in
-                    // place of a username; its key is `c/<id>` (PROTOCOL §7.2).
-                    let privateId = PrivateLink.supergroupId(fromSourceKey: key)
-                    let privateInfo = privateId.flatMap { model.privateChatId(supergroupId: $0) }.flatMap { model.privateChannel(chatId: $0) }
-                    let feed = privateId == nil ? model.feedInfo(key) : privateInfo
-                    let title = feed?.title ?? (privateId == nil ? "@" + key : "Private channel")
-                    HPListItem(isLast: i == list.count - 1) {
-                        Button { model.openFeed(sourceKey: key) } label: {
-                            VStack(alignment: .leading, spacing: 0) {
-                                HStack(spacing: HPTokens.Space.rowGap) {
-                                    HPBody(title).lineLimit(1)
-                                    if privateId != nil { HPPill("Private", tone: .neutral) }
-                                }
-                                if privateId == nil { HPMonoSmall("@" + key).lineLimit(1) }
-                            }
-                            .frame(minHeight: HPTokens.Space.touchMin, alignment: .leading)
-                            .contentShape(Rectangle())
+                    if Atproto.normaliseDid(key) != nil {
+                        // §12.9: a muted account, by DID — the same row as a blocked one (§2.40).
+                        BlueskyAccountSafetyRow(did: key, action: "Unmute", isLast: i == list.count - 1) { handle in
+                            model.unmuteAccount(did: key, handle: handle)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Open feed \(title)")
-                    } trailing: {
-                        HPButton("Unmute", style: .ghost, size: .small) { model.unmute(sourceKey: key, title: title) }
+                    } else {
+                        feedRow(key, isLast: i == list.count - 1)
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder private func feedRow(_ key: String, isLast: Bool) -> some View {
+        // PRODUCT §2.32: a private channel shows its title with a `Private` pill in
+        // place of a username; its key is `c/<id>` (PROTOCOL §7.2).
+        let privateId = PrivateLink.supergroupId(fromSourceKey: key)
+        let privateInfo = privateId.flatMap { model.privateChatId(supergroupId: $0) }.flatMap { model.privateChannel(chatId: $0) }
+        let feed = privateId == nil ? model.feedInfo(key) : privateInfo
+        let title = feed?.title ?? (privateId == nil ? "@" + key : "Private channel")
+        HPListItem(isLast: isLast) {
+            Button { model.openFeed(sourceKey: key) } label: {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: HPTokens.Space.rowGap) {
+                        HPBody(title).lineLimit(1)
+                        if privateId != nil { HPPill("Private", tone: .neutral) }
+                    }
+                    if privateId == nil { HPMonoSmall("@" + key).lineLimit(1) }
+                }
+                .frame(minHeight: HPTokens.Space.touchMin, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open feed \(title)")
+        } trailing: {
+            HPButton("Unmute", style: .ghost, size: .small) { model.unmute(sourceKey: key, title: title) }
         }
     }
 
@@ -126,6 +151,8 @@ struct SettingsScreen: View {
                             // §2.20: the row names its channel and message id, never the content —
                             // showing a preview of the thing someone reported would undo the report.
                             HPBody(Self.hiddenTitle(item, model: model)).lineLimit(1)
+                            // §2.40: a Bluesky post's record key, in mono, above the reason.
+                            if let rkey = Self.blueskyPost(item)?.rkey { HPMonoSmall(rkey).lineLimit(1) }
                             HPMonoSmall("\(item.reason) \u{00B7} reported \(Moderation.reportedDate(item.at))")
                                 .lineLimit(1)
                         }
@@ -142,6 +169,8 @@ struct SettingsScreen: View {
     /// A private post's key is `c/<id>/<n>` (PROTOCOL §7.2); its row reads the channel title with
     /// the key column `c/<id> · <n>` (PRODUCT §2.32), never a username it does not have.
     static func hiddenTitle(_ item: HiddenItem, model: AppModel) -> String {
+        // §2.40: `Bluesky · @ana.bsky.social` — an at-uri split on `/` read as a channel was `@at:`.
+        if let at = blueskyPost(item) { return "Bluesky \u{00B7} " + (model.blueskyHandle(did: at.did) ?? at.did) }
         if let (sourceKey, n) = Self.privateParts(item.key) {
             let title = PrivateLink.supergroupId(fromSourceKey: sourceKey)
                 .flatMap { model.privateChatId(supergroupId: $0) }
@@ -153,6 +182,12 @@ struct SettingsScreen: View {
         let id = parts.count > 1 ? String(parts[1]) : ""
         let title = model.feedInfo(channel)?.title ?? "@" + channel
         return id.isEmpty ? title : "\(title) \u{00B7} \(id)"
+    }
+
+    /// A hidden Bluesky post's key is its at-uri (PROTOCOL §12.9).
+    static func blueskyPost(_ item: HiddenItem) -> Atproto.AtUri? {
+        guard let at = Atproto.parseAtUri(item.key), at.collection == Atproto.postCollection else { return nil }
+        return at
     }
 
     /// `c/<id>/<n>` → (`c/<id>`, `<n>`); nil for a username key.

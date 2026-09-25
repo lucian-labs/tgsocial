@@ -302,7 +302,10 @@ struct SignOutModal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPH2("Sign out of tgsocial?")
-            HPMuted("Your node stays on Telegram.")
+            // PRODUCT §2.35: the Bluesky session is local state and goes too; said only when one exists.
+            HPMuted(model.bluesky?.isSignedIn == true
+                    ? "Your node stays on Telegram. " + BlueskyCopy.telegramSignOutLine
+                    : "Your node stays on Telegram.")
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {

@@ -86,6 +86,16 @@ enum Modal: Equatable {
     case deleteNode
     /// PRODUCT §2.22.5: the demo sheet, in the status sheet's place.
     case demo
+    /// PRODUCT §2.35: the handle sheet. `prefill` is the handle when Bluesky ended the session.
+    case blueskySignIn(prefill: String?)
+    /// PRODUCT §2.35: `Sign out of Bluesky?`
+    case blueskySignOut
+    /// PRODUCT §2.37: the link sheet — both public lines, then the check.
+    case blueskyLink
+    /// PRODUCT §2.37: `Unlink @x?`
+    case blueskyUnlink
+    /// PRODUCT §2.40: `Block @ana.bsky.social?` — an account with no node, blocked by DID.
+    case blockAccount(did: String, handle: String)
     /// PRODUCT §2.25: the vouch composer — one capability, one message.
     case vouch(node: String)
     /// PRODUCT §2.25: the vouch sheet — §2.12's comment sheet with two strings changed.
@@ -186,6 +196,8 @@ final class AppModel {
     private(set) var comments: CommentRepository!
     /// PROTOCOL §11.4: every TDLib call the private layer makes.
     @ObservationIgnored private(set) var privateLayer: PrivateRepository!
+    /// PROTOCOL §12: Bluesky, additive. Observable — Settings, compose and the feed read its state.
+    private(set) var bluesky: BlueskyService!
     #if targetEnvironment(macCatalyst)
     /// CONNECTOR.md: the local bridge and the switches that govern it. Mac only.
     private(set) var connector: ConnectorService!
@@ -225,6 +237,13 @@ final class AppModel {
     /// written back with EVERY card write — see `writeCard`. Nil is the state of every card written
     /// before §10 existed, and the whole work surface is absent rather than empty in it.
     var myWork: Work?
+    /// My card's `atproto.did` line (PROTOCOL §12.2), written back with EVERY card write the way
+    /// `myWork` is (§10.6) — a follow rewrites the whole pinned message. Nil for every card that
+    /// carries none, which is every card of someone who never linked Bluesky.
+    var myAtprotoDid: String?
+    /// The last card write's failure in Telegram's words, nil after a success — the §2.37 link
+    /// sheet's `Telegram said: <error>`.
+    @ObservationIgnored var lastCardWriteError: String?
     /// `.newerVersion` when my pinned card carries a later protocol version (PROTOCOL §8): reads show the notice, writes refuse.
     var myCardState: CardState = .ok
     var myTitle = ""
@@ -363,10 +382,13 @@ final class AppModel {
         comments = CommentRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         privateLayer = PrivateRepository(td: td, store: store, nodes: nodes, sends: sends, activity: activity)
         privateRecord = privateLayer.record
+        bluesky = BlueskyService(store: store, activity: activity)
+        feed.atproto = bluesky
         confirmPrivateOnCard = store.load(Bool.self, LocalStore.privateConfirmOff) != true
         myNode = store.load(MyNode.self, LocalStore.myNode)
         myCard = store.load(Card.self, LocalStore.myCard)
         myWork = store.load(Work.self, LocalStore.myWork)
+        myAtprotoDid = store.load(String.self, LocalStore.myAtprotoDid)
         feedMode = store.load(FeedMode.self, LocalStore.feedMode) ?? .all
         myTitle = store.load(String.self, LocalStore.myTitle) ?? ""
         setupSkipped = store.load(Bool.self, LocalStore.setupSkipped) ?? false
@@ -388,6 +410,12 @@ final class AppModel {
     /// its handle lazily now (PRODUCT §2.22.4), and `init` runs before there is a window to report
     /// a failure in. The bridge restores itself here for the same reason: binding a socket is work.
     func startServices() async {
+        // §2.39: one toast, once, when a read finds the session over.
+        bluesky.onSessionEnded = { [weak self] in self?.showToast(BlueskyCopy.sessionEnded, tone: .bad) }
+        bluesky.onError = { [weak self] in self?.noteError($0) }
+        // §12.5: a background link check or block read changed what the merge admits. `refreshFeed`
+        // coalesces, so this is at most one more pass behind whatever is already running.
+        bluesky.onSourcesChanged = { [weak self] in Task { await self?.refreshFeed() } }
         // A demo entered before this ran must not be handed a client behind its back.
         guard !isDemo else { return }
         td.start()
@@ -583,7 +611,7 @@ final class AppModel {
         audio.stop()
         video.pauseActive()
 
-        myNode = nil; myCard = nil; myWork = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        myNode = nil; myCard = nil; myWork = nil; myAtprotoDid = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
         myCardFetchedAt = nil; nodeLookupDone = false; setupSkipped = false; inSetup = false
         feedMode = .all
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
@@ -878,6 +906,8 @@ final class AppModel {
             myCardFetchedAt = info.fetchedAt
             // PROTOCOL §11.6: a §2-only client rewrote the card and dropped `private.id`; put it back.
             await repairPrivateId(found: info.privateId)
+            // PROTOCOL §12.2: the same repair for `atproto.did`, while signed in to that account.
+            await repairAtprotoDid(found: info.atprotoDid)
         } catch {
             if !isOffline { showToast(TDFailure(error).message, tone: .bad) }
         }
@@ -888,12 +918,13 @@ final class AppModel {
         myCardFetchedAt = info.fetchedAt
         myNode = node
         myCardState = info.state == .newerVersion ? .newerVersion : .ok
-        if myCardState == .ok { myCard = info.card; myWork = info.work } else { myCard = nil; myWork = nil }
+        if myCardState == .ok { myCard = info.card; myWork = info.work; myAtprotoDid = info.atprotoDid } else { myCard = nil; myWork = nil; myAtprotoDid = nil }
         myTitle = info.title
         myPhoto = info.photo
         store.save(node, LocalStore.myNode)
         store.save(myCard, LocalStore.myCard)
         store.save(myWork, LocalStore.myWork)
+        store.save(myAtprotoDid, LocalStore.myAtprotoDid)
         store.save(info.title, LocalStore.myTitle)
         if myCardState == .newerVersion, !wasNewer { showToast(Self.newerCardText, tone: .bad) }
     }
@@ -973,6 +1004,10 @@ final class AppModel {
             try await perform {
                 try await self.feed.resolveSources(me: self.myNode?.username, myFeeds: self.myCard?.feeds ?? [],
                                                    follows: self.myCard?.follows ?? [], privateSources: self.privateSources)
+                // PROTOCOL §12.5: the atproto sources join the same merge. None, for anyone
+                // whose network never linked Bluesky and who never signed in. Synchronous: the link
+                // checks run beside this pass, never in front of it (§12.5 rule 6).
+                self.prepareBlueskySources()
                 try await self.feed.refresh()
             }
             feedStale = false
@@ -1121,14 +1156,21 @@ final class AppModel {
         store.save(next, LocalStore.myCard)
         do {
             // `myPrivateId` rides on every write (PROTOCOL §11.6), the way `myWork` does (§10.6).
-            let updated = try await perform { try await self.cardWriter.writeCard(next, work: self.myWork, privateId: self.myPrivateId, node: node) }
+            // …and `myAtprotoDid` (§12.2), the same rule a third time.
+            let updated = try await perform {
+                try await self.cardWriter.writeCard(next, work: self.myWork, privateId: self.myPrivateId,
+                                                    atprotoDid: self.myAtprotoDid, node: node)
+            }
             myNode = updated
             store.save(updated, LocalStore.myNode)
+            lastCardWriteError = nil
             return true
         } catch {
             myCard = previous
             store.save(previous, LocalStore.myCard)
             let f = TDFailure(error)
+            // PRODUCT §2.37: the link sheet quotes Telegram's words on its step-2 failure.
+            lastCardWriteError = f.message
             // PRODUCT §2.23: the 4096-cap refusal is §2's, unchanged, plus the one line that says
             // which of the writer's own text is standing in the way. That second line is the only
             // part that tells them what to do about it, and it matters more now that a work card
@@ -1341,7 +1383,9 @@ final class AppModel {
 
     // MARK: Compose (§4.9)
 
-    func post(text: String, photoPath: String?, to feedUsername: String) async -> Bool {
+    /// `alsoBluesky` is PRODUCT §2.38's per-post opt-in. It runs only after the Telegram post
+    /// succeeded — Telegram failing sends nothing to Bluesky — and never for a private target.
+    func post(text: String, photoPath: String?, to feedUsername: String, alsoBluesky: Bool = false) async -> Bool {
         if refuseDemoWrite() { return false }
         if isOffline { showToast("You're offline.", tone: .bad); return false }
         // PRODUCT §2.28: a private target is a `c/<id>` key, resolved through the record — it has
@@ -1354,11 +1398,19 @@ final class AppModel {
         if resolved == nil, !isPrivateTarget(feedUsername) { resolved = try? await nodes.readFeed(username: feedUsername) }
         guard let info = resolved else { showToast("Feed not found.", tone: .bad); return false }
         do {
-            _ = try await activity.run("Posting") {
+            let sent = try await activity.run("Posting") {
                 try await self.perform { try await self.feed.post(text: text, photoPath: photoPath, to: info) }
             }
             posts = feed.posts
-            showToast("Posted.", tone: .good)
+            if alsoBluesky, !info.isPrivate, bluesky.isSignedIn, BlueskyText.fits(text) {
+                if let error = await crossPost(text: text, photoPath: photoPath, sent: sent, feed: info) {
+                    showToast(BlueskyCopy.postedHereOnly(error), tone: .bad)
+                } else {
+                    showToast(BlueskyCopy.postedBoth, tone: .good)
+                }
+            } else {
+                showToast("Posted.", tone: .good)
+            }
             await refreshFeed()
             return true
         } catch {
@@ -1587,11 +1639,15 @@ final class AppModel {
     /// publish the block, which is the one thing this feature promises to keep private.
     func block(_ username: String) {
         modal = nil
-        moderation.block(username)
+        // PROTOCOL §12.9: a verified link's DID goes on the list beside the node, and the store
+        // remembers which DID that was.
+        moderation.block(username, did: blueskyDidForBlock(username))
         showToast("Blocked @\(username).")
     }
 
-    /// One tap, no confirm, here and in Settings (PRODUCT §2.16).
+    /// One tap, no confirm, here and in Settings (PRODUCT §2.16). `Unblock` lifts both (§12.9)
+    /// through the pairing the block recorded — not through the link as it stands now, which may
+    /// have been dropped, lapsed or wiped since.
     func unblock(_ username: String) {
         moderation.unblock(username)
         showToast("Unblocked @\(username).")
@@ -1776,8 +1832,10 @@ final class AppModel {
     /// Everything PROTOCOL §7 calls discardable, in one place: sign out and delete-my-node both
     /// wipe exactly this, and only sign out also drops the session.
     private func discardLocalState() {
+        // Bluesky's share of §7 goes from memory too, not only from disk (PRODUCT §2.35).
+        bluesky.discardLocalState()
         store.clear()
-        myNode = nil; myCard = nil; myWork = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
+        myNode = nil; myCard = nil; myWork = nil; myAtprotoDid = nil; myCardState = .ok; myTitle = ""; myPhoto = nil
         setupSkipped = false; inSetup = false; feedMode = .all
         posts = []; nearby = []; directory = []; direct = []; edges = [:]; candidates = []
         feed.clear(); nodes.clear(); discovery.clear(); comments.clear()
@@ -1798,6 +1856,9 @@ final class AppModel {
         audio.stop()
         auth = .loggingOut
         _ = try? await td.api.logOut()
+        // PRODUCT §2.35: signing out of Telegram signs out of Bluesky too — the session is §7
+        // local state and goes with the rest.
+        await bluesky.endForTelegramSignOut()
         // The safety lists survive this by design (PROTOCOL §7.1); LocalStore.clear keeps them.
         discardLocalState()
         me = nil

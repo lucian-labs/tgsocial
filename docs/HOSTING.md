@@ -141,3 +141,114 @@ That trade is the whole design. You get a social network with no servers, no
 storage bill and no user data, and the price is that somebody else owns the
 substrate. If that price is wrong for you, the honest answer is a different
 protocol, not a different instance.
+
+## 7. Sign in with Bluesky: your own client metadata
+
+`PROTOCOL §12` lets a reader sign in with Bluesky. Reading Bluesky needs none
+of this — linked accounts and the tag are read signed out — but signing in
+does, and it is the one place an instance has to publish something of its own
+beyond the bundle.
+
+**Why it is yours to host.** atproto OAuth has no client registration. A
+client's identity *is* a URL: the `client_id` is the https address of a small
+JSON document, and the authorization server fetches that document live every
+time someone signs in (`PROTOCOL §12.7`). So the document names you — your
+domain, your redirect — and nobody else's instance can use it, because the
+redirect would land on your origin, not theirs. It holds no secret and no user
+data: tgsocial is a public client and ships no keys. It is one more static
+file, which is the only kind of thing an instance serves.
+
+**The web instance's document.** Serve it at
+`https://<your host>/oauth/client-metadata.json`, with your host in both
+places:
+
+```json
+{
+  "client_id": "https://tgsocial.example.org/oauth/client-metadata.json",
+  "client_name": "tgsocial",
+  "application_type": "web",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "redirect_uris": ["https://tgsocial.example.org/oauth/callback"],
+  "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true
+}
+```
+
+- `client_id` is **exactly** the URL the file is served at — scheme, host,
+  path, no port, no query. The server compares the two strings.
+- `/oauth/callback` is not a file. It falls through to the SPA fallback
+  (`try_files … /index.html`) and the page finishes the sign-in there, which is
+  what you want.
+- `scope` is the list in `PROTOCOL §12.7`, each entry for one thing. Leave out
+  a line and that feature fails for your users at consent; do not add
+  `transition:generic`, which grants the whole account.
+
+**The one nginx line that matters.** The SPA fallback answers *every* missing
+path with `index.html` and a 200. A missing metadata file then comes back as
+`200 text/html`, and the authorization server reports a malformed client rather
+than a missing one — a confusing afternoon. Give the file an exact location
+that 404s when the file is absent, beside the `location /` block:
+
+```nginx
+location = /oauth/client-metadata.json {
+    default_type application/json;
+    try_files $uri =404;
+}
+```
+
+(Caddy: a `handle /oauth/client-metadata.json { file_server }` before the SPA
+`try_files`.) Then check it the way the authorization server will:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://<host>/oauth/client-metadata.json
+# 200 application/json
+curl -sS -o /dev/null -w '%{http_code}\n' https://<host>/oauth/nope.json
+# 404 — if this is 200, the fallback is answering for missing files
+```
+
+`clientMetadataProblems(doc, url)` in `web/js/protocol.js` is the rest of the
+checklist in code — `[]` means publishable — and the `atproto.clientMetadata`
+vectors are its cases, including the mistakes `bsky.social` rejected when they
+were tried on 2026-09-25.
+
+**Local development** needs no file. atproto has a loopback exception:
+`client_id` `http://localhost` (no port, no path) with the redirect and scope
+passed as query parameters, and a redirect to `http://127.0.0.1:<port>/`. The
+authorization server does not fetch anything for it.
+
+**The native apps' document** is not an instance's. The iOS, Mac and Android
+builds of this repo sign in as one client, whose redirect is a custom URL
+scheme and so must be the `client_id`'s host reversed (`PROTOCOL §12.7`). For
+Elijah's builds that document is a static file at
+`https://lucianlabs.ca/tgsocial/client-metadata.json`, and this is it, to the
+byte of JSON (`web/test/protocol.test.mjs` holds this block to the vector):
+
+<!-- client-metadata:native -->
+```json
+{
+  "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+  "client_name": "tgsocial",
+  "application_type": "native",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "redirect_uris": ["ca.lucianlabs:/tgsocial/oauth/callback"],
+  "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+  "token_endpoint_auth_method": "none",
+  "dpop_bound_access_tokens": true
+}
+```
+
+- The scheme is `ca.lucianlabs` — `lucianlabs.ca` reversed — and not the bundle
+  id `ca.lucianlabs.tgsocial`. The path after it, `/tgsocial/oauth/callback`,
+  is what keeps it apart from any other app that ever signs in under
+  `lucianlabs.ca`; the iOS callback scheme and the Android intent filter match
+  on scheme **and** path.
+- One slash after the colon. `bsky.social` rejected two.
+- `lucianlabs.ca` answered `200 text/html` for every missing path on
+  2026-09-25, `/tgsocial/client-metadata.json` included: until the file is
+  placed, native sign-in fails at the first request. Run the two `curl`s above
+  against it after placing it.
+- A fork's apps need their own copy on their own domain, with their own
+  reversed scheme (`docs/FORKING.md`). A web instance never uses this one.

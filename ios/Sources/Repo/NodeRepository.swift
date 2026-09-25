@@ -65,6 +65,8 @@ final class NodeRepository {
                 // PROTOCOL §11.2: the third pass, same argument — the one line a public card says
                 // about the private layer, kept so §11.3's check can be made from the cache.
                 info.privateId = PrivateCodec.publicId(t.text.text)
+                // PROTOCOL §12.2: the fourth pass. A claim until §12.3's check says otherwise.
+                info.atprotoDid = Atproto.did(fromCard: t.text.text)
             case .newerVersion: info.state = .newerVersion
             case .notACard: info.state = .notANode
             }
@@ -155,10 +157,12 @@ final class NodeRepository {
             let card: Card?
             var work: Work?
             var privateId: String?
+            var atprotoDid: String?
             switch CardCodec.parse(t.text.text) {
             case .card(let c):
                 state = .ok; card = c; work = WorkCodec.parse(t.text.text)
                 privateId = PrivateCodec.publicId(t.text.text)
+                atprotoDid = Atproto.did(fromCard: t.text.text)
             case .newerVersion: state = .newerVersion; card = nil
             case .notACard: continue
             }
@@ -166,7 +170,8 @@ final class NodeRepository {
             guard let username = Mapping.username(of: chat, supergroup: sg) else { continue }
             let node = MyNode(chatId: chatId, supergroupId: sgId, username: username, pinnedMessageId: pinned.id)
             let info = NodeInfo(username: username, chatId: chatId, title: chat.title, card: card, work: work,
-                                privateId: privateId, state: state, photo: Mapping.photoRef(chat.photo), fetchedAt: Foundation.Date())
+                                privateId: privateId, atprotoDid: atprotoDid, state: state, photo: Mapping.photoRef(chat.photo),
+                                fetchedAt: Foundation.Date())
             nodes[info.key] = info
             persist()
             return (node, info)
@@ -253,8 +258,9 @@ final class NodeRepository {
         return (node, info)
     }
 
-    private func sendCardMessage(chatId: Int64, card: Card, work: Work? = nil, privateId: String? = nil) async throws -> Message {
-        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work, privateId: privateId))
+    private func sendCardMessage(chatId: Int64, card: Card, work: Work? = nil, privateId: String? = nil,
+                                 atprotoDid: String? = nil) async throws -> Message {
+        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work, privateId: privateId, atprotoDid: atprotoDid))
         let content = InputMessageContent.inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: Self.noPreview, text: text))
         let pending = try await api.sendMessage(chatId: chatId, inputMessageContent: content, options: Self.quiet, replyMarkup: nil, replyTo: nil, topicId: nil)
         return try await sends.awaitSent(pending.id)
@@ -281,11 +287,14 @@ final class NodeRepository {
     /// `privateId` is PROTOCOL §11.6's half of the same rule: a client that implements §11 MUST
     /// write `private.id` back on every public card write, or a follow makes every member's
     /// client see the owner's private card as unconfirmed until the line is restored.
-    func writeCard(_ card: Card, work: Work?, privateId: String?, node: MyNode) async throws -> MyNode {
-        guard !CardCodec.isFull(card, work: work, privateId: privateId) else { throw TDFailure(code: 400, message: "Card is full.") }
+    ///
+    /// `atprotoDid` is PROTOCOL §12.2's, the same rule a third time: a client that read
+    /// `atproto.did` writes it back, or a follow unlinks the owner's Bluesky account for every reader.
+    func writeCard(_ card: Card, work: Work?, privateId: String?, atprotoDid: String?, node: MyNode) async throws -> MyNode {
+        guard !CardCodec.isFull(card, work: work, privateId: privateId, atprotoDid: atprotoDid) else { throw TDFailure(code: 400, message: "Card is full.") }
         let token = activity.begin("Writing your card")
         defer { activity.end(token) }
-        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work, privateId: privateId))
+        let text = FormattedText(entities: [], text: CardCodec.serialise(card, work: work, privateId: privateId, atprotoDid: atprotoDid))
         let content = InputMessageContent.inputMessageText(InputMessageText(clearDraft: true, linkPreviewOptions: Self.noPreview, text: text))
         var messageId = node.pinnedMessageId
         var needsPin = false
@@ -296,22 +305,23 @@ final class NodeRepository {
             needsPin = true
         } else {
             // The card message itself is gone: the only way to restore the record is a fresh card, pinned.
-            let fresh = try await sendCardMessage(chatId: node.chatId, card: card, work: work, privateId: privateId)
+            let fresh = try await sendCardMessage(chatId: node.chatId, card: card, work: work, privateId: privateId, atprotoDid: atprotoDid)
             try await api.pinChatMessage(chatId: node.chatId, disableNotification: true, messageId: fresh.id, onlyForSelf: false)
-            return updatedNode(node, pinnedMessageId: fresh.id, card: card, work: work, privateId: privateId)
+            return updatedNode(node, pinnedMessageId: fresh.id, card: card, work: work, privateId: privateId, atprotoDid: atprotoDid)
         }
         _ = try await api.editMessageText(chatId: node.chatId, inputMessageContent: content, messageId: messageId, replyMarkup: nil)
         if needsPin {
             try await api.pinChatMessage(chatId: node.chatId, disableNotification: true, messageId: messageId, onlyForSelf: false)
         }
         _ = try? await api.setChatDescription(chatId: node.chatId, description: CardCodec.description(bio: card.bio))
-        return updatedNode(node, pinnedMessageId: messageId, card: card, work: work, privateId: privateId)
+        return updatedNode(node, pinnedMessageId: messageId, card: card, work: work, privateId: privateId, atprotoDid: atprotoDid)
     }
 
-    private func updatedNode(_ node: MyNode, pinnedMessageId: Int64, card: Card, work: Work?, privateId: String?) -> MyNode {
+    private func updatedNode(_ node: MyNode, pinnedMessageId: Int64, card: Card, work: Work?, privateId: String?, atprotoDid: String?) -> MyNode {
         var n = node; n.pinnedMessageId = pinnedMessageId
         if var info = nodes[Username.key(node.username)] {
-            info.card = card; info.work = work; info.privateId = privateId; info.state = .ok; info.fetchedAt = Foundation.Date()
+            info.card = card; info.work = work; info.privateId = privateId; info.atprotoDid = Atproto.normaliseDid(atprotoDid)
+            info.state = .ok; info.fetchedAt = Foundation.Date()
             nodes[info.key] = info
         }
         persist()
@@ -452,7 +462,7 @@ final class NodeRepository {
 /// only other conformer.
 @MainActor
 protocol CardWriting: AnyObject {
-    func writeCard(_ card: Card, work: Work?, privateId: String?, node: MyNode) async throws -> MyNode
+    func writeCard(_ card: Card, work: Work?, privateId: String?, atprotoDid: String?, node: MyNode) async throws -> MyNode
 }
 
 extension NodeRepository: CardWriting {}

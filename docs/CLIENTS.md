@@ -88,6 +88,12 @@ that and nothing cleverer:
 | Android | `android/app/src/test/kotlin/ca/lucianlabs/tgsocial/protocol/CardVectorsTest.kt`, fed by the `copyCardVectors` Gradle task |
 | Web | `web/test/protocol.test.mjs` against `web/js/protocol.js` |
 
+The extension sections — `work` (§10), `private` (§11), `atproto` (§12) — are
+for clients that implement those sections; each also adds one case to `parse`
+proving the §2 loop ignores its keys, which every client runs regardless.
+`atproto.merge` is the one block that is not about text: six scenarios of
+pages, driven through the §4.8 merge, with the order that must come out.
+
 The display sections (`timeFormat`, `compactCount`) are there because the
 reference clients agreed to look the same, not because the network cares. Skip
 them if your client shows time differently. The card, username, deepLink,
@@ -195,3 +201,44 @@ that writes a card in its own format still works, for its own users, on its
 own graph, and none of the people already here can read them. That is a real
 option and MIT permits it. It is just a different thing than the one this
 document is about.
+
+## 8. Signing in with Bluesky: your client is a URL
+
+`PROTOCOL.md §12` reads Bluesky into the feed. Reading needs nothing from you —
+every atproto read it uses is a public GET, and a client that only reads linked
+accounts and the tag never signs anyone in. Signing in (a person's own
+Bluesky follows, linking their account to their node, posting to both) needs
+one thing, and it is the atproto counterpart of the `api_id` in §5: **an OAuth
+client identity of your own.**
+
+There is no registration to do. atproto identifies a client by a URL — the
+`client_id` is the https address of a JSON document you host, and the
+authorization server fetches it each time someone signs in. So:
+
+- **Pick the domain you will answer for.** The document names it, and consent
+  screens show it. A client using someone else's `client_id` is signing people
+  in as that someone, and cannot receive the redirect anyway.
+- **Native app**: the redirect is a custom scheme equal to your `client_id`'s
+  host reversed, then `:/` and a path — one slash. `https://example.org/tgs/client-metadata.json`
+  means `org.example:/tgs/oauth/callback`. Your bundle id is irrelevant to it.
+  Register the scheme with the system (`ASWebAuthenticationSession`'s callback
+  scheme; an Android intent filter on scheme and path).
+- **Web client or instance**: an https redirect on the origin that serves the
+  page, and the document on that same origin. `docs/HOSTING.md §7` has the file,
+  the nginx line that keeps a missing file from answering 200 `text/html`, and
+  the `curl` that proves it.
+- **Scopes**: the six in `PROTOCOL.md §12.7`, or fewer if your client does
+  less — a reader that never posts drops the two `repo:app.bsky.feed.post` and
+  `blob:` entries. Never `transition:generic`.
+- **Check it before you ship it.** `clientMetadataProblems(doc, url)` in
+  `web/js/protocol.js` returns `[]` for a document an authorization server will
+  take; the `atproto.clientMetadata` vectors are its cases, including the
+  malformed redirects `bsky.social` refused when they were tried.
+
+What you do **not** get to choose is the link record's collection,
+`ca.lucianlabs.tgsocial.link`. That is protocol, like the card's marker line: a
+client that writes links somewhere else writes links nobody else can see.
+
+Elijah's builds use `https://lucianlabs.ca/tgsocial/client-metadata.json`;
+its full text is in `docs/HOSTING.md §7`, as an example of the shape rather
+than a thing to reuse.

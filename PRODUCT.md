@@ -165,6 +165,8 @@ channel:
   list it, the earliest in my `follows:` order).
 - Else (feed channel screen for an unattributed channel, +1 previews) fall
   back to the channel itself: channel photo + title, no subheading.
+- A Bluesky post (§2.36) follows the same order with its account in place of
+  the channel: the node its account is verified to, else the account itself.
 
 Name is the node card's `name` (falls back to `@username`), body 600, tap →
 node profile. The subheading is the channel: its title in mono small muted,
@@ -323,6 +325,9 @@ FOLLOWS · 12                                 (section mark with count in the se
 └───────────────────────────────────────┘
 ```
 
+A node with a verified Bluesky link (`PROTOCOL §12.3`) carries a `Bluesky`
+row at the top of `FEEDS` (§2.36); an unverified one carries nothing.
+
 My own profile (reached from You → `View as others see it`) is the same
 screen with no Follow button.
 
@@ -426,7 +431,8 @@ POST TO
 ```
 Photo attach is a `( Add Photo )` ghost sm above the row on native; web v1
 is text only. Success toast `Posted.`; the feed refreshes. A private channel's
-tab carries a faint `Private` pill (§2.28).
+tab carries a faint `Private` pill (§2.28). Signed in to Bluesky, the sheet
+gains `Also post to Bluesky` (§2.38).
 
 ### 2.10 Status sheet
 
@@ -441,6 +447,7 @@ Feed              12 sources · 340 posts · refreshed 14:02
 Pending           Reading 3 cards…            (what is in flight right now, or `Nothing`)
 Last error        FLOOD_WAIT 23 s at 13:58    (or `None`)
 TDLib             1.8.66
+Bluesky           Not signed in              (§2.35 — present with any Bluesky source)
 ( Refresh Now )                              (btn accent)
 ( Close )                                    (btn ghost)
 ```
@@ -1107,6 +1114,8 @@ HIDDEN · 3
 Nothing hidden.                              (empty, muted)
 
 PRIVATE                                      (§2.33 — present only with a private node or a private follow)
+
+BLUESKY                                      (§2.35 — always, outside the demo)
 
 CONTACT                                      (§2.19)
 
@@ -2479,6 +2488,413 @@ Three surfaces, each excluded by construction and each saying so once.
   to reason about, and §2.22's fixture world is invented people who cannot
   approve anyone.
 
+### 2.35 Bluesky — signing in, the account, signing out
+
+`PROTOCOL §12` reads Bluesky into the feed. The surface follows the same rule
+§2.27 set for private: **Bluesky is something added to your setup, not a second
+account.** No new tab, no second profile, nothing at first launch. Someone who
+never opens Settings never sees any of this, and the app looks exactly as it
+does today — except that a node they follow may now carry Bluesky posts, which
+needs nothing from them (§2.36).
+
+**Where it lives.** Settings (§2.20) gains a `BLUESKY` card between `PRIVATE`
+and `CONTACT`. It is always there outside the demo (§2.40), signed in or not,
+because the tag toggle needs no account. It is not on Sign in (§2.1), not in Setup (§2.2) and not on
+You (§2.8): those screens are about Telegram, and a second sign-in on the way
+in is a second thing to decide before the app has shown anything.
+
+Signed out of Bluesky:
+
+```
+BLUESKY                                      (section mark)
+Read Bluesky here too. Your node and your     (muted)
+Telegram sign-in stay as they are.
+
+( Sign In with Bluesky )                     (btn neutral sm)
+
+#waveloop drops in your feed   [ toggle ] Off  (list row, 40pt)
+Drops people post to Bluesky from WaveLoop.   (faint)
+Anyone can post one.
+```
+
+`Sign In with Bluesky` opens a sheet:
+
+```
+BLUESKY                                      (section mark)
+Sign in with Bluesky.                        (h2)
+
+HANDLE                                       (field label)
+[ elijah.bsky.social           ]             (input; a DID works too)
+
+Bluesky opens and asks you. tgsocial gets     (muted)
+permission to read who you follow, to post
+when you ask it to, and to link this account
+to your node. Nothing else.
+
+( Continue )                                 (btn primary)
+( Cancel )                                   (btn ghost)
+```
+
+- The muted paragraph is the scope list (`PROTOCOL §12.7`) said in words, and it
+  is the whole list: a client that asks for more has to change this paragraph
+  too.
+- `Continue` puts the pill at `Syncing` (pending row: `Finding your Bluesky
+  server`), then hands over to Bluesky's own page — the system auth sheet on
+  iOS and Mac, a Custom Tab on Android, the same tab on web. The password is
+  typed into Bluesky, never into tgsocial.
+- Back from Bluesky, the sheet closes onto Settings with the account row below.
+  Toast: `Signed in to Bluesky as @elijah.bsky.social.` The follows toggle
+  starts **on**: reading who you follow is the reason to sign in.
+- Cancelled on Bluesky's page: the sheet closes, nothing is said.
+
+Signed in:
+
+```
+BLUESKY                                      (section mark)
+┌ card ─────────────────────────────────┐
+│ (avatar) Elijah Lucian                 │  display name body; handle mono muted
+│          @elijah.bsky.social           │
+└───────────────────────────────────────┘
+Your Bluesky follows in your feed [ toggle ] On   (list row, 40pt)
+#waveloop drops in your feed      [ toggle ] Off  (list row, 40pt)
+Linked to @tgs_elijah            [Verified]       (list row — §2.37; `( Link to My Node )` until linked)
+
+( Sign Out of Bluesky )                      (btn ghost)
+```
+
+- The account row taps through to the profile on Bluesky (system browser, §4).
+- `Linked to` is absent without a node, since there is nothing to link to.
+- The follows toggle is the following source (`PROTOCOL §12.5`); off, the
+  reader stays signed in for linking and posting and sees only linked accounts
+  and the tag.
+
+`Sign Out of Bluesky` confirms:
+
+```
+BLUESKY                                      (section mark)
+Sign out of Bluesky?                         (h2)
+Posts from the people you follow on Bluesky   (muted)
+leave your feed. Your link to @tgs_elijah
+stays — it's two public lines, not a sign-in.
+
+( Sign Out )                                 (btn danger)
+( Cancel )                                   (btn ghost)
+```
+
+Toast: `Signed out of Bluesky.` The second sentence is present only when a link
+exists. Signing out of Telegram (§4) signs out of Bluesky too — it clears
+local state, and the session is local state — and its confirm gains a line
+when a session exists: `You'll be signed out of Bluesky too.`
+
+**The Status sheet** (§2.10) gains one row, under `Feed`:
+
+```
+Bluesky           @elijah.bsky.social · 5 sources   (or `Not signed in`, `Sign in again`, `Can't reach <host>`)
+```
+
+`5 sources` counts the atproto sources in the merge — linked accounts, the
+follows source, the tag — so a reader can see the Bluesky share of `Feed`'s
+number. Pending rows while it works: `Loading @ana.bsky.social on Bluesky`,
+`Checking @tgs_ana's Bluesky link`, `Posting to Bluesky`.
+
+### 2.36 Bluesky posts in the feed
+
+**Marked by source, not a different card.** A Bluesky post is a §2.3 post card
+with the channel subheading replaced and one pill added — same header, same
+body, same media treatment, same place in the newest-first merge:
+
+```
+┌ card ──────────────────────────────────────┐
+│ (avatar) Ana Iliovic        2h ago · Share │  name: the node when linked (below), else the account
+│          @ana.bsky.social  [Bluesky]       │  mono muted handle + neutral pill
+│                                            │
+│ Post text with links and @mentions…        │
+│ [ images · link card · video still ]       │
+│                                            │
+│ 12 likes · 3 replies                        │  mono faint; no Comment button
+└────────────────────────────────────────────┘
+```
+
+- **Attribution** is §2.3's rule with `PROTOCOL §12.5`'s source. An account
+  verified to a node (`PROTOCOL §12.3`) is that node: the name is Ana's card
+  `name`, tapping it opens her profile, and blocking names her node. Any other
+  account is itself: its Bluesky display name (falling back to the handle), and
+  tapping the name opens its profile on Bluesky. The avatar is the account's
+  own — §2.3's "the avatar is the source" rule, and here the source is the
+  account.
+- **The pill** is the neutral `HPPill` reading `Bluesky`, on every Bluesky post
+  on every screen that lists posts, including a node profile's merged feed. It
+  never goes gold (§1 reserves gold). It is what makes a reader know that the
+  reply they want to write lives somewhere else.
+- **Footer**: `N likes · N replies` from the post view's counts, `compactCount`
+  like reactions, mono faint. No `Comment` button and no comments count:
+  tgsocial comments point at `t.me` posts (`PROTOCOL §6.2`).
+- **Tapping the text** opens the post on Bluesky, where its replies are.
+  Tapping media opens it in the app (§2.11). Long-press opens the post sheet.
+- **Time** is the post's merge date (`PROTOCOL §12.5`), formatted as §2.3.
+- **Share** copies or shares `https://bsky.app/profile/<did>/post/<rkey>` — the
+  DID form, which still opens after a handle change.
+
+The post sheet:
+
+```
+POST                                         (section mark)
+Posted        2026-09-21 18:04               (list rows; values mono)
+On            Bluesky · @ana.bsky.social
+Likes         41
+( Open on Bluesky )                          (btn neutral)
+
+SAFETY                                       (section mark)
+( Report Post )                              (btn danger sm)
+( Block @tgs_ana )                           (btn ghost sm — `Block @ana.bsky.social` when unlinked)
+( Mute @ana.bsky.social )                    (btn ghost sm)
+
+( Close )                                    (btn ghost)
+```
+
+**Rich text.** Link facets are links, mention facets are `@handle` linking to
+that profile on Bluesky, tag facets are plain text. Telegram's entity rules
+(§2.3) do not apply — a Bluesky post has no bold.
+
+**Media in v1**, on all three builds alike:
+
+| Bluesky embed | Renders as |
+| --- | --- |
+| Images (1–4) | §2.11.3's mosaic, then the carousel: the view's `thumb` in the card, `fullsize` in the viewer; alt text is the image's accessibility label. |
+| External link | A link card: its thumb (12pt radius, full width), title in body 600, domain in mono faint. Tap opens the link (§4). A WaveLoop drop is one of these, domain `waveloop.app`. A cross-post from a node you follow never renders — you already have the Telegram original (`PROTOCOL §12.5` rule 7). |
+| Video | The video's still, full width, with the ▶ glyph and `Plays on Bluesky` in faint. Tap opens the post on Bluesky. |
+| Quote | Its media, if any, as above, then one faint row `Quoting @handle` that opens the quoted post on Bluesky. |
+| Anything else | Text only. |
+
+Video is the one that looked cheap and is not. Bluesky serves HLS: Safari and
+AVPlayer play it natively, Chrome and Firefox need `hls.js`, a script the web
+client would have to vendor and ship, and Android needs ExoPlayer's HLS
+module. Playing it on two builds and not the third breaks §0's one-app,
+same-screens promise, so v1 plays it on none and says where it plays.
+
+**Not in v1**, and why: a WaveLoop drop's own media inline (audio in the §2.11
+player, stereo and depth images) — each card would cost a DID resolution, a
+`getRecord` and a blob of up to 50 MB from the owner's PDS, none of it
+measured; and a thread screen for Bluesky replies, which is Bluesky's app.
+
+**A node profile** (§2.5) with a verified link gains one row at the top of
+`FEEDS`, and the profile's merged posts include that account's:
+
+```
+FEEDS
+┌ card ───────────────────────────────────────┐
+│ Bluesky      @ana.bsky.social     Verified  │  → opens on Bluesky; `Verified` gold, PROTOCOL §12.3
+│ Ana's notes  @ana_notes           Verified  │
+└─────────────────────────────────────────────┘
+```
+
+An unverified link shows nothing at all — no row, no greyed row, no
+`Unconfirmed` (`PROTOCOL §12.3` says why) — to everyone but the node's owner,
+who sees §2.37's pending state on their own screen.
+
+### 2.37 Linking your Bluesky to your node
+
+**Where it starts.** The `Linked to` row in Settings' `BLUESKY` card (§2.35)
+reads `( Link to My Node )` until there is a link. Present only when signed in
+to Bluesky and a node exists.
+
+It opens a sheet that shows both halves before writing either, because the
+link is two public statements and the person should see both being made:
+
+```
+LINK                                         (section mark)
+Link @elijah.bsky.social to @tgs_elijah.     (h2)
+People who follow your node here see your     (muted)
+Bluesky posts in their feed, under your name.
+
+TWO LINES, BOTH PUBLIC                       (section mark)
+┌ card ─────────────────────────────────┐
+│ 1  Your Bluesky account names          │  list rows; status pill right:
+│    @tgs_elijah                  [ — ]  │  `—` · `Writing` · `Done` · `Failed`
+│ 2  Your card names                     │
+│    @elijah.bsky.social          [ — ]  │
+│ 3  Anyone can check both        [ — ]  │  `Checking` · `Verified`
+└───────────────────────────────────────┘
+Remove either line and the link stops.        (faint)
+
+( Link )                                     (btn primary)
+( Cancel )                                   (btn ghost)
+```
+
+- `Link` runs `PROTOCOL §12.8` in order and the pills move as it goes: the record
+  in the Bluesky account, then the card, then the check a stranger would run,
+  signed out. Row 3's pill is the gold `Verified` when it passes — the same word
+  the feed backlink earns (`PROTOCOL §3`), for the same reason: both sides said
+  so.
+- Success closes the sheet. Toast: `Linked. Your Bluesky posts now reach your
+  followers here.`
+- **Step 1 failed**: nothing was written. Row 1 reads `Failed` and the sheet
+  says `Bluesky said: <error>. Nothing was changed.` with `( Try Again )`.
+- **Step 2 failed**: the account names the node, the card does not, and that
+  half attributes nothing. `Your Bluesky account names @tgs_elijah. Your card
+  doesn't yet — Telegram said: <error>.` with `( Try Again )`, which retries step
+  2 only.
+- **Step 3 failed** after both writes: the check could not reach the account's
+  server. `Both lines are written. Couldn't check them yet.` and the row keeps
+  `Checking` until the next refresh settles it.
+
+**The owner's pending states**, shown on the `Linked to` row — and only to the
+owner; to everyone else an incomplete link is no link:
+
+- The card names this account and the account does not name the node (a line
+  typed on plain Telegram, or step 1 lost): `Your Bluesky account doesn't
+  name @tgs_elijah yet.` with `( Finish Linking )`.
+- The card names a different account from the one signed in: `Your card
+  names a different Bluesky account.` with `( Replace )`, which runs the same
+  sheet for the signed-in account and unlinks nothing on the other.
+- A §2-only client dropped the line (`PROTOCOL §12.2`): repaired silently on
+  the next card write while signed in to the same account, toast `Card
+  repaired.` — §2.33's behaviour, for the same reason.
+
+**Unlink** — the row's value becomes `( Unlink )` once linked — confirms:
+
+```
+UNLINK                                       (section mark)
+Unlink @elijah.bsky.social?                  (h2)
+Your Bluesky posts leave your followers'      (muted)
+feeds here. Nothing is deleted on Bluesky.
+
+( Unlink )                                   (btn danger)
+( Cancel )                                   (btn ghost)
+```
+
+The card line goes first, then the record (`PROTOCOL §12.8`). Toast:
+`Unlinked.`
+
+### 2.38 Compose: Also post to Bluesky
+
+The compose sheet (§2.9) gains one row between the textarea and the buttons,
+present only while signed in to Bluesky:
+
+```
+POST TO
+[ WaveLoop devlog ] [ Très Buchet ]
+[ textarea, 6 rows, placeholder "Say it." ]
+Also post to Bluesky          [ toggle ] Off  (list row, 40pt)
+212 / 300 · @elijah.bsky.social               (mono faint; only while on)
+Deleting it here won't delete it there.       (faint; only while on)
+( Post )      ( Cancel )
+```
+
+- **Off every time the sheet opens.** The choice is per post and never
+  remembered: a toggle that stayed on would post to a second network things the
+  person wrote for this one.
+- **The counter** counts graphemes, which is what Bluesky counts. Past 300 it
+  turns `bad`, `Post` disables, and the line reads `Too long for Bluesky.
+  Shorten it or turn this off.` The app never cuts someone's sentence to fit.
+- **Absent** on a private channel's tab (§2.28 — private posts never leave,
+  `PROTOCOL §12.9`), in the demo (§2.22), and while signed out of Bluesky.
+- **What goes to Bluesky** is `PROTOCOL §12.8`: the same words, links and
+  hashtags live, Telegram `@names` as plain text, and a link card back to the
+  Telegram post. A photo (native only; web compose is text only, §2.9) rides as
+  that card's image.
+- Toasts: `Posted.` (toggle off) · `Posted here and on Bluesky.` · and when the
+  Telegram post succeeded but Bluesky refused: `Posted here. Bluesky didn't
+  take it — <error>.` There is no retry button: the copy may have landed before
+  the error came back, and a retry that posts twice is worse than asking the
+  person to look.
+- Telegram failed: nothing is sent to Bluesky, and §4's error stands alone.
+
+### 2.39 Bluesky errors
+
+None of these touches the Telegram half of the app. The feed keeps painting
+what it can.
+
+- **The session ended** — Bluesky's two-week limit for apps like this one, a
+  refresh that failed, access revoked from Bluesky's side. The follows source
+  pauses; linked accounts and the tag keep coming, because they never needed the
+  session. One toast, once: `Bluesky signed you out. Your Bluesky follows are
+  paused.` The Settings card shows the account row with `Signed out by
+  Bluesky` in muted and `( Sign In Again )`, which opens §2.35's sheet with the
+  handle filled in. Status sheet: `Bluesky  Sign in again`. The compose toggle
+  is absent until then.
+- **A server is down** — the account's PDS, or the AppView. That source is left
+  out of this refresh and tried again on the next (`PROTOCOL §12.5` rule 6);
+  there is no toast for a failed read, because it happens again by itself in a
+  minute. Status sheet: `Bluesky  Can't reach puffball.us-east.host.bsky.network`
+  and the same host under `Last error`. A link whose check cannot reach the
+  server keeps its last result for a day (`PROTOCOL §12.3`).
+- **A write failed** — linking (§2.37) and posting (§2.38) say so where they
+  happened. Offline: `You're offline.`
+- **Rate limited**: `Bluesky asked us to wait n s.` — §4's `FLOOD_WAIT` line,
+  same back-off.
+- **Signing in**: `Couldn't find that Bluesky account.` (the handle does not
+  resolve) · `Bluesky didn't finish signing you in.` (Bluesky's page returned an
+  error) · `Couldn't sign in to Bluesky.` (a check in `PROTOCOL §12.7` step 9
+  failed, or the client's own metadata could not be fetched; the server's words
+  go to `Last error` verbatim).
+
+### 2.40 Safety on Bluesky posts, and what does not touch Bluesky
+
+§2.15–§2.18 work on Bluesky posts with the same controls, the same lists and the
+same address. What changes is honest copy about what nobody here can do.
+
+**Report.** The confirm's muted paragraph gains a last sentence on a Bluesky
+post: `This is a Bluesky post. Nobody here can remove it from Bluesky —
+report it there too.` and a ghost sm `( Report on Bluesky )` under the reasons,
+which opens the post on Bluesky, where Bluesky's own report lives. The email
+goes to the same address with a body shaped for a post that has no channel:
+
+```
+Reason: <reason>
+Link: https://bsky.app/profile/<did>/post/<rkey>
+Account: @<handle> · <did>
+Record: at://<did>/app.bsky.feed.post/<rkey>
+Node: @<node>                                (or `unattributed`)
+Kind: bluesky post
+App: tgsocial 1.0.0 (12) · iOS
+
+Anything you want to add:
+
+```
+
+It is hidden on this device the moment `Send Report` is tapped, as always. The
+§2.19 commitment stands and its honest clause gets longer: a Bluesky post is
+removed by Bluesky or by its author, and by nobody else.
+
+**Block.** On a post from a linked account the button names the node, and
+blocking writes the account's DID beside the node (`PROTOCOL §12.9`), so their
+Bluesky posts stay gone however they arrive. On any other account it names the
+handle, and the confirm reads:
+
+```
+BLOCK                                        (section mark)
+Block @ana.bsky.social?                      (h2)
+Their Bluesky posts disappear from your feed. (muted)
+They are not told, and nothing changes on
+Bluesky. Undo it in Settings.
+```
+
+**Mute** names the handle: `Muted @ana.bsky.social.` — out of the merged feed,
+nothing else. The tag is not muted; it is switched off in Settings.
+
+**Settings** (§2.20): a blocked or muted account is a row with its handle in
+body and its DID in mono muted beneath; a hidden Bluesky post is a row reading
+`Bluesky · @ana.bsky.social` with its record key `3mw2cdr44fc2a` in mono and
+the reason and date under it.
+
+**The filter** (§2.18) also drops, with no residue and no switch: posts carrying
+Bluesky's hiding labels, the author's own adult self-label included; and posts
+by accounts the reader has blocked on Bluesky, read from their account's public
+block records. A tgsocial block is never sent to Bluesky.
+
+**What does not touch Bluesky**, each by construction:
+
+- **The public reader** (§2.13) reads `t.me/s/` previews and shows no Bluesky
+  post, linked or not.
+- **The Connector** (§2.14) exposes no Bluesky source; its scopes list
+  usernames. Reading a Bluesky account in your feed is not consent to pipe it
+  to an assistant.
+- **The demo** (§2.22) has no `BLUESKY` card, no Bluesky posts and no compose
+  toggle. It makes no network request (§2.22.4), and invented accounts under a
+  real network's name would be exactly the screenshot §2.22's strip exists to
+  prevent.
+
 ## 3. Copy rules
 
 House Pour voice. Short declaratives, no exclamation marks, no emoji in
@@ -2491,7 +2907,9 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `demo` (§2.22 — never "sandbox", "sample", "test mode", "fake"),
 `work`, `work card`, `work feed`, `vouch`, `open to` (§2.23–§2.25),
 `private`, `private node`, `private feed`, `invite`, `member`, `request`,
-`approve`, `unconfirmed` (§2.27–§2.34).
+`approve`, `unconfirmed` (§2.27–§2.34),
+`Bluesky`, `Bluesky account`, `link`, `linked`, `drop`, `Also post to
+Bluesky` (§2.35–§2.40).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
 
@@ -2511,6 +2929,17 @@ network" would name a second network, which is exactly what §2.24 decided it is
 not. `Verified` is reserved for the feed backlink (`PROTOCOL §3`) and appears
 nowhere on a work card.
 
+And never, on the Bluesky surfaces: "connect", "sync" (of an account — §1's
+`Syncing` pill is unchanged), "import",
+"federated", "fediverse", "decentralized", "skeet", "cross-post". Sync and
+import promise a copy tgsocial never keeps — Bluesky posts are read live and
+stored nowhere but the feed cache (`PROTOCOL §12`). Connect is the work
+surfaces' banned "connection" by another route. Federated names what
+`docs/HOSTING.md §6` says this is not. The action is `Also post to Bluesky`,
+said in full. `Verified` beside a Bluesky account means `PROTOCOL §12.3`'s
+two-way check and appears only when it passed; an unverified link has no word
+at all, because it is not shown.
+
 ## 4. Behaviour rules
 
 - Cold start: show the last cached feed immediately, then refresh. Never a
@@ -2525,7 +2954,8 @@ nowhere on a work card.
 - Sign out (Settings, §2.20) asks once (modal: `Sign out of tgsocial? Your
   node stays on Telegram.` `( Sign Out )` danger, `( Cancel )` ghost) then
   `logOut` and wipes local state — except the safety lists, which survive by
-  design (`PROTOCOL §7`).
+  design (`PROTOCOL §7`). A Bluesky session is local state and goes with it;
+  the modal says so when there is one (§2.35).
 - The safety filter (§2.18) is applied at render on every surface, always,
   with no preference behind it. Blocked, muted and reported content never
   paints, and nothing about those lists is written to the card or leaves the

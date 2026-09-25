@@ -75,5 +75,15 @@ Propose changes as PRs against `PROTOCOL.md` + `docs/card-vectors.json` in
 the upstream repo. New optional card keys are cheap (old clients ignore
 them); anything that changes the meaning of existing lines needs a
 `tgsocial v2` marker and a migration story (`PROTOCOL.md §9`).
-`PROTOCOL.md §10` (work) and `§11` (private) are the two worked examples:
-prefixed keys, a second parse pass, vectors in the same file.
+`PROTOCOL.md §10` (work), `§11` (private) and `§12` (atproto) are the three
+worked examples: prefixed keys, a second parse pass, vectors in the same file.
+
+**If your fork signs people in with Bluesky** (`PROTOCOL.md §12.7`), change one
+more thing: the OAuth `client_id`. It is a URL on a domain you control, the
+native redirect scheme is that domain reversed, and the document must be
+served from there — `docs/HOSTING.md §7` has the file and the checks. A fork
+that ships `https://lucianlabs.ca/tgsocial/client-metadata.json` is signing
+people in as this repo's builds, and its redirect scheme will not reach its own
+app. The link record's collection, `ca.lucianlabs.tgsocial.link`, is
+different: it is protocol, not identity, and a fork keeps it or its users'
+links are invisible to every other client.

@@ -344,6 +344,8 @@ The card is the source of truth for the graph. Locally a client keeps only:
 - UI preferences.
 - The **safety lists** below.
 - The **private record** (§7.2), if the client implements §11.
+- A **Bluesky session** and the link-verification cache (§12.7, §12.3), if
+  the client implements §12. Both discardable.
 
 Signing out (`logOut`) clears all of it except the safety lists.
 
@@ -466,8 +468,8 @@ client could show one. The rest is listed so a fork disagrees on purpose.
 The marker carries the version. A v2 card will start with `tgsocial v2` and
 v1 clients MUST treat it as "Newer card. Update the app." rather than
 silently ignoring it. Keys added to v1 later are ignored by older clients by
-rule; keys removed or renamed require a version bump. §10 and §11 are the two
-extensions added under that rule.
+rule; keys removed or renamed require a version bump. §10, §11 and §12 are
+the three extensions added under that rule.
 
 ## 10. Extension: work
 
@@ -1240,3 +1242,552 @@ says this (`PRODUCT §2.33`).
 - **Bulk approval.** 11.4.5.
 - **The public reader, the Connector, the demo** (`PRODUCT §2.34`) touching
   any of it.
+
+## 12. Extension: atproto
+
+A second network, read into this one. §10 and §11 added objects on Telegram;
+this adds sources that are not on Telegram at all — Bluesky, and anything else
+on the AT Protocol — so that a person's subscriptions can come with them, and
+it is held to the claim `docs/FORKING.md` rule 1 makes the same way the other
+two were: prefixed keys, a second parse pass, vectors in the same file.
+
+Four properties, each checkable:
+
+- **Additive.** One new card key, `atproto.did`, read by a second pass. A client
+  that has never heard of it parses every card into exactly the card it parsed
+  before — the `parse` case naming §12 in
+  [`docs/card-vectors.json`](./docs/card-vectors.json) is that sentence as a
+  test. The marker stays `tgsocial v1`; §9 is not touched.
+- **Ownership unchanged, on both networks.** A person writes their own card and
+  their own atproto repo and nothing else. The link between a node and an
+  account is one line on each side (§12.3), each written by the only person who
+  can write it.
+- **No server.** Every read is a GET against public atproto infrastructure, from
+  the reader's device (§12.4). Nothing of tgsocial's sits in between. The one
+  file an operator hosts is OAuth client metadata (§12.7), and it holds no user
+  data.
+- **Reading needs no account.** Signing in with Bluesky is for exactly two
+  things: reading the signed-in account's own follows (§12.5) and writing
+  (§12.8). A linked account and the tag source are read signed-out, by every
+  reader, whether or not they have a Bluesky account at all. Signing in is never
+  required and never offered at first launch (`PRODUCT §2.35`).
+
+The graph still lives on Telegram, and that is not softened here: `follows:`
+names nodes, the +1 walk reads cards, comments are §6's. An atproto account
+reaches a reader's feed three ways and no other — it is linked to a node they
+follow and the link verifies (§12.3); they follow it on Bluesky and are signed
+in (§12.5); or it announces a WaveLoop drop under the tag and they turned the
+tag on (§12.6).
+
+### 12.1 Objects
+
+| Term | What it is |
+| --- | --- |
+| **Account** | An atproto identity: a DID (`did:plc:` or `did:web:`), the repo it owns on a PDS, and a handle. Bluesky's are the ones nearly everyone has. |
+| **Link** | The pair that attributes an account to a node: `atproto.did` on the node's card, and a `ca.lucianlabs.tgsocial.link` record in the account's repo naming the node (§12.3). One without the other is no link. |
+| **Author source** | One account's posts, read with `app.bsky.feed.getAuthorFeed`. There is one for every verified link on a node whose feeds are in the merge. |
+| **Following source** | The signed-in account's Following feed, read with `app.bsky.feed.getTimeline` — one source however many accounts it follows. |
+| **Tag source** | WaveLoop drops announced under `#waveloop`, read with `app.bsky.feed.searchPosts` (§12.6). Off until the reader turns it on. |
+| **Session** | A Bluesky OAuth session held on this device (§12.7). Local state (§7); never published, never on a card. |
+
+### 12.2 The key
+
+On the **public** card only:
+
+| Key | Value | Cap |
+| --- | --- | --- |
+| `atproto.did` | One DID: `did:plc:` + 24 characters of `[a-z2-7]`, or `did:web:` + a hostname. | one |
+
+- **A DID, never a handle.** A handle is a DNS name, and names change hands; a
+  card that said `elijah.bsky.social` would follow that name to whoever held it
+  next. The DID is what atproto itself keys an account on, and it survives both
+  a handle change and a move to another PDS. `atproto.did: elijah.bsky.social`
+  is absent.
+- `did:plc` is compared **exactly**: its identifier is lowercase by
+  construction, so an uppercase one is not the same DID spelled differently, it
+  is not a DID. `did:web` names a hostname, which DNS compares
+  case-insensitively, so readers lowercase the host. Hostname-level `did:web`
+  only — a port (`%3A`) or a path (a further `:`) is dropped, because atproto
+  does not support either for accounts and resolving them is where readers go
+  wrong.
+- **Malformed values are dropped, never fatal**, on §10.2's terms. Only the
+  first token is read: repetition concatenates by §2, and the first claim
+  stands, so a second line cannot quietly displace the first — and a malformed
+  first token is no claim, whatever follows it.
+- Serialisation: after every §2, §10 and §11 line, omitted when empty. A
+  private card MUST NOT carry it and readers never look for it there (§12.9).
+  The 4096-character cap is §2's; the line costs about 45 characters.
+- **§10.6 applies word for word.** A client that implements this section MUST
+  write the line back when it rewrites the card. A §2-only client drops it on
+  the next follow, correctly, and the link reads as no link until a §12 client
+  restores it — which a §12 client holding a session for the same DID, with the
+  record still in place, MUST do on its own next card write, the way §11.6
+  repairs `private.id`.
+
+Vectors: `atproto.did`, `atproto.parse`, `atproto.serialise`.
+
+### 12.3 The link record, and why both sides must speak
+
+§3 is the model: a feed is verified when the thing being claimed agrees. Here a
+card says "this account is mine", and the card is the one message only the
+node's owner can write — but nothing stops a card naming somebody else's DID.
+Pointing your node at a famous account costs one line. So the account must
+agree, in the one place only its owner can write: its own repo.
+
+The record lives in the account's repo, collection `ca.lucianlabs.tgsocial.link`
+([lexicon](./docs/lexicons/ca.lucianlabs.tgsocial.link.json)), under the
+record key **the node's username, lowercased**:
+
+```json
+{ "$type": "ca.lucianlabs.tgsocial.link", "node": "tgs_elijah", "createdAt": "2026-09-25T18:00:00.000Z" }
+```
+
+A reader verifies node `@N` whose card carries `atproto.did: D`:
+
+1. Resolve `D` to its DID document — `https://plc.directory/<D>` for `did:plc`,
+   `https://<host>/.well-known/did.json` for `did:web` — and take the
+   `#atproto_pds` service endpoint. Never assume a PDS; `bsky.social` is one host
+   among many.
+2. `GET <pds>/xrpc/com.atproto.repo.getRecord?repo=<D>&collection=ca.lucianlabs.tgsocial.link&rkey=<n>`,
+   `n` being `N` lowercased. No authentication; the PDS answers with
+   `Access-Control-Allow-Origin: *` (measured 2026-09-25), so the web client
+   makes this call from the page.
+3. **Verified** iff the response's `uri` is exactly
+   `at://<D>/ca.lucianlabs.tgsocial.link/<n>`, its `value.$type` is the
+   collection, and `value.node` names `N` (§2's username comparison). A 400
+   `RecordNotFound` is a definitive no (measured: that is the error a PDS
+   returns for a missing record in a collection it has never seen).
+
+The key makes the check one keyed GET, never a listing, and the `uri` check
+means a record read out of some other repo proves nothing about this DID. The
+`verify` block of `docs/card-vectors.json` holds the cases that matter: the
+honest pair, the account that never answered, a stranger's account claiming
+the node while the card names someone else, the record from the wrong repo, and
+a card a §2-only client rewrote.
+
+**Why a record, and not the other places an account can say something.**
+
+- *A line in the Bluesky profile description* is readable, but the description
+  is prose every Bluesky reader sees, capped at 256 graphemes, and rewritten
+  whole by every Bluesky client that edits a profile — §10.6's hazard, in apps
+  this repo does not ship and cannot fix. A record in its own collection is
+  invisible in the Bluesky app and untouched by anything that does not know the
+  collection.
+- *The handle as the node's domain* needs a domain and DNS, which most people
+  do not have.
+- *The DID document's `alsoKnownAs`* is written with a rotation key the PDS
+  holds, not the person.
+- *A post* sits in the feed, dies when someone tidies old posts, and has to be
+  searched for.
+
+The record moves with the repo when the account changes PDS, is keyed on the
+DID so a handle change does nothing to it, and ends when either side withdraws:
+delete the record, or drop the card line.
+
+**Caching.** A reader keeps the result beside the card cache with a
+`fetchedAt`, re-checks whenever it re-reads the card (§4.5), and at most once a
+day otherwise. `RecordNotFound`, a DID `plc.directory` answers 404 or 410 for,
+and a DID document with no `#atproto_pds` are definitive and take effect at
+once. A network failure or a 5xx is not an answer: it never turns a link
+verified, and it keeps a previous verified result for at most 24 hours from
+that result's `fetchedAt`.
+
+**An unverified link renders as no link.** A node whose card names a DID that
+does not name it back is shown exactly as a node with no `atproto.did` line:
+its channels' posts and never the DID's, no Bluesky row on its profile, not
+greyed, not "unconfirmed". The node's owner alone sees the pending half
+(`PRODUCT §2.37`). The asymmetry with §11.3, which says `Unconfirmed` aloud, is
+deliberate: an unconfirmed private channel is a channel the reader is already
+inside and has to understand, while an unconfirmed `atproto.did` is a claim
+about somebody else's account, and repeating it — caveat and all — lends the
+node that person's name. §10.8's argument about `Verified`, from the other side.
+
+One DID MAY be linked from more than one node, each pair checked on its own,
+both halves each; that is §1's co-admin case, and §2.3's rule (earliest in my
+`follows:`) picks the attribution.
+
+### 12.4 Reads
+
+| Call | Asked of | Auth |
+| --- | --- | --- |
+| DID document | `plc.directory`, or the `did:web` host | none |
+| `com.atproto.repo.getRecord` (the link) | the account's PDS | none |
+| `app.bsky.actor.getProfile` (handle, name, avatar) | AppView | none |
+| `app.bsky.feed.getAuthorFeed` (author source) | AppView | none |
+| `app.bsky.feed.searchPosts` (tag source) | signed in: the session's PDS with `atproto-proxy: did:web:api.bsky.app#bsky_appview`; signed out: AppView | DPoP / none |
+| `app.bsky.feed.getTimeline` (following source) | the session's PDS with the same `atproto-proxy` header | DPoP |
+
+**AppView hosts**, in order: `https://public.api.bsky.app`, then
+`https://api.bsky.app`, failing over on a network error, a 403 or a 5xx, and
+remembering for the session the host that answered — WaveLoop's rule, kept so
+two readers of the same tag behave alike. Measured on 2026-09-25: every read in
+this table answered 200 without auth on `public.api.bsky.app` except
+`searchPosts`, which its CDN answered 403 on every attempt; `api.bsky.app`
+answered `searchPosts` 200 without auth, with one transient 403 in about ten
+calls; `getTimeline` answered 401 without auth. Both hosts send
+`Access-Control-Allow-Origin: *`. Whether unauthenticated search on
+`api.bsky.app` is policy or a gap is not known, which is why a signed-in reader
+searches through their own PDS.
+
+**Parameters.** `getAuthorFeed?actor=<DID>&filter=posts_no_replies&limit=30`,
+and never `includePins` — a pinned post would head the source forever and
+break §12.5 rule 1. `getTimeline?limit=30`. `searchPosts?q=%23waveloop&sort=latest&limit=30`.
+Every later page passes back the previous page's `cursor` and nothing else.
+
+**Handles.** Shown from `getProfile` or the post view's `author.handle`, which
+the AppView has already checked in both directions; `handle.invalid` renders as
+the DID.
+
+**Cost.** An author source costs one request per page per linked account, so it
+is bounded by the nodes the reader follows; the following source costs one
+request per page whatever the account follows. A client SHOULD keep at most
+four atproto requests in flight and SHOULD NOT refresh atproto sources more
+often than every 60 seconds. The AppView's limits for unauthenticated reads
+were not measured; a 429 is treated as §4 treats `FLOOD_WAIT`: back off for the
+`Retry-After` (or `RateLimit-Reset`) it sends, else 60 seconds.
+
+### 12.5 atproto sources in the §4.8 merge
+
+Sources grow by: the author source of every verified link on my node and on the
+nodes in my `follows:`; the following source, while a session is live and the
+reader has not turned it off; and the tag source, when turned on.
+
+§4.8's merge is k-way by date with a cursor per source, and it is correct only
+while every source delivers newest first and knows when it is done. AppView
+pages are newest first and carry a cursor, but their ids, dates and ends are
+not Telegram's, so the **SourceState** contract, field by field:
+
+| Field | Telegram source (§4.8) | atproto source |
+| --- | --- | --- |
+| `key` | channel username, lowercased (or `c/<id>`, §11.5) | `at:<did>` (author), `bsky:following`, `tag:<tag>` — the `:` cannot occur in a username or a `c/` key, so no two namespaces collide |
+| item id, dedupe | `<key>:<message.id>`, per source | the post's at-uri, **merge-wide** |
+| `date` | `message.date` | the post's **sortAt**: the earlier of `record.createdAt` and `indexedAt`, floored to the second |
+| tiebreak within a second | `message.id` | the record key's TID timestamp in microseconds; 0 if the key is not a TID |
+| `cursor` | the oldest `message.id` fetched; the next `fromMessageId` | the `cursor` string the last page returned — opaque, never compared, never parsed |
+| `lastDate` | the oldest date fetched | the oldest **feed time** on any page read, entries the filter dropped included |
+| exhausted | an empty page | a page with no `cursor`, or with no entries |
+
+Seven rules, each a way the merge breaks if it is skipped:
+
+1. **The date is the AppView's own order key.** An author feed is sorted by the
+   earlier of the author's `createdAt` and the AppView's `indexedAt`, so that
+   is the date: anything else lets a source's second page hold something newer
+   than its first. It is also why a post its author dated 2099 cannot sit above
+   every Telegram post forever — `indexedAt` is the AppView's clock. A
+   `createdAt` with no timezone is not a datetime (it would be read in the
+   device's zone) and `indexedAt` stands alone. A post with no `indexedAt` has
+   no place in the merge.
+2. **A page the filter empties is not the end.** A page of nothing but reposts
+   has a next page. `pushMessages`' rule — nothing new means exhausted — is
+   right for `getChatHistory` and wrong here; only the cursor says the source
+   is done. The page still moves `lastDate` down to its oldest **feed time** (a
+   repost holds its page position at the repost's time), because the AppView's
+   order says nothing newer is coming.
+3. **Late entries are dropped.** An entry dated after the source's `lastDate`
+   as it stood before its page arrived is dropped for this pass: its newer
+   neighbours may already be on screen, and inserting it would break newest
+   first. The next refresh from the top places it. `searchPosts` documents no
+   sort key (its cursor, measured, carries `createdAt`), so the tag source is
+   where this happens in practice.
+4. **One post, one card.** Dedupe is merge-wide by at-uri, and attribution
+   comes from the post's author DID, never from which source carried it — so a
+   post reaching the reader through a linked account and the tag at once shows
+   once and shows as the same person either way.
+5. **Admission.** Out: reposts and pins (any entry with a `reason`), replies
+   (`record.reply`), a hiding label (§12.9), anything that is not an
+   `app.bsky.feed.post`. Reposts because a repost is dated at the repost and
+   written by someone else, and §2.3's "the person leads" has no honest answer
+   for which person; a Telegram forward renders (§4.8) because a forward is a
+   new message in the forwarder's own channel, and a repost is not a post in
+   the reposter's repo at all.
+6. **A failed source is exhausted for the pass.** A PDS or AppView that does not
+   answer is marked exhausted for this refresh and retried on the next.
+   Otherwise its unknown first page holds every other source's posts behind it,
+   and one server being down empties the whole feed. The status sheet names it
+   (`PRODUCT §2.39`).
+7. **A cross-post renders once.** An atproto post whose author is verified to
+   node `N` and whose external embed is the `t.me` link of a post in one of
+   `N`'s feeds is the §12.8 copy of a post the reader already has, and is not
+   rendered. The same author linking somebody else's channel is a share and
+   renders; an unlinked author suppresses nothing.
+
+**Attribution** (`PRODUCT §2.3`): author DID verified to a node in scope → that
+node, by §2.3's rule; otherwise the account itself — its display name and
+avatar, and no node.
+
+Vectors: `atproto.sortAt`, `atproto.feedTime`, `atproto.tid`, `atproto.admit`,
+`atproto.crossPost`, and `atproto.merge` — six scenarios driven through the same
+merge functions Telegram sources use, each asserting the emitted order and that
+the run is newest first. The web suite additionally asserts rule 2 on its own.
+
+### 12.6 The tag source: WaveLoop drops
+
+WaveLoop moved its social layer onto atproto on 2026-09-07: a **drop** is a
+record in the member's own repo, and the announcement is an ordinary Bluesky
+post under a tag. **The tag is `#waveloop`.** It was `#waveloopsocial` for
+about an hour on 2026-09-07 before WaveLoop renamed it (its
+`handoff/suite/waveloopsocial.md` kept the old file name); on 2026-09-25
+`searchPosts` returned no posts for either, so this source is correct and, for
+now, empty.
+
+How WaveLoop represents a drop, which is what a reader recognises:
+
+- **The drop**: an `app.waveloop.social.drop` record in the owner's repo —
+  `kind` (`audio`, `image`, `video`, `stereo`, `depth`, `model`) and
+  `createdAt`, optionally `text`, `app`, `aspectRatio`, `stereo`, `durationMs`,
+  `tags`, and blobs `media`, `preview`, `left`, `right`, `depth`, `usdz`. Its
+  lexicon is served at `https://waveloop.app/lexicons/app.waveloop.social.drop.json`.
+- **The announcement**: an `app.bsky.feed.post` whose text ends
+  `#waveloop · waveloop.app/drop`, with a `#tag` facet `waveloop`, a `#link`
+  facet whose `uri` is the drop link, and one embed —
+  `app.bsky.embed.external` to the drop link with the drop's preview as its
+  thumb, or `app.bsky.embed.images`, or a two-second loop video.
+- **The drop link**: `https://waveloop.app/drop/?at=<drop at-uri>`, or the
+  older `?d=<did>&r=<rkey>`.
+
+A reader finds the drop the way WaveLoop's own reader does — the external
+embed's `uri`, then link facets, then URLs in the text; first hit wins — and
+admits the post **only when the drop is in the poster's own repo**. The tag is
+open to anyone, and so is pasting somebody else's drop link; the owner check is
+what makes a hit a drop by the person shown on it. A `d=` that is a handle is
+not resolved: attribution here runs on DIDs, and a handle is a claim until it
+is. Vectors: `atproto.drop`, and the merge scenario that mixes a drop, a bare
+hashtag, somebody else's drop and a duplicate.
+
+In v1 the announcement renders as any atproto post (§12.5) with its external
+card, and the drop link opens on waveloop.app. The drop record and its blobs
+are not fetched (`PRODUCT §2.36` says what that costs).
+
+The tag source is trollable by construction — anyone can announce a drop. It is
+off until the reader turns it on, it passes through every filter in §12.9, and
+WaveLoop's own planned answer, an allowlist of member DIDs, did not exist on
+2026-09-25 and is nothing a client can read yet.
+
+### 12.7 Sign in with Bluesky
+
+atproto OAuth for a **public client**: PAR, PKCE with S256, DPoP-bound tokens,
+no client secret — an app binary or a static site cannot keep one. Every step
+below is either measured against `bsky.social` on 2026-09-25 or cited from
+atproto.com/specs/oauth.
+
+**The client is a URL.** A client's `client_id` is the https URL of a JSON
+document its operator hosts, and the authorization server fetches it live on
+every request (measured: PAR fails with `invalid_client_metadata` when the
+host does not resolve). It must come back 200 `application/json`, its
+`client_id` must equal the URL it was fetched from, and it carries no port.
+**Every client, fork and instance hosts its own** — `docs/HOSTING.md §7` and
+`docs/CLIENTS.md §8` say how, and `clientMetadataProblems` in the web client
+plus the `atproto.clientMetadata` vectors are the checklist. The reference
+native builds use `https://lucianlabs.ca/tgsocial/client-metadata.json`,
+printed in full in `docs/HOSTING.md §7`.
+
+**The redirect.** A native client redirects to a custom scheme that is the
+`client_id`'s host **in reverse-domain order**, followed by one colon and **one**
+slash. For `lucianlabs.ca` that is `ca.lucianlabs:/tgsocial/oauth/callback` —
+the scheme is not the bundle id `ca.lucianlabs.tgsocial`. `bsky.social`
+refused `app.waveloop://oauth/callback` for its two slashes and refused an
+unlisted scheme outright. A native client MAY also use an https redirect on the
+`client_id`'s own origin; a web client uses an https redirect on its own origin.
+
+**Scopes**, each for one thing this section does:
+
+| Scope | For |
+| --- | --- |
+| `atproto` | Required by atproto for every session. |
+| `repo:ca.lucianlabs.tgsocial.link` | Writing and deleting the link record (§12.8). |
+| `repo:app.bsky.feed.post?action=create` | Cross-posting (§12.8). Create only: tgsocial never edits or deletes a Bluesky post. |
+| `blob:image/*` | The photo on a cross-post. |
+| `rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview` | The following source. |
+| `rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview` | The tag source, signed in. |
+
+Not requested: `transition:generic` (deprecated, and it grants the whole
+account where §12 needs six narrow things), `transition:email`,
+`transition:chat.bsky`, and any `account:` or `identity:` scope. `bsky.social`
+parses granular scopes today — a PAR asking for `repo:app.bsky.feed.post` was
+refused only because the metadata did not declare it — but no login has yet
+completed with them. If an authorization server refuses one, the operator
+changes the metadata; a client MUST NOT widen to `transition:generic` on its
+own, because the person consented to a list and the list is the promise.
+
+**The flow.**
+
+1. The person types a handle or a DID. Resolve a handle to a DID (DNS TXT
+   `_atproto.<handle>`, else `https://<handle>/.well-known/atproto-did`; a
+   client MAY ask the AppView's `resolveHandle`), then the DID to its PDS (§12.3
+   step 1). Measured for `bsky.app`: the TXT record answered and the well-known
+   path was 404, so both methods are needed.
+2. `GET <pds>/.well-known/oauth-protected-resource` → the first of
+   `authorization_servers` is the **issuer**.
+3. `GET <issuer>/.well-known/oauth-authorization-server`. Its `issuer` must
+   equal the URL asked; it must require PAR, offer `S256`, and offer `ES256`
+   for DPoP.
+4. Make the session's **DPoP key** — ES256, P-256, one per session, never
+   exported: CryptoKit `SecureEnclave.P256` where the device has one, else a
+   Keychain-held P-256 key (iOS, Mac Catalyst); an Android Keystore key; a
+   non-extractable WebCrypto key stored in IndexedDB (web). Then a PKCE verifier
+   (32 random bytes, base64url), its S256 challenge, and a random `state`.
+5. **PAR**: POST the form — `client_id`, `response_type=code`, `redirect_uri`,
+   `scope`, `state`, `code_challenge`, `code_challenge_method=S256`,
+   `login_hint` (what the person typed) — with a DPoP proof. The first answer is
+   400 `use_dpop_nonce` with a `DPoP-Nonce` header; retry once with the nonce →
+   201 `{ request_uri, expires_in: 299 }` (measured). `plain` PKCE is refused.
+6. Open `<authorization_endpoint>?client_id=…&request_uri=…` in
+   `ASWebAuthenticationSession` with callback scheme `ca.lucianlabs` and a
+   non-ephemeral session, so an existing `bsky.social` login is reused (iOS,
+   Mac Catalyst); a Custom Tab with an intent filter on the scheme and path
+   (Android); a top-level navigation (web).
+7. On the callback: `state` must match and `iss` must equal the issuer. An
+   `error` parameter ends the attempt (`PRODUCT §2.39`).
+8. **Token**: POST `grant_type=authorization_code`, `code`, `redirect_uri`,
+   `client_id`, `code_verifier`, with a DPoP proof and the issuer's current
+   nonce. Measured: no proof → 401 `invalid_dpop_proof`; no nonce → 400
+   `use_dpop_nonce`.
+9. **Check before trusting.** `token_type` is `DPoP`; `scope` contains
+   `atproto`; `sub` is a DID; if the person typed a handle, `sub` is the DID it
+   resolved to; and `sub`'s PDS names this same issuer (steps 1–2 run again on
+   `sub`). Any mismatch discards the tokens and the key.
+10. **Calls to the PDS** carry `Authorization: DPoP <access token>` and a proof
+    with `htm`, `htu` (no query, no fragment), `iat`, a fresh `jti`, `ath` (the
+    base64url SHA-256 of the access token) and the nonce last seen **for that
+    origin**. Nonces are per server — the PDS answers `use_dpop_nonce` with its
+    own (measured) — and they rotate; on `use_dpop_nonce`, store the new one and
+    retry once.
+11. **Refresh** before the access token's `expires_in` runs out (atproto:
+    under 30 minutes). Refresh tokens are single-use and rotate, so a session
+    has **one refresh in flight at a time**, and the new pair is stored before
+    the old is dropped — two concurrent refreshes spend one token twice and end
+    the session. A public client's session ends at two weeks whatever is
+    refreshed (atproto's cap), and the person signs in again (`PRODUCT §2.39`).
+12. **Sign out**: POST the refresh token to `revocation_endpoint` when the
+    issuer lists one (best effort), then delete the tokens, the key and the
+    nonces. Signing out does not unlink: the link is two public records, not a
+    session (§12.8).
+
+**Where the session lives.** The Keychain with
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (iOS, Mac); encrypted
+preferences over a Keystore key (Android); IndexedDB (web), where any script on
+the origin can read it — one more reason the web client loads no script it
+does not serve itself. It is §7 local state and discardable: Telegram `logOut`
+ends it with everything else (§7), and signing out of Bluesky touches nothing
+of Telegram's.
+
+**What has not been observed.** No login has completed end to end: when this
+was measured there was no hostable `client_id` for tgsocial and no one to
+consent. Token issuance, refresh rotation, real lifetimes and the PDS
+accepting a granular-scope token are taken from the spec and from the servers'
+error messages, not from a session.
+
+### 12.8 Writing
+
+Three writes, each into the writer's own repo or onto the writer's own card.
+
+**Link** (a session for `D`, node `N`):
+
+1. `com.atproto.repo.putRecord` — repo `D`, collection
+   `ca.lucianlabs.tgsocial.link`, rkey `N` lowercased, the §12.3 record. `put`,
+   not `create`, so doing it twice is doing it once.
+2. Add `atproto.did: D` to the card and write it (§4.4).
+3. Check it the way a stranger would: §12.3, unauthenticated, no session.
+
+The record goes first so the card never names an account that does not yet
+answer. If step 2 fails, the record alone attributes nothing — half a link is
+no link — and the client says which half is done (`PRODUCT §2.37`).
+
+**Unlink**: the card line first, which stops attribution for every reader on
+their next read of the card; then `com.atproto.repo.deleteRecord`.
+
+**Cross-post**, opt-in per post (`PRODUCT §2.38`), after the Telegram post has
+succeeded (§4.9) — `com.atproto.repo.createRecord` of an `app.bsky.feed.post`:
+
+- `text`: the same text. At most 300 graphemes and 3000 bytes, or the compose
+  sheet refuses before anything is sent; the client never truncates someone's
+  sentence for them.
+- `facets`: `#link` for URLs and `#tag` for hashtags, indexed in **UTF-8 byte
+  offsets**. Telegram `@usernames` stay plain text: they name Telegram channels,
+  and a mention facet would point at whichever Bluesky account had that name,
+  or at nobody.
+- `embed`: `app.bsky.embed.external` — `uri` the Telegram post's deep link
+  (§4.8), `title` the feed channel's title, `description` empty, and when the
+  post carries a photo, `thumb` that photo uploaded with
+  `com.atproto.repo.uploadBlob` as JPEG of at most 1,000,000 bytes (re-encoded
+  down until it fits). This is the link back to the original and the marker
+  §12.5 rule 7 reads; it is also the shape WaveLoop uses. A Bluesky reader sees
+  the photo as the link card's image rather than as an image post: a post has
+  one embed, and this one carries the provenance.
+- `createdAt`: now.
+
+Private posts (§11) are never cross-posted. Nothing on Bluesky is edited or
+deleted by tgsocial — the scope is create only — so deleting the Telegram post
+leaves the copy, and the compose sheet says so.
+
+### 12.9 What every existing section says about atproto
+
+- **§1, §2.** An account is not a node: it has no card, cannot be followed on
+  this graph, and `follows:` holds usernames only. `atproto.did` is on the
+  public card and nowhere else.
+- **§3.** `Verified` beside a node's Bluesky account means §12.3's check and
+  nothing softer.
+- **§4.8.** §12.5.
+- **§5.** Accounts are outside discovery. The +1 walk reads cards, and nothing
+  on Bluesky becomes +1: Bluesky follows are never written to a card and never
+  walked.
+- **§6.** No tgsocial comments on an atproto post: `re:` names `t.me` posts
+  (§6.2, unchanged). Replies and likes stay on Bluesky, one tap away.
+- **§7.** Local state gains the session (§12.7) and the verification cache
+  (§12.3), both discardable. **The §7.1 safety lists** grow a key grammar, not a
+  field: `blocked` and `mutedFeeds` MAY hold DIDs, and `hidden[].key` MAY hold a
+  post's at-uri. A `:` never occurs in a username or a `c/` key, so nothing
+  collides and an older client simply never matches — the right answer, as in
+  §7.2. A post's record key is a TID by its lexicon, lowercase by construction,
+  so §7.1's lowercasing of hidden keys loses nothing. `v` is unchanged.
+  - **Block.** Blocking a node whose link is verified writes its DID beside its
+    username, so that person's Bluesky posts stay gone when they arrive some
+    other way (the following source, the tag) and after the card line is
+    dropped. `Unblock` lifts both. A Bluesky post with no node is blocked by DID.
+  - **Mute.** An account's DID in `mutedFeeds` takes its posts out of the merged
+    feed and nothing else, as §2.17 mutes a channel. The tag source is not muted;
+    it is switched off.
+  - **Report.** The same email to the same address (`PRODUCT §2.40` has the
+    body), and the post is hidden on this device at once. **What it cannot do:
+    nobody reachable from here can take a Bluesky post down** — not the
+    maintainer, not Telegram. The copy says so and points the reader to Bluesky's
+    own report on the post.
+  - **Labels** are the one moderation signal that arrives with the content. A
+    post carrying `!hide`, `!takedown`, `porn`, `sexual`, `nudity`,
+    `graphic-media` or `gore` — on the post or on its author, from any labeler,
+    the author's own self-label included, unless the same labeler negated it —
+    is dropped at admission (§12.5 rule 5), with no switch (`PRODUCT §2.18`).
+  - **Nothing is published** in either direction. A tgsocial block is not a
+    Bluesky block and is never written to Bluesky. The other way, the
+    signed-in account's Bluesky blocks are public records
+    (`app.bsky.graph.block` in its repo, readable with `listRecords` and no
+    auth), and a client SHOULD drop their authors from every atproto source; the
+    following source has them applied by the AppView already. Bluesky mutes are
+    private preferences held by Bluesky and need a scope this section does not
+    ask for, so they apply to the following source only.
+- **§10.** A vouch names a node, never a DID. Work keys are untouched.
+- **§11.** Never on a private card; private posts are never cross-posted.
+- **The public reader** (`PRODUCT §2.13`), **the Connector** (`§2.14`) and
+  **the demo** (`§2.22`) do not touch this section in v1. The public routes read
+  `t.me/s/` previews only; the Connector's sources are usernames; and the demo
+  makes no network request by construction (`§2.22.4`), while an invented
+  Bluesky would be invented accounts wearing a real network's name.
+
+### 12.10 What this section deliberately does not do
+
+- **Take anything down on Bluesky.** §12.9.
+- **Comment, like, repost or reply in the app.** They stay on Bluesky.
+- **Put Bluesky on the graph.** No DIDs in `follows:`, no +1 over Bluesky
+  follows, no Bluesky accounts in directories.
+- **Reposts in the feed.** §12.5 rule 5.
+- **Edit or delete a cross-post.** §12.8.
+- **Run an AppView, a relay, a feed generator or a firehose consumer.** Each is
+  a server.
+- **Read someone's Bluesky follows without a session.** Fanning out
+  `getFollows` into one `getAuthorFeed` per follow works signed out, and was
+  rejected: the merge must hold the first page of every live source before it
+  can place a single post (§4.8), so a reader following four hundred accounts
+  waits on four hundred requests per refresh against limits nobody has
+  measured; and a Following that kept reading after `Sign Out of Bluesky`
+  would make sign-out mean something other than what it says.
+- **DMs.** `transition:chat.bsky` is not requested.

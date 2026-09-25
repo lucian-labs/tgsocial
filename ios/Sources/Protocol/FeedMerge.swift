@@ -13,6 +13,14 @@ public protocol FeedEntry {
     var messageId: Int64 { get }
     /// Unix seconds.
     var date: Int { get }
+    /// PROTOCOL §12.5 rule 4: an atproto post's at-uri, deduped across the WHOLE merge — the same
+    /// post can reach the reader through a linked account and the tag at once. Nil for a Telegram
+    /// message, which is deduped per source by `messageId` as it always was.
+    var mergeId: String? { get }
+}
+
+public extension FeedEntry {
+    var mergeId: String? { nil }
 }
 
 public struct FeedSourceState<Item: FeedEntry>: Equatable where Item: Equatable {
@@ -24,12 +32,17 @@ public struct FeedSourceState<Item: FeedEntry>: Equatable where Item: Equatable 
     public var lastKnownDate: Int = .max
     public var exhausted = false
     public var fetchedOnce = false
+    /// PROTOCOL §12.5: an atproto source's cursor is the string the last page returned — opaque,
+    /// never compared, never parsed. Nil before the first page and after the last.
+    public var atprotoCursor: String?
 
     public init(key: String) { self.key = key }
 }
 
 public struct FeedMerger<Item: FeedEntry & Equatable>: Equatable {
     public private(set) var sources: [String: FeedSourceState<Item>] = [:]
+    /// §12.5 rule 4: at-uris already buffered or emitted by any source in this pass.
+    public private(set) var seenMergeIds = Set<String>()
 
     public init(sourceKeys: [String]) {
         for k in sourceKeys { sources[k] = FeedSourceState(key: k) }
@@ -46,6 +59,7 @@ public struct FeedMerger<Item: FeedEntry & Equatable>: Equatable {
 
     public mutating func reset() {
         for k in sources.keys { sources[k] = FeedSourceState(key: k) }
+        seenMergeIds = []
     }
 
     /// Feed a page of items (any order) for one source. `oldestFetchedId` advances the cursor even when the
@@ -64,6 +78,46 @@ public struct FeedMerger<Item: FeedEntry & Equatable>: Equatable {
         if exhausted { s.exhausted = true }
         sources[key] = s
     }
+
+    /// PROTOCOL §12.5 — one AppView page for an atproto source, already through its source's
+    /// admission rule (`Atproto.item` / `Atproto.tagItem`). The SourceState contract:
+    ///
+    /// - `cursor` is the page's own string, kept opaque.
+    /// - exhausted when the page came back with no cursor or with no entries — NEVER because nothing
+    ///   survived the filter: a page of reposts has a next page (rule 2). `pageEntryCount` is the
+    ///   entries on the page BEFORE admission for exactly that reason.
+    /// - `lastKnownDate` moves down to `oldestFeedTime`, the oldest feed time on the page with the
+    ///   dropped entries counted, because the AppView's order says nothing newer is coming.
+    /// - an item dated after `lastKnownDate` as it stood before this page is late and is dropped
+    ///   for this pass (rule 3): its newer neighbours may already be on screen.
+    /// - dedupe is merge-wide by `mergeId` (rule 4).
+    public mutating func addAtprotoPage(_ items: [Item], to key: String, pageEntryCount: Int,
+                                        oldestFeedTime: Int?, cursor: String?) {
+        guard var s = sources[key] else { return }
+        s.fetchedOnce = true
+        let before = s.lastKnownDate
+        for item in items where item.sourceKey == key && item.date <= before {
+            guard let id = item.mergeId, !seenMergeIds.contains(id) else { continue }
+            seenMergeIds.insert(id)
+            s.buffer.append(item)
+        }
+        FeedOrder.sortNewestFirst(&s.buffer)
+        if let oldest = oldestFeedTime, oldest < s.lastKnownDate { s.lastKnownDate = oldest }
+        s.atprotoCursor = (cursor?.isEmpty == false) ? cursor : nil
+        s.exhausted = pageEntryCount == 0 || s.atprotoCursor == nil
+        sources[key] = s
+    }
+
+    /// §12.5 rule 6: a source whose server did not answer is exhausted for this pass, so its
+    /// unknown first page cannot hold every other source's posts behind it.
+    public mutating func markExhausted(_ key: String) {
+        guard var s = sources[key] else { return }
+        s.fetchedOnce = true
+        s.exhausted = true
+        sources[key] = s
+    }
+
+    public func atprotoCursor(for key: String) -> String? { sources[key]?.atprotoCursor }
 
     /// Whether the merge can safely emit: every non-exhausted source has at least one buffered item.
     public var canEmit: Bool {

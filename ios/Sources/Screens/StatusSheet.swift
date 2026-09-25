@@ -17,7 +17,10 @@ struct StatusSheetModal: View {
             row("Feed", model.feedLabel)
             row("Pending", model.pendingLabel)
             row("Last error", model.lastErrorLabel)
-            row("TDLib", model.tdlibVersion.isEmpty ? "Unknown" : model.tdlibVersion, isLast: true)
+            let bluesky = model.blueskyStatusLabel
+            row("TDLib", model.tdlibVersion.isEmpty ? "Unknown" : model.tdlibVersion, isLast: bluesky == nil)
+            // PRODUCT §2.35: present with any Bluesky source, absent for everyone else.
+            if let bluesky { row("Bluesky", bluesky, isLast: true) }
             HPButton("Refresh Now", style: .accent, enabled: !refreshing) {
                 guard !refreshing else { return }
                 refreshing = true

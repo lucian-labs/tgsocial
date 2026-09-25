@@ -96,7 +96,8 @@ public enum PrivateCodec {
     static let publicKey = "private.id"
 
     /// The §2 repetition rule over the §11 keys only: a repeated key concatenates with a space.
-    private static func raw(_ text: String, keys: Set<String>) -> [String: String] {
+    /// Internal rather than private: §12 reads its one key with the same pass (Atproto.swift).
+    static func raw(_ text: String, keys: Set<String>) -> [String: String] {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
             .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var out: [String: String] = [:]

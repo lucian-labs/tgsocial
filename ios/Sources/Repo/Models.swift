@@ -31,6 +31,9 @@ struct NodeInfo: Codable, Equatable, Identifiable {
     /// about the private layer, and it exists to be compared against (§11.3) — never to be acted
     /// on. Decoded with `decodeIfPresent` like `work`, so an older cache still loads.
     var privateId: String? = nil
+    /// The §12 pass: the `atproto.did` line, canonical, or nil (PROTOCOL §12.2). A CLAIM — nothing
+    /// is attributed to it until §12.3's check passes, and an unverified one renders as nothing.
+    var atprotoDid: String? = nil
     var state: CardState
     var photo: PhotoRef?
     var fetchedAt: Date
@@ -187,12 +190,21 @@ struct Post: Codable, Equatable, Hashable, Identifiable, FeedEntry {
     /// `Private` pill, the `t.me/c/` link, no comments, the `c/<id>` safety keys — hangs off this
     /// one field, so there is no mode in which a private post looks like a public one (§11.5).
     var privateSupergroupId: Int64? = nil
+    /// PROTOCOL §12: set for a Bluesky post and nil for every Telegram one. `messageId` then holds
+    /// the record key's TID microseconds — the merge's within-a-second tiebreak (§12.5) — and
+    /// `chatId` is 0, which no Telegram chat is, so no TDLib update ever matches it.
+    var bluesky: BlueskyPost? = nil
 
     var isPrivate: Bool { privateSupergroupId != nil }
-    var id: String { "\(chatId):\(messageId)" }
+    var isBluesky: Bool { bluesky != nil }
+    /// A Bluesky post is keyed by its at-uri, which is also the merge-wide dedupe key (§12.5 rule 4).
+    var id: String { bluesky?.uri ?? "\(chatId):\(messageId)" }
+    var mergeId: String? { bluesky?.uri }
     /// `https://t.me/<username>/<n>` for a public post; `https://t.me/c/<id>/<n>` for a private
-    /// one, which opens for members and for nobody else (PROTOCOL §11.4.8).
+    /// one, which opens for members and for nobody else (PROTOCOL §11.4.8). A Bluesky post's only
+    /// link is on Bluesky, in DID form (§2.36).
     var deepLink: String {
+        if let b = bluesky { return b.webURL }
         if let id = privateSupergroupId { return PrivateLink.post(supergroupId: id, messageId: messageId) }
         return DeepLink.post(username: sourceUsername, messageId: messageId)
     }

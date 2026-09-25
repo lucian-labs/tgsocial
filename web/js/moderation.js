@@ -12,7 +12,7 @@
  * that owns the storage and the notification. `js/repo.js` and the views ask
  * the class; `test/protocol.test.mjs` asserts the functions.
  */
-import { targetKey, usernameKey } from './protocol.js';
+import { safetyKey, targetKey, usernameKey } from './protocol.js';
 
 /**
  * localStorage key, deliberately outside the `LS` map in js/repo.js and
@@ -114,8 +114,12 @@ export function normaliseRecord(raw, userId = null) {
 export function keepsPost(post, lists, { applyMute = false } = {}) {
   if (!lists) return true;
   if (post?.node && lists.isBlocked(post.node)) return false;
-  if (lists.isHidden(targetKey(post?.link))) return false;
-  if (applyMute && lists.isMutedFeed(post?.username)) return false;
+  // PROTOCOL §12.9: a Bluesky post also carries its author's DID, which the
+  // lists hold beside usernames (a `:` no username has, so neither can match
+  // the other), and its `link` is an at-uri that `safetyKey` keys like a t.me one.
+  if (post?.did && lists.isBlocked(post.did)) return false;
+  if (lists.isHidden(safetyKey(post?.link))) return false;
+  if (applyMute && (lists.isMutedFeed(post?.username) || (post?.did && lists.isMutedFeed(post.did)))) return false;
   return true;
 }
 
@@ -139,7 +143,26 @@ export function reportSubject(reason) {
  * it is sent from is whatever their own mail client uses, and every line is
  * editable before they send.
  */
-export function reportBody({ reason, link, channel, messageId, node, kind, app }) {
+export function reportBody({ reason, link, channel, messageId, node, kind, app, account = null, record = null }) {
+  // PROTOCOL §12.9: a Bluesky post has no channel and no message id. It has an
+  // account (handle and DID — the handle is what a person recognises, the DID
+  // is what survives a rename) and a record. Same address, same shape
+  // otherwise, so the inbox sorts one way.
+  if (record) {
+    return [
+      `Reason: ${reason}`,
+      `Link: ${link}`,
+      `Account: ${account}`,
+      `Record: ${record}`,
+      `Node: ${node ? `@${node}` : 'unattributed'}`,
+      `Kind: ${kind}`,
+      `App: ${app}`,
+      '',
+      'Anything you want to add:',
+      '',
+      '',
+    ].join('\n');
+  }
   return [
     `Reason: ${reason}`,
     `Link: ${link}`,
@@ -293,7 +316,7 @@ export class SafetyLists {
    * (PROTOCOL §6.2).
    */
   hide(link, reason) {
-    const key = targetKey(link);
+    const key = safetyKey(link);
     if (!key) return false;
     const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     this.record.hidden = [{ key, reason: String(reason ?? ''), at }, ...this.record.hidden.filter((h) => h.key !== key)];

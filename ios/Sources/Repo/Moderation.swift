@@ -96,6 +96,10 @@ extension SafetyLists {
     /// placeholder, no residue in a count.
     func allows(post: Post, inMainFeed: Bool) -> Bool {
         if isBlocked(post.authorUsername) { return false }
+        // PROTOCOL §12.9: a Bluesky post is blocked by its author's DID too — how a blocked node's
+        // posts stay gone when they arrive through the follows source or the tag, or after the card
+        // line is dropped — and an account with no node is blocked by DID alone.
+        if let b = post.bluesky, blocked.contains(b.authorDid.lowercased()) { return false }
         if isHidden(key: Moderation.key(post: post)) { return false }
         if inMainFeed, isMuted(sourceKey: Moderation.muteKey(post: post)) { return false }
         return true
@@ -201,6 +205,9 @@ enum Moderation {
     /// path without the host, which no username can collide with, and which an older client's
     /// username comparison never matches — the correct result, since it could not read the post.
     static func key(post: Post) -> String {
+        // PROTOCOL §12.9: a Bluesky post's hidden key is its at-uri. A `:` never occurs in a
+        // username or a `c/` key, so nothing collides and an older client simply never matches.
+        if let b = post.bluesky { return Atproto.postKey(b.uri) ?? b.uri.lowercased() }
         if let id = post.privateSupergroupId {
             return PrivateLink.hiddenKey(supergroupId: id, serverMessageId: DeepLink.serverMessageId(post.messageId))
         }
@@ -210,6 +217,8 @@ enum Moderation {
     /// What `mutedFeeds` holds for a post's source: its username key, or `c/<id>` for a private
     /// channel (PROTOCOL §7.2).
     static func muteKey(post: Post) -> String {
+        // §12.9: an account's DID in `mutedFeeds` takes its posts out of the merged feed.
+        if let b = post.bluesky { return b.authorDid.lowercased() }
         if let id = post.privateSupergroupId { return PrivateLink.sourceKey(supergroupId: id) }
         return listKey(post.sourceUsername)
     }
@@ -247,6 +256,12 @@ enum Moderation {
 final class ModerationStore {
     @ObservationIgnored private let store: LocalStore
     private(set) var lists: SafetyLists
+    /// PROTOCOL §12.9: node key → the DID that node's block wrote beside it, so `Unblock` lifts both
+    /// whatever has happened to the link since. Asking the link at unblock time instead failed
+    /// exactly when it mattered: once the card line was dropped, the cache lapsed or a sign-out
+    /// emptied it, the DID stayed blocked with nothing left that knew why. Follows the record's
+    /// life — same demo rule, same `adopt`, same survival of sign-out (`LocalStore.clear`).
+    private(set) var blockedWith: [String: String]
 
     /// PROTOCOL §7.1: "The demo has no user id, and no home."
     ///
@@ -266,6 +281,7 @@ final class ModerationStore {
     init(store: LocalStore) {
         self.store = store
         lists = store.load(SafetyLists.self, LocalStore.moderation) ?? SafetyLists()
+        blockedWith = store.load([String: String].self, LocalStore.blockedWith) ?? [:]
     }
 
     /// Swaps the reader's record out for an empty one that has no home. The stored record is not
@@ -273,16 +289,19 @@ final class ModerationStore {
     func enterDemo() {
         isDemo = true
         lists = SafetyLists(userId: Self.noUserId)
+        blockedWith = [:]
     }
 
     func leaveDemo() {
         isDemo = false
         lists = store.load(SafetyLists.self, LocalStore.moderation) ?? SafetyLists()
+        blockedWith = store.load([String: String].self, LocalStore.blockedWith) ?? [:]
     }
 
     private func save() {
         guard !isDemo else { return }
         store.save(lists, LocalStore.moderation)
+        store.save(blockedWith.isEmpty ? nil : blockedWith, LocalStore.blockedWith)
     }
 
     // Queries the views ask through the model.
@@ -304,21 +323,41 @@ final class ModerationStore {
             lists.userId = userId
         } else {
             lists = SafetyLists(userId: userId)
+            blockedWith = [:]
         }
         save()
     }
 
-    func block(_ username: String) {
+    /// `did` is the node's verified Bluesky account (PROTOCOL §12.9), written beside it. A DID that
+    /// is already on the list because of another node's block is tied to this node too, so it stays
+    /// until both are unblocked. One that was blocked on its own is not tied to any node: unblocking
+    /// the node leaves it where the reader put it.
+    func block(_ username: String, did: String? = nil) {
         let key = Moderation.listKey(username)
-        guard !lists.blocked.contains(key) else { return }
-        lists.blocked.append(key)
-        save()
+        var changed = false
+        if !lists.blocked.contains(key) { lists.blocked.append(key); changed = true }
+        if let did = Atproto.normaliseDid(did).map(Moderation.listKey), did != key {
+            if !lists.blocked.contains(did) {
+                lists.blocked.append(did)
+                blockedWith[key] = did
+                changed = true
+            } else if blockedWith.values.contains(did), blockedWith[key] != did {
+                blockedWith[key] = did
+                changed = true
+            }
+        }
+        if changed { save() }
     }
 
+    /// A node or a DID. A node takes the DID its block wrote with it (`Unblock` lifts both, §12.9),
+    /// unless another blocked node wrote the same one — one DID may be linked from several nodes
+    /// (§12.3). A DID lifted on its own row unties it from every node.
     func unblock(_ username: String) {
         let key = Moderation.listKey(username)
-        guard lists.blocked.contains(key) else { return }
-        lists.blocked.removeAll { $0 == key }
+        var lift: Set<String> = [key]
+        if let did = blockedWith.removeValue(forKey: key), !blockedWith.values.contains(did) { lift.insert(did) }
+        blockedWith = blockedWith.filter { $0.value != key }
+        lists.blocked.removeAll { lift.contains($0) }
         save()
     }
 

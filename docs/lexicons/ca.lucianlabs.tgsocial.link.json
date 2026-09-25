@@ -1,0 +1,28 @@
+{
+  "lexicon": 1,
+  "id": "ca.lucianlabs.tgsocial.link",
+  "description": "A person's atproto account naming the tgsocial node it belongs to (PROTOCOL.md §12.3). The node's card names the DID with `atproto.did:`; this record is the other half. A reader attributes the account's posts to the node only when both exist.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "The record key is the node's Telegram username, lowercased (the `node` value), so a reader checks one node with one com.atproto.repo.getRecord and never lists the collection.",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "required": ["node", "createdAt"],
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The node channel's username, lowercased, no leading @. Telegram usernames are 5-32 characters of [a-z0-9_], not starting with a digit.",
+            "minLength": 5,
+            "maxLength": 32
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

@@ -68,6 +68,24 @@ import {
   publicPath,
   setPublicOrigin,
   trimFeedWindow,
+  normaliseDid,
+  atprotoDidOf,
+  linkRecordKey,
+  linkRecord,
+  atprotoLinkVerified,
+  atprotoSortAt,
+  atprotoFeedTime,
+  tidMicros,
+  atprotoItem,
+  tagSourceItem,
+  pushAtprotoPage,
+  crossPostTarget,
+  dropRefOf,
+  safetyKey,
+  bskyPostUrl,
+  clientMetadataProblems,
+  nativeRedirectScheme,
+  ATPROTO_LINK_COLLECTION,
 } from '../js/protocol.js';
 import { Repo } from '../js/repo.js';
 import { MediaCache, mediaBudgetBytes, renditionKey, costOf, MB } from '../js/blobcache.js';
@@ -1852,4 +1870,222 @@ test('§10.3: the four intents have copy and nothing else does', () => {
   assert.deepEqual(WORK_INTENTS.map(intentLabel), ['Open to work', 'Open to contract', 'Hiring', 'Open to collaborate']);
   assert.equal(intentLabel('freelance'), '');
   assert.equal(intentLabel(undefined), '');
+});
+
+// ── PROTOCOL §12, atproto sources ───────────────────────────────────────────
+
+for (const c of vectors.atproto.did.cases) {
+  test(`atproto did: ${JSON.stringify(c.in)}`, () => {
+    assert.equal(normaliseDid(c.in), c.out);
+  });
+}
+
+for (const c of vectors.atproto.parse) {
+  test(`atproto parse: ${c.name}`, () => {
+    assert.equal(atprotoDidOf(c.text), c.out);
+  });
+}
+
+for (const c of vectors.atproto.serialise) {
+  test(`atproto serialise: ${c.name}`, () => {
+    assert.equal(serialiseCard(c.card), c.expect);
+  });
+}
+
+for (const c of vectors.atproto.recordKey.cases) {
+  test(`atproto record key: ${JSON.stringify(c.in)}`, () => {
+    assert.equal(linkRecordKey(c.in), c.out);
+  });
+}
+
+for (const c of vectors.atproto.verify.cases) {
+  test(`atproto verify: ${c.name}`, () => {
+    assert.equal(atprotoLinkVerified(c), c.out);
+  });
+}
+
+for (const c of vectors.atproto.sortAt.cases) {
+  test(`atproto sortAt: ${c.name}`, () => {
+    assert.equal(atprotoSortAt(c.post), c.out);
+  });
+}
+
+for (const c of vectors.atproto.feedTime.cases) {
+  test(`atproto feed time: ${c.name}`, () => {
+    assert.equal(atprotoFeedTime(c.entry), c.out);
+  });
+}
+
+for (const c of vectors.atproto.tid.cases) {
+  test(`atproto tid: ${c.in}`, () => {
+    assert.equal(tidMicros(c.in), c.out);
+  });
+}
+
+for (const c of vectors.atproto.admit.cases) {
+  test(`atproto admit: ${c.name}`, () => {
+    assert.equal(atprotoItem(c.entry) !== null, c.out);
+  });
+}
+
+/**
+ * §12.5's SourceState contract, driven the way a client drives it: take
+ * everything the merge will give, and whenever it blocks, hand the source it
+ * blocked on its next page. What comes out has to be the scenario's order —
+ * and, whatever the scenario, strictly newest first.
+ */
+function runMergeScenario(scenario) {
+  const m = createMerge(scenario.sources.map((s) => s.key));
+  const pages = new Map(scenario.sources.map((s) => [s.key, [...s.pages]]));
+  const bySource = new Map(scenario.sources.map((s) => [s.key, s]));
+  const out = [];
+  for (let guard = 0; guard < 100; guard += 1) {
+    const { items, blockedOn } = takeNext(m, 100);
+    out.push(...items);
+    if (!blockedOn) break;
+    const src = bySource.get(blockedOn);
+    const page = pages.get(blockedOn).shift();
+    if (page === undefined || page === 'fail') markExhausted(m, blockedOn);
+    else if (src.kind === 'telegram') pushMessages(m, blockedOn, page);
+    else pushAtprotoPage(m, blockedOn, page, { admit: src.admit === 'tag' ? tagSourceItem : atprotoItem });
+  }
+  assert.ok(isExhausted(m), 'the scenario drains every source');
+  return out;
+}
+
+for (const c of vectors.atproto.merge) {
+  test(`§12.5 merge: ${c.name}`, () => {
+    const out = runMergeScenario(c);
+    const ids = out.map((i) => (typeof i.id === 'string' ? i.id : `${i.key}/${i.id}`));
+    assert.deepEqual(ids, c.expect);
+    assert.ok(isNewestFirst(out, (p) => p.date, (p) => p.tie ?? p.id), 'and the run is newest first, ties included');
+  });
+}
+
+/**
+ * The one line of §12.5 a Telegram-shaped merge gets wrong by default:
+ * `pushMessages` calls an empty-after-dedupe page the end of the source,
+ * which is right for getChatHistory and wrong for an AppView page whose
+ * entries were all reposts. Measured directly, not only through the scenario.
+ */
+test('§12.5: exhaustion comes from the cursor, never from what survived the filter', () => {
+  const [scenario] = vectors.atproto.merge.filter((c) => c.name.startsWith('a page the filter empties'));
+  const key = scenario.sources[1].key;
+  const m = createMerge([key]);
+  pushAtprotoPage(m, key, scenario.sources[1].pages[0]);
+  assert.equal(m.sources[key].buffer.length, 0, 'every entry on that page was a repost');
+  assert.equal(m.sources[key].exhausted, false, 'and the source is still live, because the page carried a cursor');
+  assert.equal(m.sources[key].cursor, 'c1', 'the cursor is kept as the AppView sent it');
+  assert.equal(refillCandidate(m), key, 'so the merge asks for the next page');
+});
+
+for (const c of vectors.atproto.crossPost.cases) {
+  test(`atproto cross-post: ${c.name}`, () => {
+    assert.equal(crossPostTarget(c.post, c.nodeFeeds), c.out);
+  });
+}
+
+for (const c of vectors.atproto.drop.cases) {
+  test(`atproto drop: ${c.name}`, () => {
+    assert.equal(dropRefOf(c.post), c.out);
+  });
+}
+
+for (const c of vectors.atproto.postKey.cases) {
+  test(`atproto safety key: ${JSON.stringify(c.in)}`, () => {
+    assert.equal(safetyKey(c.in), c.out);
+  });
+}
+
+for (const c of vectors.atproto.clientMetadata.cases) {
+  test(`§12.7 client metadata: ${c.name}`, () => {
+    assert.deepEqual(clientMetadataProblems(c.doc, c.fetchedFrom), c.out);
+  });
+}
+
+test('§12.7: the native scheme is the client_id host reversed, and the bundle id is not it', () => {
+  assert.equal(nativeRedirectScheme('https://lucianlabs.ca/tgsocial/client-metadata.json'), 'ca.lucianlabs');
+  assert.equal(nativeRedirectScheme('https://tgsocial.lucianlabs.ca/oauth/client-metadata.json'), 'ca.lucianlabs.tgsocial');
+});
+
+/**
+ * docs/HOSTING.md §7 prints the document Elijah's build serves. A printed copy
+ * that drifted from the vector would be the one people paste, so the test
+ * reads the fenced block out of the doc and holds it to the vector.
+ */
+test('§12.7: the client-metadata.json printed in docs/HOSTING.md is the vector, byte for byte of JSON', async () => {
+  const md = await readFile(join(here, '..', '..', 'docs', 'HOSTING.md'), 'utf8');
+  const m = /<!-- client-metadata:native -->\s*```json\n([\s\S]*?)\n```/.exec(md);
+  assert.ok(m, 'HOSTING.md carries the marked block');
+  const printed = JSON.parse(m[1]);
+  const [vector] = vectors.atproto.clientMetadata.cases;
+  assert.deepEqual(printed, vector.doc);
+  assert.deepEqual(clientMetadataProblems(printed, printed.client_id), [], 'and it is publishable');
+});
+
+test('§12.3: the record a client writes is one its own check accepts, and the card half is still required', () => {
+  const [ok] = vectors.atproto.verify.cases;
+  const record = { uri: `at://${ok.did}/${ATPROTO_LINK_COLLECTION}/${linkRecordKey('@TGS_Elijah')}`, value: linkRecord('@TGS_Elijah', '2026-09-25T18:00:00.000Z') };
+  assert.deepEqual(record.value, { $type: 'ca.lucianlabs.tgsocial.link', node: 'tgs_elijah', createdAt: '2026-09-25T18:00:00.000Z' });
+  assert.equal(atprotoLinkVerified({ cardText: ok.cardText, node: 'tgs_elijah', did: ok.did, record }), true);
+  // §12.9 — a §2-only client that follows somebody drops the line, and the link
+  // is unverified until a §12 client writes it back.
+  const followed = withFollow(parseCard(ok.cardText), 'tgs_bob');
+  assert.equal(atprotoLinkVerified({ cardText: serialiseCard(followed), node: 'tgs_elijah', did: ok.did, record }), false);
+  const kept = serialiseCard({ ...followed, atprotoDid: atprotoDidOf(ok.cardText) });
+  assert.equal(atprotoLinkVerified({ cardText: kept, node: 'tgs_elijah', did: ok.did, record }), true);
+  assert.deepEqual(parseCard(kept), { ...followed, follows: ['tgs_ana', 'tgs_bob'] }, 'and the round trip changes nothing §2 can see');
+});
+
+test('§12.9: Share and Open on Bluesky use the DID form of the post URL', () => {
+  assert.equal(bskyPostUrl('at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a'),
+    'https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3mw2cdr44fc2a');
+  assert.equal(bskyPostUrl('at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.like/3mw2cdr44fc2a'), null);
+});
+
+test('§12.9: block, mute and report reach a Bluesky post by the same lists', () => {
+  const lists = new SafetyLists({ storage: fakeStorage() });
+  const did = 'did:plc:ana2ana2ana2ana2ana2ana2';
+  const uri = `at://${did}/app.bsky.feed.post/3mw2cdr44fc2a`;
+  const linked = { node: 'tgs_ana', did, username: null, link: uri };
+  const stranger = { node: null, did, username: null, link: uri };
+  assert.ok(keepsPost(linked, lists) && keepsPost(stranger, lists), 'a fresh install filters nothing');
+
+  lists.block('tgs_ana');
+  assert.equal(keepsPost(linked, lists), false, 'blocking the node removes the Bluesky posts attributed to it');
+  assert.equal(keepsPost(stranger, lists), true, 'but only through the attribution — the DID itself is not on the list yet');
+  lists.block(did);
+  assert.equal(keepsPost(stranger, lists), false, 'so blocking a linked node writes its DID too (§12.9), and a bare account is blocked by DID');
+  lists.unblock('tgs_ana');
+  lists.unblock(did);
+
+  lists.muteFeed(did);
+  assert.equal(keepsPost(stranger, lists, { applyMute: true }), false, 'a muted account leaves the merged feed');
+  assert.equal(keepsPost(stranger, lists), true, '…and nothing else');
+  lists.unmuteFeed(did);
+
+  assert.equal(lists.hide(`https://bsky.app/profile/${did}/post/3mw2cdr44fc2a`, 'Spam'), true, 'the bsky.app URL hides it');
+  assert.equal(keepsPost(stranger, lists), false, 'and the at-uri it arrived with is the same key');
+  const reread = new SafetyLists({ storage: lists.storage });
+  assert.equal(reread.isHidden(uri), true, 'the key survives the record round trip (it is lowercase by construction)');
+});
+
+test('§12.9: the report email for a Bluesky post, to the byte', () => {
+  const body = reportBody({
+    reason: 'Spam',
+    link: 'https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3mw2cdr44fc2a',
+    account: '@bsky.app · did:plc:z72i7hdynmk6r22z27h6tvur',
+    record: 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a',
+    node: null,
+    kind: 'bluesky post',
+    app: 'tgsocial 1.0.0 (12) · Web',
+  });
+  assert.equal(body, 'Reason: Spam\n'
+    + 'Link: https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3mw2cdr44fc2a\n'
+    + 'Account: @bsky.app · did:plc:z72i7hdynmk6r22z27h6tvur\n'
+    + 'Record: at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a\n'
+    + 'Node: unattributed\n'
+    + 'Kind: bluesky post\n'
+    + 'App: tgsocial 1.0.0 (12) · Web\n'
+    + '\nAnything you want to add:\n\n');
 });

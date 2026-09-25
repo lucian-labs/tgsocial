@@ -11,6 +11,8 @@ struct ComposeModal: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var photoPath: String?
     @State private var posting = false
+    /// PRODUCT §2.38: per post, never remembered — false every time the sheet opens.
+    @State private var alsoBluesky = false
 
     /// PRODUCT §2.28: my public feeds, then my private channels — each private tab says so.
     private var feeds: [String] { model.composeTargets }
@@ -45,6 +47,9 @@ struct ComposeModal: View {
                 }
             }
             .padding(.bottom, HPTokens.Space.rowGap)
+            if let handle = blueskyHandle {
+                BlueskyComposeRow(isOn: $alsoBluesky, text: text.trimmingCharacters(in: .whitespacesAndNewlines), handle: handle)
+            }
             HPButtonRow {
                 HPButton("Post", style: .primary, enabled: canPost) { submit() }
             } b: {
@@ -74,14 +79,25 @@ struct ComposeModal: View {
     }
 
     private var canPost: Bool {
-        !posting && !feed.isEmpty && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || photoPath != nil)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // §2.38: past 300 graphemes `Post` disables while the toggle is on — never truncated.
+        if showsBluesky, alsoBluesky, !BlueskyText.fits(trimmed) { return false }
+        return !posting && !feed.isEmpty && (!trimmed.isEmpty || photoPath != nil)
     }
+
+    /// §2.38: absent on a private tab, in the demo, and while signed out of Bluesky.
+    private var showsBluesky: Bool {
+        !model.isDemo && !feed.isEmpty && !model.isPrivateTarget(feed) && model.bluesky?.isSignedIn == true
+    }
+
+    private var blueskyHandle: String? { showsBluesky ? model.bluesky?.account?.handleLabel : nil }
 
     private func submit() {
         guard canPost else { return }
         posting = true
         Task {
-            let ok = await model.post(text: text.trimmingCharacters(in: .whitespacesAndNewlines), photoPath: photoPath, to: feed)
+            let ok = await model.post(text: text.trimmingCharacters(in: .whitespacesAndNewlines), photoPath: photoPath, to: feed,
+                                      alsoBluesky: showsBluesky && alsoBluesky)
             posting = false
             if ok { model.modal = nil }
         }

@@ -348,9 +348,9 @@ private final class RecordingWriter: CardWriting {
     private(set) var pinned: [String] = []
     private(set) var handedPrivateId: [String?] = []
 
-    func writeCard(_ card: Card, work: Work?, privateId: String?, node: MyNode) async throws -> MyNode {
+    func writeCard(_ card: Card, work: Work?, privateId: String?, atprotoDid: String?, node: MyNode) async throws -> MyNode {
         handedPrivateId.append(privateId)
-        pinned.append(CardCodec.serialise(card, work: work, privateId: privateId))
+        pinned.append(CardCodec.serialise(card, work: work, privateId: privateId, atprotoDid: atprotoDid))
         return node
     }
 }

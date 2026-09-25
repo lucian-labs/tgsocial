@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text. `work` cases: PROTOCOL §10, the additive work extension — parsed by a second pass, so §2's own cases above are untouched by it. `private` cases: PROTOCOL §11, the private extension — the same second-pass shape as `work`; the two §2 parse cases naming §11 are the additivity claim run through §2's own loop.",
+  "$comment": "Shared test vectors for the card parser/serialiser (PROTOCOL.md §2). Every platform's unit tests load this file. `parse` cases: input text → expected parsed card or null (not a card). `serialise` cases: card → exact expected text. `work` cases: PROTOCOL §10, the additive work extension — parsed by a second pass, so §2's own cases above are untouched by it. `private` cases: PROTOCOL §11, the private extension — the same second-pass shape as `work`; the two §2 parse cases naming §11 are the additivity claim run through §2's own loop. `atproto` cases: PROTOCOL §12, atproto sources — the card key and its two-way check in the same second-pass shape, plus the rules that put Bluesky posts into the §4.8 merge; the §2 parse case naming §12 is the additivity claim.",
   "parse": [
     {
       "name": "full card",
@@ -219,6 +219,23 @@
     {
       "name": "private.id on a public card is an unknown key to the v1 parser (PROTOCOL §11)",
       "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
+      "expect": {
+        "name": "Elijah Lucian",
+        "bio": null,
+        "link": null,
+        "public": true,
+        "feeds": [
+          "waveloop_devlog"
+        ],
+        "follows": [
+          "tgs_ana"
+        ],
+        "replies": "tgs_elijah_r"
+      }
+    },
+    {
+      "name": "atproto.did on a public card is an unknown key to the v1 parser (PROTOCOL §12)",
+      "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
       "expect": {
         "name": "Elijah Lucian",
         "bio": null,
@@ -1191,6 +1208,1995 @@
           "publicText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nprivate.id: 2481234567",
           "publicNode": "tgs_elijah",
           "out": false
+        }
+      ]
+    }
+  },
+  "atproto": {
+    "$comment": "PROTOCOL §12 — atproto sources. `did`: normaliseDid(in). `parse`: atprotoDidOf(public card text) → DID or null (a second pass; §2 ignores the key, see the §12 case in `parse`). `serialise`: card (+ atprotoDid) → exact text, §12 line last. `recordKey`: linkRecordKey(node). `verify`: atprotoLinkVerified({cardText, node, did, record}) — record is getRecord's {uri, value} or null for RecordNotFound. `sortAt`: atprotoSortAt(post) in seconds, `feedTime`: atprotoFeedTime(entry). `tid`: tidMicros(rkey). `admit`: atprotoItem(entry) !== null. `merge`: scenarios run through the §4.8 merge — take everything, and when takeNext blocks on a source feed it that source's next page (Telegram: pushMessages; atproto: pushAtprotoPage with admit `tag` → tagSourceItem; `fail` → markExhausted; no pages left → markExhausted); expect is the emitted order, Telegram items as `<key>/<id>`, atproto items by at-uri. `crossPost`: crossPostTarget(post, nodeFeeds). `drop`: dropRefOf(post). `postKey`: safetyKey(link). `clientMetadata`: clientMetadataProblems(doc, fetchedFrom) → problem codes, [] is publishable.",
+    "did": {
+      "cases": [
+        {
+          "in": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "out": "did:plc:z72i7hdynmk6r22z27h6tvur"
+        },
+        {
+          "in": "  did:plc:z72i7hdynmk6r22z27h6tvur  ",
+          "out": "did:plc:z72i7hdynmk6r22z27h6tvur"
+        },
+        {
+          "in": "did:plc:Z72I7HDYNMK6R22Z27H6TVUR",
+          "out": null
+        },
+        {
+          "in": "did:plc:z72i7hdynmk6r22z27h6tvu",
+          "out": null
+        },
+        {
+          "in": "did:plc:z72i7hdynmk6r22z27h6tvu1",
+          "out": null
+        },
+        {
+          "in": "did:web:Elijahlucian.CA",
+          "out": "did:web:elijahlucian.ca"
+        },
+        {
+          "in": "did:web:example.com%3A8080",
+          "out": null
+        },
+        {
+          "in": "did:web:example.com:user:alice",
+          "out": null
+        },
+        {
+          "in": "did:web:localhost",
+          "out": null
+        },
+        {
+          "in": "elijah.bsky.social",
+          "out": null
+        },
+        {
+          "in": "@elijah.bsky.social",
+          "out": null
+        },
+        {
+          "in": "at://did:plc:z72i7hdynmk6r22z27h6tvur",
+          "out": null
+        },
+        {
+          "in": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+          "out": null
+        },
+        {
+          "in": "",
+          "out": null
+        }
+      ]
+    },
+    "parse": [
+      {
+        "name": "a public card naming its account",
+        "text": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+        "out": "did:plc:z72i7hdynmk6r22z27h6tvur"
+      },
+      {
+        "name": "no key, no account",
+        "text": "tgsocial v1\nname: Elijah Lucian",
+        "out": null
+      },
+      {
+        "name": "a handle is not a DID — handles change hands, DIDs do not",
+        "text": "tgsocial v1\natproto.did: elijah.bsky.social",
+        "out": null
+      },
+      {
+        "name": "the key is lowercased like every §2 key",
+        "text": "tgsocial v1\nATProto.DID: did:plc:z72i7hdynmk6r22z27h6tvur",
+        "out": "did:plc:z72i7hdynmk6r22z27h6tvur"
+      },
+      {
+        "name": "a repeated key concatenates (§2) and the first token stands",
+        "text": "tgsocial v1\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur\natproto.did: did:plc:ana2ana2ana2ana2ana2ana2",
+        "out": "did:plc:z72i7hdynmk6r22z27h6tvur"
+      },
+      {
+        "name": "the first token decides: a malformed first claim is no claim, whatever follows it",
+        "text": "tgsocial v1\natproto.did: did:plc:nope did:plc:z72i7hdynmk6r22z27h6tvur",
+        "out": null
+      },
+      {
+        "name": "not a card at all",
+        "text": "bluesky: did:plc:z72i7hdynmk6r22z27h6tvur\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+        "out": null
+      },
+      {
+        "name": "a v2 card is not read by a v1 extension",
+        "text": "tgsocial v2\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+        "out": null
+      }
+    ],
+    "serialise": [
+      {
+        "name": "atproto.did is the last line, after §10 and §11",
+        "card": {
+          "name": "Elijah Lucian",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [
+            "waveloop_devlog"
+          ],
+          "follows": [
+            "tgs_ana"
+          ],
+          "replies": "tgs_elijah_r",
+          "work": {
+            "role": "Staff product architect",
+            "does": [],
+            "open": null,
+            "feeds": []
+          },
+          "privateId": "2481234567",
+          "atprotoDid": "did:plc:z72i7hdynmk6r22z27h6tvur"
+        },
+        "expect": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\nreplies: @tgs_elijah_r\nwork.role: Staff product architect\nprivate.id: 2481234567\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur"
+      },
+      {
+        "name": "a malformed DID never reaches the wire",
+        "card": {
+          "name": "Bob",
+          "bio": null,
+          "link": null,
+          "public": true,
+          "feeds": [],
+          "follows": [],
+          "replies": null,
+          "atprotoDid": "bob.bsky.social"
+        },
+        "expect": "tgsocial v1\nname: Bob\npublic: yes"
+      },
+      {
+        "name": "never on a private card",
+        "card": {
+          "name": "Elijah Lucian",
+          "bio": null,
+          "link": null,
+          "public": false,
+          "feeds": [],
+          "follows": [],
+          "replies": null,
+          "private": {
+            "node": "@tgs_elijah",
+            "feeds": []
+          },
+          "atprotoDid": "did:plc:z72i7hdynmk6r22z27h6tvur"
+        },
+        "expect": "tgsocial v1\nname: Elijah Lucian\npublic: no\nprivate.node: @tgs_elijah"
+      }
+    ],
+    "recordKey": {
+      "cases": [
+        {
+          "in": "@TGS_Elijah",
+          "out": "tgs_elijah"
+        },
+        {
+          "in": "tgs_elijah",
+          "out": "tgs_elijah"
+        },
+        {
+          "in": "https://t.me/tgs_elijah",
+          "out": "tgs_elijah"
+        },
+        {
+          "in": "@abc",
+          "out": null
+        },
+        {
+          "in": "",
+          "out": null
+        }
+      ]
+    },
+    "verify": {
+      "cases": [
+        {
+          "name": "both sides name each other — verified",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "tgs_elijah",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": true
+        },
+        {
+          "name": "username case does not matter on either side",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "TGS_Elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "@TGS_ELIJAH",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": true
+        },
+        {
+          "name": "the account does not name the node back (RecordNotFound) — the card alone proves nothing",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": null,
+          "out": false
+        },
+        {
+          "name": "a stranger's account names this node, but the card names someone else",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+          "record": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "tgs_elijah",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "the card carries no atproto.did — withdrawn, or a §2-only client rewrote it (§12.9)",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "tgs_elijah",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a record read out of some other repo proves nothing about this DID",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "tgs_elijah",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a record under this key that names another node",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "ca.lucianlabs.tgsocial.link",
+              "node": "tgs_ana",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a record of another type",
+          "cardText": "tgsocial v1\nname: Elijah Lucian\npublic: yes\nfeeds: @waveloop_devlog\nfollows: @tgs_ana\natproto.did: did:plc:z72i7hdynmk6r22z27h6tvur",
+          "node": "tgs_elijah",
+          "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+          "record": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/ca.lucianlabs.tgsocial.link/tgs_elijah",
+            "value": {
+              "$type": "app.bsky.feed.post",
+              "node": "tgs_elijah",
+              "createdAt": "2026-09-25T18:00:00.000Z"
+            }
+          },
+          "out": false
+        }
+      ]
+    },
+    "sortAt": {
+      "cases": [
+        {
+          "name": "the earlier of createdAt and indexedAt, floored to the second",
+          "post": {
+            "record": {
+              "createdAt": "2026-09-21T18:04:06.128Z"
+            },
+            "indexedAt": "2026-09-21T18:04:06.866Z"
+          },
+          "out": 1790013846
+        },
+        {
+          "name": "dated in the future by its author: indexedAt wins",
+          "post": {
+            "record": {
+              "createdAt": "2099-01-01T00:00:00.000Z"
+            },
+            "indexedAt": "2026-09-21T18:04:06.866Z"
+          },
+          "out": 1790013846
+        },
+        {
+          "name": "backdated (an import): createdAt wins, which is where the AppView sorts it too",
+          "post": {
+            "record": {
+              "createdAt": "2019-05-01T12:00:00.000Z"
+            },
+            "indexedAt": "2026-09-21T18:04:06.866Z"
+          },
+          "out": 1556712000
+        },
+        {
+          "name": "an offset is honoured",
+          "post": {
+            "record": {
+              "createdAt": "2026-09-21T11:04:06.000-07:00"
+            },
+            "indexedAt": "2026-09-21T18:05:00.000Z"
+          },
+          "out": 1790013846
+        },
+        {
+          "name": "a zoneless createdAt is not a datetime (it would read in the device's zone): indexedAt",
+          "post": {
+            "record": {
+              "createdAt": "2026-09-21T10:00:00.000"
+            },
+            "indexedAt": "2026-09-21T18:04:06.866Z"
+          },
+          "out": 1790013846
+        },
+        {
+          "name": "no indexedAt, no date",
+          "post": {
+            "record": {
+              "createdAt": "2026-09-21T18:04:06.128Z"
+            }
+          },
+          "out": null
+        }
+      ]
+    },
+    "feedTime": {
+      "cases": [
+        {
+          "name": "a repost holds its page position at the repost's time",
+          "entry": {
+            "post": {
+              "record": {
+                "createdAt": "2026-09-18T22:34:18.503Z"
+              },
+              "indexedAt": "2026-09-18T22:34:19.460Z"
+            },
+            "reason": {
+              "$type": "app.bsky.feed.defs#reasonRepost",
+              "indexedAt": "2026-09-20T09:00:00.500Z"
+            }
+          },
+          "out": 1789894800
+        },
+        {
+          "name": "anything else at its sortAt",
+          "entry": {
+            "post": {
+              "record": {
+                "createdAt": "2026-09-18T22:34:18.503Z"
+              },
+              "indexedAt": "2026-09-18T22:34:19.460Z"
+            }
+          },
+          "out": 1789770858
+        }
+      ]
+    },
+    "tid": {
+      "$comment": "The first case is a real post (at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a, createdAt 2026-09-21T18:04:06.128Z), read from public.api.bsky.app on 2026-09-25: its TID decodes to within a millisecond of its createdAt.",
+      "cases": [
+        {
+          "in": "3mw2cdr44fc2a",
+          "out": 1790013846129000
+        },
+        {
+          "in": "3mw2c4geu2222",
+          "out": 1790013600000000
+        },
+        {
+          "in": "self",
+          "out": 0
+        },
+        {
+          "in": "3MW2CDR44FC2A",
+          "out": 0
+        },
+        {
+          "in": "kmw2cdr44fc2a",
+          "out": 0
+        }
+      ]
+    },
+    "admit": {
+      "cases": [
+        {
+          "name": "an ordinary post",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            }
+          },
+          "out": true
+        },
+        {
+          "name": "a search hit is a bare PostView",
+          "entry": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z"
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "out": true
+        },
+        {
+          "name": "a repost is left out — its date and its author are two different people's",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:bob2bob2bob2bob2bob2bob2",
+                "handle": "bob.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            },
+            "reason": {
+              "$type": "app.bsky.feed.defs#reasonRepost",
+              "by": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social"
+              },
+              "indexedAt": "2026-09-21T18:00:02.500Z"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a pinned entry is left out — it would sit above everything forever",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            },
+            "reason": {
+              "$type": "app.bsky.feed.defs#reasonPin"
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a reply is left out",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z",
+                "reply": {
+                  "root": {
+                    "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c4geu2222",
+                    "cid": "bafyroot"
+                  },
+                  "parent": {
+                    "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c4geu2222",
+                    "cid": "bafyroot"
+                  }
+                }
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a self-applied porn label hides it",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": [
+                {
+                  "src": "did:plc:ana2ana2ana2ana2ana2ana2",
+                  "uri": "x",
+                  "val": "porn",
+                  "cts": "2026-09-25T00:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "a label its own source negated is gone",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": [
+                {
+                  "src": "did:plc:ar7c4by46qjdydhdevvrndac",
+                  "val": "porn",
+                  "cts": "a"
+                },
+                {
+                  "src": "did:plc:ar7c4by46qjdydhdevvrndac",
+                  "val": "porn",
+                  "neg": true,
+                  "cts": "b"
+                }
+              ]
+            }
+          },
+          "out": true
+        },
+        {
+          "name": "a !hide on the author hides every post of theirs",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": [
+                  {
+                    "src": "did:plc:ar7c4by46qjdydhdevvrndac",
+                    "val": "!hide",
+                    "cts": "a"
+                  }
+                ]
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "an informational label does not",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": [
+                {
+                  "src": "did:plc:ana2ana2ana2ana2ana2ana2",
+                  "val": "bot",
+                  "cts": "a"
+                }
+              ]
+            }
+          },
+          "out": true
+        },
+        {
+          "name": "not a post",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.like/3mw2c4geu2222",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "indexedAt": "2026-09-21T18:00:01.900Z",
+              "labels": []
+            }
+          },
+          "out": false
+        },
+        {
+          "name": "no indexedAt, no place in a newest-first merge",
+          "entry": {
+            "post": {
+              "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+              "cid": "bafy3mw2c4hkyqk22",
+              "author": {
+                "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                "handle": "ana.bsky.social",
+                "labels": []
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "hello",
+                "createdAt": "2026-09-21T18:00:01.250Z"
+              },
+              "labels": []
+            }
+          },
+          "out": false
+        }
+      ]
+    },
+    "merge": [
+      {
+        "name": "a Telegram feed and a linked Bluesky account interleave newest first across pages",
+        "sources": [
+          {
+            "key": "waveloop_devlog",
+            "kind": "telegram",
+            "pages": [
+              [
+                {
+                  "id": 3145728,
+                  "date": 1790013650
+                },
+                {
+                  "id": 2097152,
+                  "date": 1790013630
+                }
+              ],
+              [
+                {
+                  "id": 1048576,
+                  "date": 1790013610
+                }
+              ],
+              []
+            ]
+          },
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c67tjwk22",
+                      "cid": "bafy3mw2c67tjwk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:01:00.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:01:00.900Z",
+                      "labels": []
+                    }
+                  },
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5mr6ok22",
+                      "cid": "bafy3mw2c5mr6ok22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:00:40.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:40.900Z",
+                      "labels": []
+                    }
+                  }
+                ],
+                "cursor": "c1"
+              },
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4zotgk22",
+                      "cid": "bafy3mw2c4zotgk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:00:20.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:20.900Z",
+                      "labels": []
+                    }
+                  }
+                ],
+                "cursor": "c2"
+              },
+              {
+                "feed": []
+              }
+            ]
+          }
+        ],
+        "expect": [
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c67tjwk22",
+          "waveloop_devlog/3145728",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5mr6ok22",
+          "waveloop_devlog/2097152",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4zotgk22",
+          "waveloop_devlog/1048576"
+        ]
+      },
+      {
+        "name": "a page the filter empties is not the end of the source — the cursor says whether there is more",
+        "sources": [
+          {
+            "key": "waveloop_devlog",
+            "kind": "telegram",
+            "pages": [
+              [
+                {
+                  "id": 2097152,
+                  "date": 1790013650
+                },
+                {
+                  "id": 1048576,
+                  "date": 1790013630
+                }
+              ],
+              []
+            ]
+          },
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c4q5nsk22",
+                      "cid": "bafy3mw2c4q5nsk22",
+                      "author": {
+                        "did": "did:plc:bob2bob2bob2bob2bob2bob2",
+                        "handle": "bob.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:00:10.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:10.900Z",
+                      "labels": []
+                    },
+                    "reason": {
+                      "$type": "app.bsky.feed.defs#reasonRepost",
+                      "by": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social"
+                      },
+                      "indexedAt": "2026-09-21T18:00:55.500Z"
+                    }
+                  },
+                  {
+                    "post": {
+                      "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c4lf2yk22",
+                      "cid": "bafy3mw2c4lf2yk22",
+                      "author": {
+                        "did": "did:plc:bob2bob2bob2bob2bob2bob2",
+                        "handle": "bob.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:00:05.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:05.900Z",
+                      "labels": []
+                    },
+                    "reason": {
+                      "$type": "app.bsky.feed.defs#reasonRepost",
+                      "by": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social"
+                      },
+                      "indexedAt": "2026-09-21T18:00:45.500Z"
+                    }
+                  }
+                ],
+                "cursor": "c1"
+              },
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5hyluk22",
+                      "cid": "bafy3mw2c5hyluk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:00:35.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:35.900Z",
+                      "labels": []
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "expect": [
+          "waveloop_devlog/2097152",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5hyluk22",
+          "waveloop_devlog/1048576"
+        ]
+      },
+      {
+        "name": "an entry newer than what its source already delivered is late and is dropped, not inserted out of order",
+        "sources": [
+          {
+            "key": "waveloop_devlog",
+            "kind": "telegram",
+            "pages": [
+              [
+                {
+                  "id": 1048576,
+                  "date": 1790013685
+                }
+              ],
+              []
+            ]
+          },
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7fyagk22",
+                      "cid": "bafy3mw2c7fyagk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:01:40.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:01:40.900Z",
+                      "labels": []
+                    }
+                  },
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c74h2sk22",
+                      "cid": "bafy3mw2c74h2sk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:01:30.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:01:30.900Z",
+                      "labels": []
+                    }
+                  }
+                ],
+                "cursor": "c1"
+              },
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7b7nmk22",
+                      "cid": "bafy3mw2c7b7nmk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:01:35.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:01:35.900Z",
+                      "labels": []
+                    }
+                  },
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6svv6k22",
+                      "cid": "bafy3mw2c6svv6k22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2026-09-21T18:01:20.250Z"
+                      },
+                      "indexedAt": "2026-09-21T18:01:20.900Z",
+                      "labels": []
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "expect": [
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c7fyagk22",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c74h2sk22",
+          "waveloop_devlog/1048576",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6svv6k22"
+        ]
+      },
+      {
+        "name": "one post reaching the reader through two sources renders once; the tag source keeps only drops by their poster",
+        "sources": [
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6jepkk22",
+                      "cid": "bafy3mw2c6jepkk22",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "new loop #waveloop",
+                        "createdAt": "2026-09-21T18:01:10.250Z",
+                        "embed": {
+                          "$type": "app.bsky.embed.external",
+                          "external": {
+                            "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Aana2ana2ana2ana2ana2ana2%2Fapp.waveloop.social.drop%2F3drop2drop2d2",
+                            "title": "A drop",
+                            "description": ""
+                          }
+                        }
+                      },
+                      "indexedAt": "2026-09-21T18:01:10.900Z",
+                      "labels": []
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "key": "tag:waveloop",
+            "kind": "atproto",
+            "admit": "tag",
+            "pages": [
+              {
+                "posts": [
+                  {
+                    "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6jepkk22",
+                    "cid": "bafy3mw2c6jepkk22",
+                    "author": {
+                      "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                      "handle": "ana.bsky.social",
+                      "labels": []
+                    },
+                    "record": {
+                      "$type": "app.bsky.feed.post",
+                      "text": "new loop #waveloop",
+                      "createdAt": "2026-09-21T18:01:10.250Z",
+                      "embed": {
+                        "$type": "app.bsky.embed.external",
+                        "external": {
+                          "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Aana2ana2ana2ana2ana2ana2%2Fapp.waveloop.social.drop%2F3drop2drop2d2",
+                          "title": "A drop",
+                          "description": ""
+                        }
+                      }
+                    },
+                    "indexedAt": "2026-09-21T18:01:10.900Z",
+                    "labels": []
+                  },
+                  {
+                    "uri": "at://did:plc:car2car2car2car2car2car2/app.bsky.feed.post/3mw2c6hhogk22",
+                    "cid": "bafy3mw2c6hhogk22",
+                    "author": {
+                      "did": "did:plc:car2car2car2car2car2car2",
+                      "handle": "carol.bsky.social",
+                      "labels": []
+                    },
+                    "record": {
+                      "$type": "app.bsky.feed.post",
+                      "text": "I like #waveloop",
+                      "createdAt": "2026-09-21T18:01:08.250Z"
+                    },
+                    "indexedAt": "2026-09-21T18:01:08.900Z",
+                    "labels": []
+                  },
+                  {
+                    "uri": "at://did:plc:car2car2car2car2car2car2/app.bsky.feed.post/3mw2c6fknck22",
+                    "cid": "bafy3mw2c6fknck22",
+                    "author": {
+                      "did": "did:plc:car2car2car2car2car2car2",
+                      "handle": "carol.bsky.social",
+                      "labels": []
+                    },
+                    "record": {
+                      "$type": "app.bsky.feed.post",
+                      "text": "look at this #waveloop",
+                      "createdAt": "2026-09-21T18:01:06.250Z",
+                      "embed": {
+                        "$type": "app.bsky.embed.external",
+                        "external": {
+                          "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Aana2ana2ana2ana2ana2ana2%2Fapp.waveloop.social.drop%2F3drop2drop2d2",
+                          "title": "A drop",
+                          "description": ""
+                        }
+                      }
+                    },
+                    "indexedAt": "2026-09-21T18:01:06.900Z",
+                    "labels": []
+                  },
+                  {
+                    "uri": "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c6em4qk22",
+                    "cid": "bafy3mw2c6em4qk22",
+                    "author": {
+                      "did": "did:plc:bob2bob2bob2bob2bob2bob2",
+                      "handle": "bob.bsky.social",
+                      "labels": []
+                    },
+                    "record": {
+                      "$type": "app.bsky.feed.post",
+                      "text": "mine #waveloop",
+                      "createdAt": "2026-09-21T18:01:05.250Z",
+                      "embed": {
+                        "$type": "app.bsky.embed.external",
+                        "external": {
+                          "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Abob2bob2bob2bob2bob2bob2%2Fapp.waveloop.social.drop%2F3bobdrop2bob2",
+                          "title": "A drop",
+                          "description": ""
+                        }
+                      }
+                    },
+                    "indexedAt": "2026-09-21T18:01:05.900Z",
+                    "labels": []
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "expect": [
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6jepkk22",
+          "at://did:plc:bob2bob2bob2bob2bob2bob2/app.bsky.feed.post/3mw2c6em4qk22"
+        ]
+      },
+      {
+        "name": "a post its author dated 2099 sits where the AppView indexed it",
+        "sources": [
+          {
+            "key": "waveloop_devlog",
+            "kind": "telegram",
+            "pages": [
+              [
+                {
+                  "id": 2097152,
+                  "date": 1790013650
+                },
+                {
+                  "id": 1048576,
+                  "date": 1790013630
+                }
+              ],
+              []
+            ]
+          },
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              {
+                "feed": [
+                  {
+                    "post": {
+                      "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5nezh222",
+                      "cid": "bafy3mw2c5nezh222",
+                      "author": {
+                        "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+                        "handle": "ana.bsky.social",
+                        "labels": []
+                      },
+                      "record": {
+                        "$type": "app.bsky.feed.post",
+                        "text": "hello",
+                        "createdAt": "2099-01-01T00:00:00.000Z"
+                      },
+                      "indexedAt": "2026-09-21T18:00:40.900Z",
+                      "labels": []
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "expect": [
+          "waveloop_devlog/2097152",
+          "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c5nezh222",
+          "waveloop_devlog/1048576"
+        ]
+      },
+      {
+        "name": "a source whose fetch fails is marked exhausted for the pass and does not hold the feed",
+        "sources": [
+          {
+            "key": "waveloop_devlog",
+            "kind": "telegram",
+            "pages": [
+              [
+                {
+                  "id": 2097152,
+                  "date": 1790013650
+                },
+                {
+                  "id": 1048576,
+                  "date": 1790013630
+                }
+              ],
+              []
+            ]
+          },
+          {
+            "key": "at:did:plc:ana2ana2ana2ana2ana2ana2",
+            "kind": "atproto",
+            "pages": [
+              "fail"
+            ]
+          }
+        ],
+        "expect": [
+          "waveloop_devlog/2097152",
+          "waveloop_devlog/1048576"
+        ]
+      }
+    ],
+    "crossPost": {
+      "cases": [
+        {
+          "name": "the external embed is a post in the linked node's own feed",
+          "post": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+              "handle": "bsky.app",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://t.me/WaveLoop_Devlog/144",
+                  "title": "WaveLoop devlog",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "nodeFeeds": [
+            "waveloop_devlog",
+            "tresbuchet"
+          ],
+          "out": "waveloop_devlog/144"
+        },
+        {
+          "name": "a t.me link to somebody else's channel is a share, not a cross-post",
+          "post": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+              "handle": "bsky.app",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://t.me/ana_notes/12",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "nodeFeeds": [
+            "waveloop_devlog"
+          ],
+          "out": null
+        },
+        {
+          "name": "an unlinked author suppresses nothing",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://t.me/waveloop_devlog/144",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "nodeFeeds": [],
+          "out": null
+        },
+        {
+          "name": "a link to a channel, not a post",
+          "post": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+              "handle": "bsky.app",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://t.me/waveloop_devlog",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "nodeFeeds": [
+            "waveloop_devlog"
+          ],
+          "out": null
+        },
+        {
+          "name": "no external embed",
+          "post": {
+            "uri": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:z72i7hdynmk6r22z27h6tvur",
+              "handle": "bsky.app",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z"
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "nodeFeeds": [
+            "waveloop_devlog"
+          ],
+          "out": null
+        }
+      ]
+    },
+    "drop": {
+      "cases": [
+        {
+          "name": "WaveLoop's own shape: external embed ?at=, drop in the poster's repo",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c6jepkk22",
+            "cid": "bafy3mw2c6jepkk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "new loop #waveloop",
+              "createdAt": "2026-09-21T18:01:10.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Aana2ana2ana2ana2ana2ana2%2Fapp.waveloop.social.drop%2F3drop2drop2d2",
+                  "title": "A drop",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:01:10.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "the ?d=&r= form",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://waveloop.app/drop/?d=did:plc:ana2ana2ana2ana2ana2ana2&r=3drop2drop2d2",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "found through a link facet when there is no embed",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "new #waveloop waveloop.app/drop",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "facets": [
+                {
+                  "index": {
+                    "byteStart": 14,
+                    "byteEnd": 31
+                  },
+                  "features": [
+                    {
+                      "$type": "app.bsky.richtext.facet#link",
+                      "uri": "https://waveloop.app/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+                    }
+                  ]
+                }
+              ]
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "out": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2"
+        },
+        {
+          "name": "someone else's drop is not this poster's drop",
+          "post": {
+            "uri": "at://did:plc:car2car2car2car2car2car2/app.bsky.feed.post/3mw2c6fknck22",
+            "cid": "bafy3mw2c6fknck22",
+            "author": {
+              "did": "did:plc:car2car2car2car2car2car2",
+              "handle": "carol.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "look at this #waveloop",
+              "createdAt": "2026-09-21T18:01:06.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://waveloop.app/drop/?at=at%3A%2F%2Fdid%3Aplc%3Aana2ana2ana2ana2ana2ana2%2Fapp.waveloop.social.drop%2F3drop2drop2d2",
+                  "title": "A drop",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:01:06.900Z",
+            "labels": []
+          },
+          "out": null
+        },
+        {
+          "name": "the tag without a drop is a hashtag, not a drop",
+          "post": {
+            "uri": "at://did:plc:car2car2car2car2car2car2/app.bsky.feed.post/3mw2c6hhogk22",
+            "cid": "bafy3mw2c6hhogk22",
+            "author": {
+              "did": "did:plc:car2car2car2car2car2car2",
+              "handle": "carol.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "I like #waveloop",
+              "createdAt": "2026-09-21T18:01:08.250Z"
+            },
+            "indexedAt": "2026-09-21T18:01:08.900Z",
+            "labels": []
+          },
+          "out": null
+        },
+        {
+          "name": "a ?d= handle is not resolved",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://waveloop.app/drop/?d=ana.bsky.social&r=3drop2drop2d2",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "out": null
+        },
+        {
+          "name": "a look-alike host",
+          "post": {
+            "uri": "at://did:plc:ana2ana2ana2ana2ana2ana2/app.bsky.feed.post/3mw2c4hkyqk22",
+            "cid": "bafy3mw2c4hkyqk22",
+            "author": {
+              "did": "did:plc:ana2ana2ana2ana2ana2ana2",
+              "handle": "ana.bsky.social",
+              "labels": []
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "hello",
+              "createdAt": "2026-09-21T18:00:01.250Z",
+              "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {
+                  "uri": "https://waveloop.app.evil.example/drop/?at=at://did:plc:ana2ana2ana2ana2ana2ana2/app.waveloop.social.drop/3drop2drop2d2",
+                  "title": "",
+                  "description": ""
+                }
+              }
+            },
+            "indexedAt": "2026-09-21T18:00:01.900Z",
+            "labels": []
+          },
+          "out": null
+        }
+      ]
+    },
+    "postKey": {
+      "cases": [
+        {
+          "in": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a",
+          "out": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a"
+        },
+        {
+          "in": "https://bsky.app/profile/did:plc:z72i7hdynmk6r22z27h6tvur/post/3mw2cdr44fc2a",
+          "out": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.post/3mw2cdr44fc2a"
+        },
+        {
+          "in": "https://bsky.app/profile/bsky.app/post/3mw2cdr44fc2a",
+          "out": null
+        },
+        {
+          "in": "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.like/3mw2cdr44fc2a",
+          "out": null
+        },
+        {
+          "in": "https://t.me/WaveLoop_Devlog/144",
+          "out": "waveloop_devlog/144"
+        },
+        {
+          "in": "nonsense",
+          "out": null
+        }
+      ]
+    },
+    "clientMetadata": {
+      "cases": [
+        {
+          "name": "Elijah's native build, as served at lucianlabs.ca (PROTOCOL §12.7, docs/HOSTING.md §7)",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+          "out": []
+        },
+        {
+          "name": "a web instance on its own origin",
+          "doc": {
+            "client_id": "https://tgsocial.example.org/oauth/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "web",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "https://tgsocial.example.org/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": "https://tgsocial.example.org/oauth/client-metadata.json",
+          "out": []
+        },
+        {
+          "name": "client_id must be the URL the document was fetched from",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": "https://lucianlabs.ca/tgsocial/client-metadata.json?v=2",
+          "out": [
+            "client_id"
+          ]
+        },
+        {
+          "name": "no port on a client_id",
+          "doc": {
+            "client_id": "https://lucianlabs.ca:8443/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "client_id"
+          ]
+        },
+        {
+          "name": "the custom scheme is the client_id host reversed — the bundle id is not it",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs.tgsocial:/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "redirect_scheme"
+          ]
+        },
+        {
+          "name": "one slash after the scheme: bsky.social refused app.waveloop://oauth/callback for exactly this",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs://tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "redirect_slash"
+          ]
+        },
+        {
+          "name": "a native https redirect must share the client_id's origin",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "https://tgsocial.lucianlabs.ca/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "redirect_origin"
+          ]
+        },
+        {
+          "name": "a web client cannot use a custom scheme",
+          "doc": {
+            "client_id": "https://tgsocial.example.org/oauth/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "web",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "org.example.tgsocial:/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "redirect_scheme"
+          ]
+        },
+        {
+          "name": "transition:generic is refused by this protocol, not by atproto",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto transition:generic",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "scope_generic"
+          ]
+        },
+        {
+          "name": "the atproto scope is mandatory",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "repo:app.bsky.feed.post",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "scope_atproto"
+          ]
+        },
+        {
+          "name": "DPoP-bound tokens are mandatory",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": false
+          },
+          "fetchedFrom": null,
+          "out": [
+            "dpop"
+          ]
+        },
+        {
+          "name": "a public client ships no secret and no keys",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "private_key_jwt",
+            "dpop_bound_access_tokens": true,
+            "jwks_uri": "https://lucianlabs.ca/jwks.json"
+          },
+          "fetchedFrom": null,
+          "out": [
+            "auth_method"
+          ]
+        },
+        {
+          "name": "response_types is exactly [\"code\"]",
+          "doc": {
+            "client_id": "https://lucianlabs.ca/tgsocial/client-metadata.json",
+            "client_name": "tgsocial",
+            "application_type": "native",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "response_types": [
+              "code",
+              "token"
+            ],
+            "redirect_uris": [
+              "ca.lucianlabs:/tgsocial/oauth/callback"
+            ],
+            "scope": "atproto repo:ca.lucianlabs.tgsocial.link repo:app.bsky.feed.post?action=create blob:image/* rpc:app.bsky.feed.getTimeline?aud=did:web:api.bsky.app%23bsky_appview rpc:app.bsky.feed.searchPosts?aud=did:web:api.bsky.app%23bsky_appview",
+            "token_endpoint_auth_method": "none",
+            "dpop_bound_access_tokens": true
+          },
+          "fetchedFrom": null,
+          "out": [
+            "response_types"
+          ]
         }
       ]
     }

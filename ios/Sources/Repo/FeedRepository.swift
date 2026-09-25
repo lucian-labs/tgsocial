@@ -30,6 +30,14 @@ final class FeedRepository {
     /// card's channel is attributed to the public node it names; my own private channels to me;
     /// an unverified one to nobody — the channel itself.
     private var privateOwners: [String: PrivateSource] = [:]
+    /// PROTOCOL §12.5: the atproto sources in this merge, keyed `at:<did>` / `bsky:following` /
+    /// `tag:<tag>` — a `:` no username or `c/<id>` key can hold, so the namespaces never collide.
+    private(set) var atprotoSources: [String: AtprotoSourceSpec] = [:]
+    /// Where their pages come from and who their authors are (`BlueskyService`). Nil — the demo,
+    /// and every test that builds a repository without it — is a feed with no atproto sources.
+    weak var atproto: AtprotoFeedSource?
+    /// Atproto sources that did not answer this pass (§12.5 rule 6) — exhausted, not "fetched".
+    private var atprotoFailed = Set<String>()
 
     init(td: TDClient, store: LocalStore, nodes: NodeRepository, sends: SendTracker, activity: ActivityRegistry) {
         self.td = td; self.store = store; self.nodes = nodes; self.sends = sends; self.activity = activity
@@ -44,6 +52,7 @@ final class FeedRepository {
 
     func clear() {
         posts = []; sources = [:]; merger = FeedMerger(sourceKeys: []); isExhausted = false
+        atprotoSources = [:]; atprotoFailed = []
     }
 
     /// What goes to disk: the newest `FeedWindow.cacheSize` posts. `posts` is newest-first and
@@ -89,7 +98,16 @@ final class FeedRepository {
         }
         for p in privateSources { next[p.info.key] = p.info }
         sources = next
-        merger.setSources(Array(next.keys))
+        merger.setSources(Array(next.keys) + Array(atprotoSources.keys))
+    }
+
+    /// §12.5: the atproto sources join the same merge. With none — everyone who never linked or
+    /// signed in, and whose follows never linked — this changes nothing at all.
+    func setAtprotoSources(_ specs: [AtprotoSourceSpec]) {
+        var next: [String: AtprotoSourceSpec] = [:]
+        for s in specs { next[s.key] = s }
+        atprotoSources = next
+        merger.setSources(Array(sources.keys) + Array(next.keys))
     }
 
     /// The private sources in the current merge — what Compose lists under `POST TO` for my own.
@@ -109,6 +127,19 @@ final class FeedRepository {
     /// Name = the node card's `name`, falling back to `@username`; avatar = the node's photo.
     func stamped(_ post: Post) -> Post {
         var p = post
+        if let b = post.bluesky {
+            // §12.5 Attribution: the author DID verified to a node in scope → that node; otherwise
+            // the account itself, with no node. Never the source it arrived through (rule 4).
+            if let node = atproto?.attributedNode(did: b.authorDid) {
+                let cardName = node.card?.name
+                p.authorUsername = node.username
+                p.authorName = (cardName?.isEmpty == false ? cardName : nil) ?? "@" + node.username
+                p.authorPhoto = node.photo
+            } else {
+                p.authorUsername = nil; p.authorName = b.name; p.authorPhoto = nil
+            }
+            return p
+        }
         if post.isPrivate {
             // §11.5: verified → the node the card names; mine → me; unverified → the channel.
             let owner = privateOwners[post.sourceKey]
@@ -184,6 +215,20 @@ final class FeedRepository {
     }
 
     private func refill(_ key: String) async throws {
+        if let spec = atprotoSources[key] {
+            // §12.5 rule 6: a server that does not answer is exhausted for this pass and never
+            // throws out of here — one Bluesky host being down must not empty a Telegram feed.
+            guard let atproto else { merger.markExhausted(key); return }
+            do {
+                let page = try await atproto.page(spec, cursor: merger.atprotoCursor(for: key))
+                merger.addAtprotoPage(stamped(page.posts), to: key, pageEntryCount: page.entryCount,
+                                      oldestFeedTime: page.oldestFeedTime, cursor: page.cursor)
+            } catch {
+                atprotoFailed.insert(key)
+                merger.markExhausted(key)
+            }
+            return
+        }
         guard let source = sources[key] else { merger.add([], to: key, exhausted: true); return }
         let cursor = merger.cursor(for: key)
         let page = try await activity.run(Self.loadingLabel(source)) {
@@ -202,6 +247,7 @@ final class FeedRepository {
     func refresh() async throws {
         merger.reset()
         isExhausted = false
+        atprotoFailed = []
         let keys = merger.sourceKeys
         var failures: [Swift.Error] = []
         await withTaskGroup(of: Swift.Error?.self) { group in
@@ -212,7 +258,8 @@ final class FeedRepository {
             }
             for await failure in group { if let failure { failures.append(failure) } }
         }
-        let fetched = keys.filter { merger.sources[$0]?.fetchedOnce ?? false }
+        // A failed atproto source is marked exhausted, which sets `fetchedOnce`; it did not fetch.
+        let fetched = keys.filter { (merger.sources[$0]?.fetchedOnce ?? false) && !atprotoFailed.contains($0) }
         if fetched.isEmpty, !keys.isEmpty {
             // Nothing reached Telegram: keep the cache, leave every source unfetched, report the first failure
             // (a FLOOD_WAIT wins so the caller backs off and retries).

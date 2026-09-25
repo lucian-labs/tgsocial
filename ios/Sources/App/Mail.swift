@@ -12,7 +12,11 @@ import UIKit
 /// What is being reported (PRODUCT §2.15). Built from a `Post` or a `Comment` so the report confirm,
 /// the email and the hidden list all name the same thing.
 struct ReportSubject: Equatable, Hashable {
-    enum Kind: String, Equatable, Hashable { case post, comment, vouch }
+    enum Kind: String, Equatable, Hashable {
+        case post, comment, vouch
+        /// PRODUCT §2.40: a post with no channel. `Kind: bluesky post`.
+        case bluesky = "bluesky post"
+    }
 
     var kind: Kind
     /// The channel the reported message lives in: the source feed for a post, the commenter's
@@ -24,10 +28,16 @@ struct ReportSubject: Equatable, Hashable {
     /// PRODUCT §2.32: set for a post from a private channel. The link is then `t.me/c/<id>/<n>`,
     /// `Channel:` reads `private · <id>`, and the hidden key is `c/<id>/<n>` (PROTOCOL §7.2).
     var privateSupergroupId: Int64? = nil
+    /// PROTOCOL §12.9: set for a Bluesky post — its at-uri, author DID and handle.
+    var blueskyUri: String? = nil
+    var blueskyDid: String? = nil
+    var blueskyHandle: String? = nil
 
     var isPrivate: Bool { privateSupergroupId != nil }
+    var isBluesky: Bool { kind == .bluesky }
 
     var link: String {
+        if let uri = blueskyUri { return Atproto.bskyPostUrl(uri) ?? uri }
         if let id = privateSupergroupId { return "https://t.me/c/\(id)/\(serverMessageId)" }
         return "https://t.me/\(channel)/\(serverMessageId)"
     }
@@ -38,6 +48,7 @@ struct ReportSubject: Equatable, Hashable {
     }
     /// Where it lands on the hidden list (PROTOCOL §7.1, §7.2).
     var hiddenKey: String {
+        if let uri = blueskyUri { return Atproto.postKey(uri) ?? uri.lowercased() }
         if let id = privateSupergroupId { return PrivateLink.hiddenKey(supergroupId: id, serverMessageId: serverMessageId) }
         return Moderation.key(channel: channel, serverMessageId: serverMessageId)
     }
@@ -45,7 +56,7 @@ struct ReportSubject: Equatable, Hashable {
     /// `Report this post.` / `Report this comment.` / `Report this vouch.`
     var title: String {
         switch kind {
-        case .post: return "Report this post."
+        case .post, .bluesky: return "Report this post."
         case .comment: return "Report this comment."
         case .vouch: return "Report this vouch."
         }
@@ -53,13 +64,23 @@ struct ReportSubject: Equatable, Hashable {
     /// `Report Post` / `Report Comment` / `Report Vouch`
     var buttonLabel: String {
         switch kind {
-        case .post: return "Report Post"
+        case .post, .bluesky: return "Report Post"
         case .comment: return "Report Comment"
         case .vouch: return "Report Vouch"
         }
     }
 
     init(post: Post) {
+        if let b = post.bluesky {
+            kind = .bluesky
+            channel = ""
+            serverMessageId = 0
+            node = post.authorUsername
+            blueskyUri = b.uri
+            blueskyDid = b.authorDid
+            blueskyHandle = b.handle
+            return
+        }
         kind = .post
         channel = post.sourceUsername
         serverMessageId = DeepLink.serverMessageId(post.messageId)
@@ -99,6 +120,21 @@ enum ReportMail {
     /// demo leads with a line saying so, because the link in it points at a channel that does not
     /// exist and the operator would otherwise go looking for it.
     static func body(subject s: ReportSubject, reason: String, app: String, prefix: String? = nil) -> String {
+        if s.isBluesky, let uri = s.blueskyUri, let did = s.blueskyDid {
+            // PRODUCT §2.40: the body for a post that has no channel.
+            let handle = (s.blueskyHandle?.isEmpty == false && s.blueskyHandle != "handle.invalid") ? "@" + s.blueskyHandle! : did
+            var lines = [
+                "Reason: " + reason,
+                "Link: " + s.link,
+                "Account: " + handle + " \u{00B7} " + did,
+                "Record: " + uri,
+                "Node: " + (s.node.map { "@" + $0 } ?? "unattributed"),
+                "Kind: " + s.kind.rawValue,
+                "App: " + app,
+            ]
+            if let prefix, !prefix.isEmpty { lines.insert(prefix, at: 0) }
+            return lines.joined(separator: "\n") + "\n\nAnything you want to add:\n\n"
+        }
         var lines = [
             "Reason: " + reason,
             "Link: " + s.link,

@@ -31,5 +31,17 @@
 	     sheet (§2.11). -->
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- The Bluesky session (PROTOCOL §12.7 "Where the session lives"): tokens and the
+	     DPoP key go in the Keychain, and on the Mac KeychainVault asks for the data
+	     protection keychain so `AfterFirstUnlockThisDeviceOnly` holds. That keychain
+	     answers errSecMissingEntitlement (-34018) to an app with no access group, so the
+	     session never persisted and every relaunch signed the person out. Declaring the
+	     group makes automatic signing embed a Mac Catalyst profile, which also supplies
+	     the application-identifier the group has to match. iOS gets its default group
+	     from the profile it always has, so this stays a Mac-only grant. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)ca.lucianlabs.tgsocial</string>
+	</array>
 </dict>
 </plist>

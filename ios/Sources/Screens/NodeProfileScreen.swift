@@ -32,6 +32,12 @@ struct NodeProfileScreen: View {
                     // when the node carries no work keys — no empty section, no "not set up yet".
                     WorkCardSection(node: node)
                     HPSectionMark("Feeds")
+                    // PRODUCT §2.36: a VERIFIED link's row heads FEEDS; an unverified one is nothing
+                    // at all (PROTOCOL §12.3). The check runs signed out, so any reader sees the same.
+                    if let did = model.isDemo ? nil : model.bluesky?.verifiedDid(node) {
+                        BlueskyProfileRow(did: did)
+                            .padding(.bottom, HPTokens.Space.rowGap)
+                    }
                     if card.feeds.isEmpty {
                         HPCard { HPMuted("No feeds listed.") }
                     } else {
@@ -135,5 +141,8 @@ struct NodeProfileScreen: View {
         node = loaded.node
         feeds = loaded.feeds
         follows = loaded.follows
+        // PROTOCOL §12.3: a card naming a DID is checked before anything is shown for it — a node
+        // outside my follows has no cached answer yet. No line, no request.
+        if !model.isDemo, loaded.node.atprotoDid != nil { await model.bluesky?.refreshLinks([loaded.node]) }
     }
 }

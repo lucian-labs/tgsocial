@@ -68,6 +68,12 @@ struct RootView: View {
             case .removeMember(let member, let chatId): RemoveMemberModal(member: member, chatId: chatId)
             case .invitePreview(let preview): InvitePreviewModal(preview: preview)
             case .leavePrivate(let follow): LeavePrivateModal(follow: follow)
+            // PRODUCT §2.35–§2.40: Bluesky. Reachable only from Settings and a Bluesky post.
+            case .blueskySignIn(let prefill): BlueskySignInModal(prefill: prefill)
+            case .blueskySignOut: BlueskySignOutModal()
+            case .blueskyLink: BlueskyLinkModal()
+            case .blueskyUnlink: BlueskyUnlinkModal()
+            case .blockAccount(let did, let handle): BlockAccountModal(did: did, handle: handle)
             case nil: EmptyView()
             }
         }

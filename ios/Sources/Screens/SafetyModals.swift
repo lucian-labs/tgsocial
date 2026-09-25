@@ -89,7 +89,8 @@ struct ReportModal: View {
     var body: some View {
         ReportConfirm(subject: subject,
                       onSend: { reason in model.sendReport(subject, reason: reason) },
-                      onCancel: { model.modal = nil })
+                      onCancel: { model.modal = nil },
+                      onOpenBluesky: subject.isBluesky ? { model.open(subject.link) } : nil)
     }
 }
 
@@ -102,6 +103,8 @@ struct ReportConfirm: View {
     let subject: ReportSubject
     let onSend: (String) -> Void
     let onCancel: () -> Void
+    /// Set for a Bluesky post: opens it on Bluesky (§2.40 `Report on Bluesky`).
+    var onOpenBluesky: (() -> Void)? = nil
     @State private var reason: String?
 
     /// The muted paragraph, and on a private post its one honest addition (PRODUCT §2.32): the
@@ -109,8 +112,12 @@ struct ReportConfirm: View {
     static let paragraph = "This sends an email from your mail app to the person who maintains tgsocial, with a link to it. It disappears from this device as soon as you send."
     static let privateAddendum = "This is a private post. The maintainer can't open it \u{2014} report it to Telegram from the post as well."
 
+    /// PRODUCT §2.40: the honest clause on a Bluesky post — nobody reachable from here can take it down.
+    static let blueskyAddendum = "This is a Bluesky post. Nobody here can remove it from Bluesky \u{2014} report it there too."
+
     static func paragraph(for subject: ReportSubject) -> String {
-        subject.isPrivate ? paragraph + " " + privateAddendum : paragraph
+        if subject.isBluesky { return paragraph + " " + blueskyAddendum }
+        return subject.isPrivate ? paragraph + " " + privateAddendum : paragraph
     }
 
     var body: some View {
@@ -125,6 +132,11 @@ struct ReportConfirm: View {
                 ForEach(Array(Moderation.reasons.enumerated()), id: \.element) { i, option in
                     reasonRow(option, isLast: i == Moderation.reasons.count - 1)
                 }
+            }
+            if subject.isBluesky, let open = onOpenBluesky {
+                // §2.40: Bluesky's own report lives on the post, one tap away.
+                HPButton("Report on Bluesky", style: .ghost, size: .small, action: open)
+                    .padding(.top, HPTokens.Space.rowGap)
             }
             HPButton("Send Report", style: .danger, enabled: reason != nil) {
                 guard let reason else { return }

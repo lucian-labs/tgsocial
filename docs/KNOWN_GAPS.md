@@ -53,6 +53,29 @@ A browser TDLib client must ship `api_id`/`api_hash` to the page — this is
 architectural, not a defect. Self-hosters should register their own at
 my.telegram.org rather than reusing another deployment's (`web/README.md`).
 
+## Bluesky (PROTOCOL §12) — specified, not built
+
+`PROTOCOL §12` and `PRODUCT §2.35`–`§2.40` are written; the clients are not.
+What exists is the wire half, in the web client only: `web/js/protocol.js` has
+the card key, the link check, the merge rules, the tag admission, the safety
+keys and the client-metadata checker, and `web/test/protocol.test.mjs` runs
+every `atproto` vector against them. iOS and Android parse the same file and
+ignore the block. Still to land, roughly in this order:
+
+- **Place the native client metadata** at
+  `https://lucianlabs.ca/tgsocial/client-metadata.json` (`docs/HOSTING.md §7`).
+  On 2026-09-25 that path answered `200 text/html`, so native sign-in fails at
+  its first request until the file is there.
+- **One real login.** No session has completed end to end: granular scopes,
+  token lifetimes and refresh rotation are from the spec and the servers' error
+  messages (`PROTOCOL §12.7`).
+- **Reads on all three clients** — the link check, author sources, the tag
+  source — which need no sign-in and are most of the value.
+- **The OAuth flow** per platform (`PROTOCOL §12.7`: PAR, PKCE, DPoP, per-server
+  nonces), then linking, the follows source and cross-posting.
+- **The AppView's limits** for unauthenticated reads, measured before the
+  author-source fan-out ships (`PROTOCOL §12.4`).
+
 ## Settled — the two store declarations
 
 Neither of these is open any more.

@@ -25,11 +25,14 @@ private final class RecordingCardWriter: CardWriting {
     private(set) var handedWork: [Work?] = []
     private(set) var handedPrivateId: [String?] = []
 
-    func writeCard(_ card: Card, work: Work?, privateId: String?, node: MyNode) async throws -> MyNode {
+    private(set) var handedAtprotoDid: [String?] = []
+
+    func writeCard(_ card: Card, work: Work?, privateId: String?, atprotoDid: String?, node: MyNode) async throws -> MyNode {
         handedWork.append(work)
         handedPrivateId.append(privateId)
+        handedAtprotoDid.append(atprotoDid)
         // The bytes TDLib would receive, produced by the same serialiser the repository uses.
-        pinned.append(CardCodec.serialise(card, work: work, privateId: privateId))
+        pinned.append(CardCodec.serialise(card, work: work, privateId: privateId, atprotoDid: atprotoDid))
         return node
     }
 }

@@ -121,6 +121,9 @@ export function serialiseCard(card) {
   // §11.2: the private extension's lines come last, after §10's, by the same
   // argument — absent `privateId` / `private`, this is the serialiser above.
   for (const line of privateLines(card)) lines.push(line);
+  // §12.2: the atproto line comes after §11's, for the same reason — absent
+  // `atprotoDid`, this is the serialiser above, character for character.
+  for (const line of atprotoLines(card)) lines.push(line);
   const text = lines.join('\n');
   if (text.length > CARD_MAX) throw new RangeError('Card is full.');
   return text;
@@ -938,6 +941,410 @@ export function isPost(message, cardMessageId = null) {
   return true;
 }
 
+// ── PROTOCOL §12, atproto sources ──────────────────────────────────────────
+
+/*
+ * §12 is the third extension and is built like §10 and §11: a second pass
+ * over the card text for one prefixed key, plus the pure rules a client needs
+ * to put Bluesky posts into the §4.8 merge without breaking it. Nothing here
+ * does I/O — the reads are plain XRPC GETs any client makes its own way, and
+ * the OAuth flow (§12.7) is platform code. What lives here is everything two
+ * clients must agree on to show the same thing.
+ */
+
+/** §12.3 — the collection a person's atproto repo uses to name their node back. */
+export const ATPROTO_LINK_COLLECTION = 'ca.lucianlabs.tgsocial.link';
+export const ATPROTO_POST_COLLECTION = 'app.bsky.feed.post';
+/** §12.6 — WaveLoop's drop record, read exactly as WaveLoop writes it. */
+export const WAVELOOP_DROP_COLLECTION = 'app.waveloop.social.drop';
+/** §12.6 — the tag WaveLoop announces drops under (renamed from #waveloopsocial on 2026-09-07). */
+export const ATPROTO_TAG = 'waveloop';
+
+const DID_PLC_RE = /^did:plc:[a-z2-7]{24}$/;
+const HOST_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+const DID_WEB_RE = new RegExp(`^did:web:${HOST_LABEL}(?:\\.${HOST_LABEL})+$`);
+/** A TID: 13 chars of base32-sortable, first char keeps the top bit zero. */
+const TID_RE = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
+const TID_ALPHABET = '234567abcdefghijklmnopqrstuvwxyz';
+
+/**
+ * §12.2 — the two DID methods atproto blesses, canonical form, or null.
+ *
+ * `did:plc` is compared exactly: its identifier is lowercase base32 by
+ * construction, so an uppercase one is not the same DID written differently,
+ * it is not a DID. `did:web` names a hostname, which DNS treats
+ * case-insensitively, so the host is lowercased. atproto supports hostname-level
+ * `did:web` only — a port (`%3A`) or a path (a further `:`) is refused here
+ * rather than resolved wrongly (WaveLoop's `pdsFor` mis-resolves the path form).
+ */
+export function normaliseDid(input) {
+  if (typeof input !== 'string') return null;
+  const s = input.trim();
+  if (DID_PLC_RE.test(s)) return s;
+  const m = /^did:web:(.+)$/.exec(s);
+  if (!m) return null;
+  const did = `did:web:${m[1].toLowerCase()}`;
+  return DID_WEB_RE.test(did) && did.length <= 253 + 8 ? did : null;
+}
+
+/**
+ * §12.2 — the one §12 key, read off a PUBLIC card: `atproto.did: <did>`.
+ * First token only (the key is "one"; a repeated line concatenates by §2 and
+ * the first claim stands). Malformed → null, never fatal to the card.
+ */
+export function atprotoDidOf(text) {
+  if (!parseCard(text)) return null;
+  const raw = privateRaw(text, new Set(['atproto.did']));
+  const first = String(raw['atproto.did'] ?? '').trim().split(/\s+/)[0] ?? '';
+  return normaliseDid(first);
+}
+
+/**
+ * The §12 line for `serialiseCard`, after §11's. Never on a private card
+ * (§12.9): a private card names a public node and nothing else, and a DID on
+ * it would attach a public account to a channel whose point is that it is not.
+ */
+export function atprotoLines(card) {
+  if (card?.private) return [];
+  const did = normaliseDid(card?.atprotoDid ?? '');
+  return did ? [`atproto.did: ${did}`] : [];
+}
+
+/** `at://<did>/<collection>/<rkey>` → parts, when the authority is a DID (§12.2's grammar). */
+export function parseAtUri(uri) {
+  const m = /^at:\/\/([^/]+)\/([a-zA-Z0-9.-]+)\/([A-Za-z0-9._:~-]{1,512})$/.exec(String(uri ?? '').trim());
+  if (!m) return null;
+  const did = normaliseDid(m[1]);
+  return did ? { did, collection: m[2], rkey: m[3] } : null;
+}
+
+/**
+ * §12.3 — the link record's key is the node's username, lowercased, so a
+ * reader answers "does this DID name this node?" with one getRecord and no
+ * listing. Usernames are `[A-Za-z0-9_]`, which is inside the record-key grammar.
+ */
+export function linkRecordKey(node) {
+  const u = normaliseUsername(String(node ?? ''));
+  return u ? usernameKey(u) : null;
+}
+
+/** §12.8 — the record a client writes into the person's own repo. */
+export function linkRecord(node, createdAt) {
+  const key = linkRecordKey(node);
+  if (!key) return null;
+  return { $type: ATPROTO_LINK_COLLECTION, node: key, createdAt };
+}
+
+/**
+ * §12.3 — is `did` this node's atproto account? Both halves or nothing.
+ *
+ * The card half: only the node's owner can write the card, and it must name
+ * exactly this DID. The atproto half: only the DID's owner can write into its
+ * repo, and the record at `<did>/ca.lucianlabs.tgsocial.link/<node>` must name
+ * this node. `record` is what getRecord returned ({ uri, value }) or null for
+ * RecordNotFound. The uri is checked too, so a record read from some other
+ * repo — a PDS answering for the wrong DID — proves nothing.
+ */
+export function atprotoLinkVerified({ cardText, node, did, record }) {
+  const claimed = atprotoDidOf(cardText);
+  const asked = normaliseDid(did ?? '');
+  const key = linkRecordKey(node);
+  if (!claimed || !asked || claimed !== asked || !key) return false;
+  if (!record || record.uri !== `at://${claimed}/${ATPROTO_LINK_COLLECTION}/${key}`) return false;
+  const value = record.value ?? {};
+  if (value.$type !== ATPROTO_LINK_COLLECTION) return false;
+  return linkRecordKey(value.node) === key;
+}
+
+/** An atproto datetime: RFC 3339 with a timezone. A zoneless one would be read in the device's zone. */
+function atprotoMs(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(s)) return NaN;
+  return Date.parse(s);
+}
+
+/**
+ * §12.5 — a post's merge date, in seconds: the EARLIER of the author's
+ * `createdAt` and the AppView's `indexedAt`. That is the key the AppView sorts
+ * an author feed by, so a source's pages stay newest-first in it; and it is
+ * why a post dated 2099 by its author cannot sit above every Telegram post
+ * forever — `indexedAt` is the AppView's clock, not the author's.
+ */
+export function atprotoSortAt(post) {
+  const indexed = atprotoMs(post?.indexedAt);
+  if (!Number.isFinite(indexed)) return null;
+  const created = atprotoMs(post?.record?.createdAt);
+  return Math.floor((Number.isFinite(created) ? Math.min(created, indexed) : indexed) / 1000);
+}
+
+/**
+ * The time an entry holds its PAGE position by: a repost sits at the repost's
+ * time, everything else at its sortAt. A client drops reposts (§12.5) but
+ * still has to know where they were, or a page of nothing but reposts would
+ * tell it nothing about how far down the source it has read.
+ */
+export function atprotoFeedTime(entry) {
+  const reason = atprotoMs(entry?.reason?.indexedAt);
+  if (Number.isFinite(reason)) return Math.floor(reason / 1000);
+  return atprotoSortAt(entry?.post ?? entry);
+}
+
+/** A TID record key → its microsecond timestamp (the merge's tiebreak); 0 when the key is not a TID. */
+export function tidMicros(rkey) {
+  if (typeof rkey !== 'string' || !TID_RE.test(rkey)) return 0;
+  let n = 0n;
+  for (const c of rkey) n = n * 32n + BigInt(TID_ALPHABET.indexOf(c));
+  return Number(n >> 10n);
+}
+
+/**
+ * §12.9 — label values that drop a post at render, no switch (PRODUCT §2.18).
+ * Applied whoever applied the label, the author's own self-label included.
+ */
+export const ATPROTO_HIDE_LABELS = new Set(['!hide', '!takedown', 'porn', 'sexual', 'nudity', 'graphic-media', 'gore']);
+
+/** True when the post or its author carries a live hiding label. A `neg` label cancels the same src + val. */
+export function atprotoLabelsHide(post) {
+  const live = new Map();
+  for (const l of [...(post?.author?.labels ?? []), ...(post?.labels ?? [])]) {
+    if (!l || typeof l.val !== 'string') continue;
+    const k = `${l.src ?? ''}|${l.val}`;
+    if (l.neg === true) live.delete(k);
+    else live.set(k, l.val);
+  }
+  for (const val of live.values()) if (ATPROTO_HIDE_LABELS.has(val)) return true;
+  return false;
+}
+
+/**
+ * §12.5 — a FeedViewPost (getAuthorFeed, getTimeline) or a PostView
+ * (searchPosts) → a merge item, or null when §12.5 leaves it out: reposts and
+ * pins (an entry with a `reason`), replies, a hiding label, a date that will
+ * not parse, anything that is not an app.bsky.feed.post.
+ */
+export function atprotoItem(entry) {
+  const post = entry?.post ?? entry;
+  const at = parseAtUri(post?.uri);
+  if (!at || at.collection !== ATPROTO_POST_COLLECTION) return null;
+  if (entry?.reason) return null;
+  if (post.record?.reply) return null;
+  if (atprotoLabelsHide(post)) return null;
+  const date = atprotoSortAt(post);
+  if (date === null) return null;
+  return { id: post.uri, date, tie: tidMicros(at.rkey), did: at.did, post };
+}
+
+/** Source keys: `:` is outside every username and every `c/<id>` key, so no namespace can collide. */
+export function atprotoSourceKey(kind, value = '') {
+  if (kind === 'author') return `at:${normaliseDid(value) ?? ''}`;
+  if (kind === 'following') return 'bsky:following';
+  if (kind === 'tag') return `tag:${String(value).toLowerCase()}`;
+  return null;
+}
+
+/**
+ * §12.5 — push one AppView page into a §4.8 merge. The SourceState contract:
+ *
+ *   cursor     the page's own `cursor` string, opaque; the merge never compares it.
+ *   exhausted  the page came back with no cursor, or with no entries. NEVER
+ *              "nothing survived the filter": a page of reposts has a next page.
+ *   lastDate   the oldest feed time on any page read, dropped entries included —
+ *              the AppView's own order says nothing newer is coming.
+ *   late       an entry newer than lastDate as it stood before this page is
+ *              dropped: its newer neighbours may already be on screen, and
+ *              inserting it would break newest-first. The next refresh from the
+ *              top places it.
+ *   seen       merge-wide by at-uri, so a post that reaches the reader through
+ *              two sources (a linked account and #waveloop) renders once.
+ *
+ * `admit` is the source's own admission rule (`atprotoItem`, or
+ * `tagSourceItem` for §12.6).
+ */
+export function pushAtprotoPage(merge, key, page, { admit = atprotoItem } = {}) {
+  const src = merge.sources[key];
+  if (!src) return;
+  src.fetched = true;
+  const entries = Array.isArray(page?.feed) ? page.feed : Array.isArray(page?.posts) ? page.posts : [];
+  const before = src.lastDate;
+  let oldest = Infinity;
+  for (const entry of entries) {
+    const t = atprotoFeedTime(entry);
+    if (t !== null && t < oldest) oldest = t;
+    const item = admit(entry);
+    if (!item || item.date > before || merge.seen.has(item.id)) continue;
+    merge.seen.add(item.id);
+    src.buffer.push({ key, id: item.id, date: item.date, tie: item.tie, did: item.did, message: item.post });
+  }
+  if (oldest < src.lastDate) src.lastDate = oldest;
+  src.cursor = typeof page?.cursor === 'string' && page.cursor !== '' ? page.cursor : null;
+  src.exhausted = entries.length === 0 || src.cursor === null;
+  src.buffer.sort((a, b) => b.date - a.date || b.tie - a.tie);
+}
+
+/**
+ * §12.5 — a cross-post (§12.8) is an atproto post whose external embed is the
+ * t.me link of a post in one of the linked node's own feeds. The reader
+ * already has the Telegram original, so the copy is not rendered. `nodeFeeds`
+ * is the `feeds:` of the node the author's DID is VERIFIED to (§12.3); an
+ * unlinked author passes [] and nothing of theirs is suppressed.
+ */
+export function crossPostTarget(post, nodeFeeds = []) {
+  const embed = post?.record?.embed;
+  if (embed?.$type !== 'app.bsky.embed.external') return null;
+  const key = targetKey(embed.external?.uri);
+  if (!key) return null;
+  const channel = key.split('/')[0];
+  return (nodeFeeds ?? []).some((f) => usernameKey(String(f).replace(/^@/, '')) === channel) ? key : null;
+}
+
+/**
+ * §12.6 — WaveLoop's drop link, either form it writes: `?at=<at-uri>` or
+ * `?d=<did>&r=<rkey>`. A `d=` that is a handle is not resolved: attribution
+ * here runs on DIDs, and a handle is a claim until resolved.
+ */
+export function waveloopDropRef(url) {
+  let u;
+  try {
+    u = new URL(String(url ?? ''));
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)waveloop\.app$/.test(u.hostname) || !u.pathname.startsWith('/drop')) return null;
+  const at = u.searchParams.get('at');
+  if (at) {
+    const p = parseAtUri(at);
+    return p && p.collection === WAVELOOP_DROP_COLLECTION ? `at://${p.did}/${p.collection}/${p.rkey}` : null;
+  }
+  const d = normaliseDid(u.searchParams.get('d') ?? '');
+  const r = u.searchParams.get('r');
+  return d && r && /^[A-Za-z0-9._:~-]{1,512}$/.test(r) ? `at://${d}/${WAVELOOP_DROP_COLLECTION}/${r}` : null;
+}
+
+/**
+ * §12.6 — the drop an announcement post points at, found the way WaveLoop's
+ * own reader finds it (external embed, then link facets, then URLs in the
+ * text; first hit wins), and kept only when the drop lives in the POSTER's
+ * repo. Anyone can type #waveloop and paste someone else's drop link; the
+ * owner check is what makes a tag hit a drop by the person shown on it.
+ */
+export function dropRefOf(post) {
+  const rec = post?.record ?? {};
+  const author = parseAtUri(post?.uri)?.did ?? normaliseDid(post?.author?.did ?? '');
+  const cands = [];
+  const emb = rec.embed ?? {};
+  const ext = emb.external ?? emb.media?.external;
+  if (ext?.uri) cands.push(ext.uri);
+  for (const f of rec.facets ?? []) for (const ft of f.features ?? []) if (ft.uri) cands.push(ft.uri);
+  cands.push(...(String(rec.text ?? '').match(/https?:\/\/[^\s)]+/g) ?? []));
+  for (const c of cands) {
+    const ref = waveloopDropRef(c);
+    if (ref) return author && parseAtUri(ref)?.did === author ? ref : null;
+  }
+  return null;
+}
+
+/** §12.6 — the tag source's admission: §12.5's rule, and it must be a drop by its poster. */
+export function tagSourceItem(entry) {
+  const item = atprotoItem(entry);
+  return item && dropRefOf(item.post) ? item : null;
+}
+
+/**
+ * §12.9 / PROTOCOL §7.1 — the hidden-list key for a Bluesky post: its at-uri.
+ * Accepts the at-uri or the bsky.app URL in DID form. A post's record key is a
+ * TID by its lexicon, lowercase by construction, so §7.1's lowercasing of
+ * hidden keys loses nothing; a non-TID key is not a post this client renders.
+ */
+export function atprotoPostKey(link) {
+  const s = String(link ?? '').trim();
+  let did = null;
+  let rkey = null;
+  const at = parseAtUri(s);
+  if (at && at.collection === ATPROTO_POST_COLLECTION) ({ did, rkey } = at);
+  const web = /^https:\/\/bsky\.app\/profile\/([^/]+)\/post\/([^/?#]+)\/?$/.exec(s);
+  if (web) {
+    did = normaliseDid(web[1]);
+    rkey = web[2];
+  }
+  if (!did || !TID_RE.test(rkey ?? '')) return null;
+  return `at://${did}/${ATPROTO_POST_COLLECTION}/${rkey}`;
+}
+
+/** One lookup for every kind of thing a reader can hide: a t.me post or comment, or a Bluesky post. */
+export function safetyKey(link) {
+  return targetKey(link) ?? atprotoPostKey(link);
+}
+
+/** §12.9 — Share and `Open on Bluesky`: the DID form, which survives a handle change. */
+export function bskyPostUrl(uri) {
+  const at = parseAtUri(uri);
+  return at && at.collection === ATPROTO_POST_COLLECTION ? `https://bsky.app/profile/${at.did}/post/${at.rkey}` : null;
+}
+
+// ── §12.7 client metadata ──────────────────────────────────────────────────
+
+/** The custom scheme a native client may redirect to: the client_id host, labels reversed. */
+export function nativeRedirectScheme(clientId) {
+  let u;
+  try {
+    u = new URL(String(clientId ?? ''));
+  } catch {
+    return null;
+  }
+  return u.hostname ? u.hostname.split('.').reverse().join('.') : null;
+}
+
+/**
+ * §12.7 — what is wrong with a client-metadata document, as short codes; []
+ * is a document a client may publish. atproto's own rules (atproto.com/specs/
+ * oauth, measured against bsky.social on 2026-09-25) plus two of this
+ * protocol's: a public client (no secret can ship in an app or a static
+ * site), and no `transition:generic` (deprecated, and wider than §12 needs).
+ * `fetchedFrom` is the URL the document was served at; client_id must equal it.
+ */
+export function clientMetadataProblems(doc, fetchedFrom = null) {
+  const out = [];
+  let id = null;
+  try {
+    id = new URL(String(doc?.client_id ?? ''));
+  } catch {
+    id = null;
+  }
+  if (!id || id.protocol !== 'https:' || id.port !== '' || id.hash !== '' || (fetchedFrom !== null && doc.client_id !== fetchedFrom)) out.push('client_id');
+  const type = doc?.application_type ?? 'web';
+  if (type !== 'web' && type !== 'native') out.push('application_type');
+  if (!Array.isArray(doc?.grant_types) || !doc.grant_types.includes('authorization_code')) out.push('grant_types');
+  if (!Array.isArray(doc?.response_types) || doc.response_types.length !== 1 || doc.response_types[0] !== 'code') out.push('response_types');
+  const scopes = String(doc?.scope ?? '').split(/\s+/).filter(Boolean);
+  if (!scopes.includes('atproto')) out.push('scope_atproto');
+  if (scopes.includes('transition:generic')) out.push('scope_generic');
+  if (doc?.dpop_bound_access_tokens !== true) out.push('dpop');
+  if (doc?.token_endpoint_auth_method !== 'none' || doc?.jwks || doc?.jwks_uri) out.push('auth_method');
+  const redirects = Array.isArray(doc?.redirect_uris) ? doc.redirect_uris : [];
+  if (!redirects.length) out.push('redirect_uris');
+  const scheme = id ? nativeRedirectScheme(doc.client_id) : null;
+  for (const r of redirects) {
+    const s = String(r);
+    if (/^https:\/\//.test(s)) {
+      let ru = null;
+      try {
+        ru = new URL(s);
+      } catch {
+        ru = null;
+      }
+      if (!ru || (type === 'native' && id && ru.origin !== id.origin)) out.push('redirect_origin');
+      continue;
+    }
+    const m = /^([a-z][a-z0-9+.-]*):(.*)$/.exec(s);
+    if (!m || type !== 'native' || m[1] !== scheme) {
+      out.push('redirect_scheme');
+      continue;
+    }
+    if (!/^\/[^/]/.test(m[2])) out.push('redirect_slash');
+  }
+  return [...new Set(out)];
+}
+
+
 // ── feed merge (PROTOCOL §4.8) ─────────────────────────────────────────────
 
 /**
@@ -1012,7 +1419,10 @@ export function takeNext(merge, count) {
     for (const src of Object.values(merge.sources)) {
       const head = src.buffer[0];
       if (!head) continue;
-      if (!best || head.date > best.date || (head.date === best.date && head.id > best.id)) best = head;
+      // Ties within a second break on `tie` — a Telegram item has none and
+      // uses its message id, an atproto item carries its TID's microseconds
+      // (§12.5). Comparing a number with an at-uri string would be no order.
+      if (!best || head.date > best.date || (head.date === best.date && (head.tie ?? head.id) > (best.tie ?? best.id))) best = head;
     }
     if (!best) return { items, blockedOn: empties.length ? refillCandidate(merge) : null };
     if (best.date < bound) return { items, blockedOn: refillCandidate(merge) };

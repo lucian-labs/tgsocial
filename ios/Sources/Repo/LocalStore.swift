@@ -36,12 +36,17 @@ final class LocalStore {
     /// after; `adopt(userId:)` is what decides on the next sign-in whether it still belongs to
     /// whoever signs in. Delete my node (PRODUCT §2.21) comes through here too, and keeps it for
     /// the same reason.
+    ///
+    /// `blockedWith` rides along: it is the half of a node block that remembers which DID was
+    /// written beside the node (PROTOCOL §12.9), so it survives exactly when the list does.
     func clear() {
-        let safety = try? Data(contentsOf: url(Self.moderation))
+        let kept = Self.survivesSignOut.map { ($0, try? Data(contentsOf: url($0))) }
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let safety { try? safety.write(to: url(Self.moderation), options: .atomic) }
+        for (name, data) in kept { if let data { try? data.write(to: url(name), options: .atomic) } }
     }
+
+    static let survivesSignOut = [moderation, blockedWith]
 
     // MARK: Versioned caches (PRODUCT §2.3)
 
@@ -73,6 +78,15 @@ final class LocalStore {
     static let myCard = "myCard"
     /// PROTOCOL §10.2: my work card, cached beside my card so §10.6's write-back survives a relaunch.
     static let myWork = "myWork"
+    /// PROTOCOL §12.2: my card's `atproto.did`, cached for the same write-back reason.
+    static let myAtprotoDid = "myAtprotoDid"
+    /// PROTOCOL §12.3: the link-verification cache. Discardable (§7).
+    static let atprotoLinks = "atprotoLinks"
+    /// PRODUCT §2.35: the two Bluesky toggles — preferences, device-local.
+    static let blueskyPrefs = "blueskyPrefs"
+    /// PROTOCOL §12.9: the signed-in account's Bluesky blocks, with the DID they belong to.
+    /// Discardable (§7): a later read rebuilds it.
+    static let blueskyBlocks = "blueskyBlocks"
     static let myTitle = "myTitle"
     static let nodeCache = "nodes"
     static let feedCache = "feeds"
@@ -94,4 +108,8 @@ final class LocalStore {
     /// PROTOCOL §7.1: stored apart from every cache and never versioned with them — a cache bump
     /// discards caches and must never discard a block list.
     static let moderation = "moderation"
+    /// PROTOCOL §12.9 "Unblock lifts both": node → the DID its block wrote beside it. Kept beside
+    /// the §7.1 record rather than in it, because that record's shape is shared with Android and
+    /// web and §12.9 grows its key grammar, not its fields.
+    static let blockedWith = "blockedWith"
 }

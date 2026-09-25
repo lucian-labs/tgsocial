@@ -13,6 +13,16 @@ struct PostCard: View {
     let onOpenFeed: (String) -> Void
 
     var body: some View {
+        // PRODUCT §2.36: a Bluesky post is the same card marked by source, so every list that
+        // renders a PostCard renders it without knowing — the one branch lives here.
+        if post.isBluesky {
+            BlueskyPostCard(post: post)
+        } else {
+            telegramCard
+        }
+    }
+
+    private var telegramCard: some View {
         HPCard {
             // Rule 6's tiling half: the header does not own all of its own hit targets, so the card
             // holds `PostHeaderBottomGap` clear of tap surfaces under it. See the modifier.
@@ -202,6 +212,16 @@ struct PostSheetModal: View {
     let post: Post
 
     var body: some View {
+        // §2.36: a Bluesky post's sheet has its own rows (`On  Bluesky · @handle`, no Views) and
+        // opens on Bluesky rather than Telegram.
+        if post.isBluesky {
+            BlueskyPostSheet(post: post)
+        } else {
+            telegramSheet
+        }
+    }
+
+    private var telegramSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Post")
             row("Posted", PostTime.exact(unix: post.date))
