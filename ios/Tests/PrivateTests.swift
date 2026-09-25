@@ -279,9 +279,11 @@ final class PrivateSafetyTests: XCTestCase {
         XCTAssertTrue(publicBody.contains("Channel: @waveloop_devlog"))
     }
 
-    func testTheReportConfirmSaysTheMaintainerCannotOpenIt() {
-        let priv = ReportConfirm.paragraph(for: ReportSubject(post: PrivateFixture.post()))
-        XCTAssertTrue(priv.hasSuffix("This is a private post. The maintainer can't open it \u{2014} report it to Telegram from the post as well."))
+    /// PRODUCT §2.32 / §3: the confirm states the consequence only. That the maintainer cannot open
+    /// a private post is a reason, and it lives in the spec, not on screen.
+    func testTheReportConfirmIsTheConsequenceOnlyOnEverySubject() {
+        XCTAssertEqual(ReportConfirm.paragraph, "It's hidden here and emailed to elijah@lucianlabs.ca.")
+        XCTAssertEqual(ReportConfirm.paragraph(for: ReportSubject(post: PrivateFixture.post())), ReportConfirm.paragraph)
         XCTAssertEqual(ReportConfirm.paragraph(for: ReportSubject(post: MediaFixture.post())), ReportConfirm.paragraph)
     }
 }

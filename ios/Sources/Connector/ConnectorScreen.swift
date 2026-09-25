@@ -68,9 +68,6 @@ struct ConnectorScreen: View {
             activityCard
             HPButton("Clear Activity", style: .ghost, size: .small) { connector.clearActivity() }
                 .padding(.bottom, HPTokens.Space.cardGap)
-
-            HPMuted("Connected assistants read through tgsocial; they never see your Telegram sign-in.")
-                .padding(.top, HPTokens.Space.rowPad)
         }
         .onAppear { portText = String(connector.settings.port) }
         .hpModal(isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
@@ -163,7 +160,7 @@ struct ConnectorScreen: View {
                                      if preset == .custom { model.path.append(.connectorCustom) }
                                  })) { $0.label }
         HPCard {
-            HPMuted(scope.summary)
+            HPMonoSmall(scope.summary)
             HPButton("Review Sources", style: .ghost, size: .small) {
                 model.path.append(.connectorSources)
             }
@@ -192,8 +189,7 @@ struct ConnectorScreen: View {
                 }
             }
         }
-        HPMuted("Writes are off until you turn them on. Each one is separate.")
-            .padding(.bottom, HPTokens.Space.cardGap)
+        .padding(.bottom, HPTokens.Space.cardGap)
     }
 
     // MARK: Activity
@@ -323,7 +319,6 @@ struct ConnectorSourcesScreen: View {
                     }
                 }
             }
-            HPMuted("Private chats and private channels are never included.")
         }
     }
 }
@@ -343,7 +338,7 @@ struct ConnectorCustomScreen: View {
                 HPButton("Add", style: .neutral, size: .small, enabled: Username.normalise(entry) != nil) { add() }
             }
             if custom.isEmpty {
-                HPCard { HPMuted("Nothing listed. An empty custom list exposes nothing.") }
+                HPCard { HPMuted("Nothing listed.") }
             } else {
                 HPListCard {
                     ForEach(Array(custom.enumerated()), id: \.element) { index, username in
@@ -357,7 +352,6 @@ struct ConnectorCustomScreen: View {
                     }
                 }
             }
-            HPMuted("Only these usernames are exposed. Private chats and private channels are never included.")
         }
     }
 

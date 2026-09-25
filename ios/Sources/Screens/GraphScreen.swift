@@ -42,7 +42,7 @@ struct GraphScreen: View {
 
             HPSectionMark("Direct", count: direct.count)
             if direct.isEmpty {
-                HPCard { HPMuted("Follow someone and they appear here.") }
+                HPCard { HPMuted("Not following anyone yet.") }
             } else {
                 HPListCard {
                     ForEach(Array(direct.enumerated()), id: \.element.id) { i, n in
@@ -53,7 +53,7 @@ struct GraphScreen: View {
 
             HPSectionMark("+1", count: nearby.count)
             if nearby.isEmpty {
-                HPCard { HPMuted("Follow someone and their people appear here.") }
+                HPCard { HPMuted("Nobody at +1 yet.") }
             } else {
                 HPListCard {
                     ForEach(Array(nearby.enumerated()), id: \.element.id) { i, e in

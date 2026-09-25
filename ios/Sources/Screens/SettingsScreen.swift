@@ -12,10 +12,8 @@ struct SettingsScreen: View {
 
     var body: some View {
         Screen(back: true) {
-            HPSectionMark("Safety")
-            HPMuted("Blocked and reported content is hidden everywhere in the app. The filter is always on; there is no switch. These lists live on this device only and nobody else can read them.")
-                .padding(.bottom, HPTokens.Space.cardGap)
-
+            // PRODUCT §3: no explanation on screen. What the filter does and where the lists live is
+            // §2.18 and PROTOCOL §7.1's to say; the screen opens on the lists themselves.
             blocked
             muted
             hidden
@@ -211,7 +209,7 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Write to \(Moderation.contactAddress)")
-            HPMuted("Reports are read by a person within 24 hours. Content that breaks the rules is reported to Telegram, the only party that can remove it from the network. Your copy is hidden on your device the moment you report it, whether or not anyone else acts.")
+            HPMuted("Read by a person within 24 hours.")
                 .padding(.top, HPTokens.Space.rowGap)
         }
     }
@@ -241,21 +239,25 @@ struct DeleteNodeModal: View {
 
     // MARK: The confirm
 
-    /// PRODUCT §2.21's paragraph, grown per §2.33 when a private node exists: the private clause
-    /// is derived, and the sentence about members is present only then.
-    private var paragraph: String {
-        if let clause = model.deleteNodePrivateClause {
-            return "This deletes the channel @\(username), your comments channel @\(repliesUsername), \(clause) from Telegram. The public card other people read disappears, every post and comment in those channels goes with it, every member of your private channels loses them at once, and the public names are released for anyone to take. This cannot be undone."
+    /// PRODUCT §2.21's consequence, one sentence, grown per §2.33 when a private node exists: the
+    /// private clause is derived, and "for every member" is present only then.
+    var paragraph: String { Self.consequence(username: username, replies: repliesUsername, privateClause: model.deleteNodePrivateClause) }
+
+    static func consequence(username: String, replies: String, privateClause: String?) -> String {
+        if let clause = privateClause {
+            return "Deletes @\(username), @\(replies), \(clause), and everything in them for every member; your feeds stay."
         }
-        return "This deletes the channel @\(username) and your comments channel @\(repliesUsername) from Telegram. The public card other people read disappears, every post and comment in those two channels goes with it, and the names are released for anyone to take. This cannot be undone."
+        return "Deletes @\(username) and @\(replies) and everything in them; your feeds stay."
     }
+
+    static let cannotUndo = "This can't be undone."
 
     @ViewBuilder private var confirm: some View {
         HPSectionMark("Delete my node")
         HPH2("Delete my node.")
         HPMuted(paragraph)
             .padding(.top, HPTokens.Space.rowGap)
-        HPMuted("Your feed channels are not touched.")
+        HPMuted(Self.cannotUndo)
             .padding(.top, HPTokens.Space.rowGap)
             .padding(.bottom, HPTokens.Space.cardPad)
         HPTextField("Type @\(username) to confirm", text: $typed, placeholder: "@\(username)", kind: .mono)

@@ -51,8 +51,6 @@ struct DemoSheetModal: View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark(DemoCopy.sheetMark)
             HPH2(DemoCopy.sheetTitle)
-            HPMuted(DemoCopy.sheetBody)
-                .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             row("Nodes", "\(model.demo?.nodeCount ?? 0)")
             row("Feeds", model.demo?.feedsRow ?? "")

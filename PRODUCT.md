@@ -65,25 +65,23 @@ Shown whenever TDLib is not `authorizationStateReady`.
 ```
 tgsocial                                   (wordmark, 3rem)
 Your Telegram, as a feed.                  (h1)
-Sign in with the Telegram account you       (muted)
-already have. Nothing is stored anywhere
-but Telegram and this device.
 
 PHONE NUMBER                                (field label)
 [ +1 604 555 0199            ]              (input, tel)
 ( Send Code )                               (btn primary)
 
 ( Look Around First )                       (btn ghost, outside the card — §2.22)
-Invented people, invented posts. Nothing     (muted)
-is sent to Telegram.
+elijah@lucianlabs.ca                        (muted, → mail composer — §2.19)
 ```
 
-`Look Around First` is the demo (§2.22), and it is on **step 1 only**. It sits
-below the card and carries no fill, so the one gold button on the screen is
-still `Send Code`.
+- **No explanation on the screen** (§3). The h1 is the only sentence; what the
+  app stores and where is `docs/PRIVACY.md`'s to say.
+- `Look Around First` is the demo (§2.22), and it is on **step 1 only**. It
+  sits below the card and carries no fill, so the one gold button on the screen
+  is still `Send Code`.
 
-Arrived on a public link (§2.13), the muted line names the destination
-instead: `Sign in to see @<name>.` Everything else is unchanged.
+Arrived on a public link (§2.13), one muted line under the h1 names the
+destination: `Sign in to see @<name>.`
 
 Step 2 replaces the field with `CODE` + input (numeric, 5 digits) and the
 button reads `Sign In`. A ghost button `Use another number` goes back.
@@ -91,9 +89,16 @@ button reads `Sign In`. A ghost button `Use another number` goes back.
 Step 3 (2FA) shows `PASSWORD` + secure input, hint text from TDLib's
 `passwordHint` in muted if present, button `Unlock`.
 
+A step TDLib asks for that the app does not have shows muted
+`Sign in with the Telegram app first.`, TDLib's state name in mono faint, and
+`Use another number`.
+
 Every step's footer carries one muted line, `elijah@lucianlabs.ca` (§2.19) —
 this is the only screen a signed-out reader sees, and the address has to be
 reachable from it.
+
+Bluesky is not on this screen: it is added from Settings once signed in
+(§2.35).
 
 Errors (toast, `.bad`): `That code didn't match.` · `That password didn't
 match.` · `Telegram didn't accept that number.` · `Too many tries. Wait a
@@ -108,9 +113,7 @@ Card 1 — **Your node**
 ```
 YOUR NODE                                   (section mark)
 Make your node.                             (h2)
-A public channel that holds your feeds and   (muted)
-who you follow. It lives on Telegram, and
-anyone can read it there.
+It's public on Telegram.                    (muted — the consequence, one sentence)
 
 NODE NAME
 [ tgs_elijah                ]               (input; live availability check → pill `Available` / `Taken`)
@@ -121,7 +124,6 @@ NODE NAME
 Card 2 — **Your feeds** (appears once the node exists)
 ```
 YOUR FEEDS
-Pick the channels that post as you.          (muted)
 ┌ list-item ─────────────────────────────┐
 │ WaveLoop devlog       @waveloop_devlog │ [toggle]
 │ Très Buchet           @tresbuchet      │ [toggle]
@@ -131,8 +133,8 @@ Pick the channels that post as you.          (muted)
 ```
 
 Toggling on asks once per feed, inline below the row, in muted text with two
-small buttons: `Add a line to this channel's description so readers can
-verify it's yours?` — `( Verify )` `( Skip )`. Verify appends
+small buttons: `Add "tgsocial: @tgs_elijah" to its description?` —
+`( Verify )` `( Skip )`. Verify appends
 `tgsocial: @<node>` to the description (`PROTOCOL §3`).
 
 Setup is skippable; `Skip for now` (ghost) goes to Feed with an empty-state
@@ -269,8 +271,7 @@ SAFETY                                       (section mark)
 - Infinite scroll: load more when the last card is within two screens of the
   bottom. A muted `Loading…` row at the end; `That's everything.` when all
   sources are exhausted.
-- Empty: one card — h2 `Nothing here yet.` muted `Follow a node and their
-  feeds show up here, newest first.` `( Explore )` btn accent.
+- Empty: one card — h2 `Nothing here yet.` and `( Explore )` btn accent.
 - Own posts appear in the feed like any other, attributed to me.
 
 ### 2.4 Explore
@@ -292,8 +293,7 @@ Rows are `.list-item`s inside one card per section. `Follow` is a `.btn sm`
 (neutral — not gold: the view has many of them). After following it reads
 `Following` and is ghost. Tapping the row opens the profile.
 
-Empty states: `Follow someone and their people appear here.` (Nearby) ·
-`No nodes found. Be the first: make yours public.` (Directory).
+Empty states: `Nobody nearby yet.` (Nearby) · `No nodes found.` (Directory).
 
 ### 2.5 Node profile
 
@@ -385,6 +385,10 @@ list of distance-2 nodes ranked by mutual count
 The figure in the section marks (`12`, `84`) is set in the serif — the one
 place numerals appear on this screen.
 
+Empty, each under its section mark in muted: `Not following anyone yet.`
+(`DIRECT`) · `Nobody at +1 yet.` (`+1`). Labels, not instructions (§3):
+Explore is one tab away and is where following starts.
+
 ### 2.8 You
 
 ```
@@ -393,6 +397,7 @@ place numerals appear on this screen.
 
 YOUR FEEDS                     ( Manage ) btn sm
 ┌ card: list of my feeds; each row → Compose for that feed ┐
+  — none yet: `No feeds yet.` (muted, in the card)
 
 ( Compose )                                   btn primary — the one gold action on this screen
 
@@ -405,17 +410,20 @@ Nothing private yet.
 ( Make a Private Node )     btn neutral sm
 
 ( View as others see it )   ghost
-( Settings )                ghost — pushes §2.20, which now holds Sign Out
+( Settings )                ghost — pushes §2.20, which holds Sign Out
 
-Questions or reports: elijah@lucianlabs.ca           muted, → mail composer
-Reports are read by a person within 24 hours.        faint
+elijah@lucianlabs.ca                                 muted, → mail composer
 tgsocial 1.0 (12) · TDLib 1.8.x · node @tgs_elijah   mono faint
 ```
 
-`Sign Out` is no longer on this screen: it lives in Settings with
-`Delete My Node` (§2.20, §2.21), so the two destructive actions sit together
-and neither is a mis-tap away from `View as others see it`. The contact line
-is §2.19 and is present whether or not a node exists.
+`Sign Out` is not on this screen: it lives in Settings with `Delete My Node`
+(§2.20, §2.21), so the two destructive actions sit together and neither is a
+mis-tap away from `View as others see it`. The contact line is §2.19 and is
+present whether or not a node exists; the 24-hour commitment is said once, on
+Settings' `CONTACT` card, not here as well (§3).
+
+With no node, the body is §2.3's empty card (h2 `Nothing here yet.`,
+`( Set Up )` → §2.2) and `( Settings )` below it.
 
 **Edit Card** modal: `NAME` input, `BIO` input, `LINK` input, `( Save )`.
 **Manage feeds**: the Setup feeds card.
@@ -432,7 +440,9 @@ POST TO
 Photo attach is a `( Add Photo )` ghost sm above the row on native; web v1
 is text only. Success toast `Posted.`; the feed refreshes. A private channel's
 tab carries a faint `Private` pill (§2.28). Signed in to Bluesky, the sheet
-gains `Also post to Bluesky` (§2.38).
+gains `Also post to Bluesky` (§2.38). With no feeds to post to, the tabs' place
+reads `No feeds yet.` (muted) — a label (§3); `( Manage )` on You is where
+feeds are picked.
 
 ### 2.10 Status sheet
 
@@ -636,7 +646,7 @@ COMMENTS · 3                                  (section mark, serif count)
 │     Agreed.                                │  hairline gutter in `line`; depth
 │     Reply                                  │  capped at 5, deeper shows flat
 └───────────────────────────────────────────┘
-No comments from your network yet.            (empty, muted, full stop)
+No comments from your network.                (empty, muted, full stop)
 ( Comment )                                   (btn primary — the screen's one gold action)
 ```
 
@@ -660,9 +670,7 @@ the target ("re: WaveLoop devlog — 'Post text…'"), textarea placeholder
 `Say it.`, `( Add Photo )` ghost sm, `( Post )` primary + `( Cancel )` ghost.
 
 First comment ever: the modal first shows one extra card —
-`YOUR COMMENTS CHANNEL` section mark, muted `Your comments live in a public
-channel you own. Anyone can read it on Telegram; you can edit or delete
-anything there.`, input prefilled `<node>_r` with the availability pill,
+`YOUR COMMENTS CHANNEL` section mark, muted `It's public on Telegram.`, input prefilled `<node>_r` with the availability pill,
 `( Make Channel )` primary. On success the composer proceeds. The channel is
 added to the card's `replies:` (`PROTOCOL §6.4`).
 
@@ -795,17 +803,13 @@ Token               ••••••••  ( Copy ) ( Rotate )
 
 SCOPE
 [ Graph ] [ Mine ] [ Custom ]                 (.tabs)
-14 sources — your feeds and the feeds of the
-nodes you follow. Private chats and private
-channels are never included.                  (muted)
+14 sources                                    (mono muted)
 ( Review Sources )                            (btn ghost sm → list of usernames)
 
 WRITES
 Post to my feeds     [ toggle ]  Off
 Comment as me        [ toggle ]  Off
 Edit my card         [ toggle ]  Off
-Writes are off until you turn them on. Each
-one is separate.                              (muted)
 
 ACTIVITY
 ┌ card ─────────────────────────────────────┐
@@ -814,10 +818,12 @@ ACTIVITY
 │ 14:03  Post              Refused, read-only│  refusals in `bad`
 └───────────────────────────────────────────┘
 ( Clear Activity )                            (btn ghost sm)
-
-Connected assistants read through tgsocial;
-they never see your Telegram sign-in.         (muted, footer)
 ```
+
+`Let an assistant read your feeds.` is the screen's one helper line: without
+it, `Bridge` names nothing a person recognises. What each preset exposes, that
+writes are off by default, and that an assistant never sees the Telegram
+sign-in are `CONNECTOR.md`'s to say, not the screen's (§3).
 
 Behaviour:
 
@@ -868,10 +874,8 @@ Tapping `Report Post` replaces the sheet with the report confirm:
 ```
 REPORT                                       (section mark)
 Report this post.                            (h2)     — `Report this comment.` on a comment, `Report this vouch.` on a vouch (§2.25)
-This sends an email from your mail app to    (muted)
-the person who maintains tgsocial, with a
-link to it. It disappears from this device
-as soon as you send.
+It's hidden here and emailed to              (muted — the consequence, one sentence)
+elijah@lucianlabs.ca.
 
 WHY                                          (section mark)
 ┌ card ─────────────────────────────────┐
@@ -958,10 +962,8 @@ Confirm modal:
 ```
 BLOCK                                        (section mark)
 Block @tgs_ana?                              (h2)
-Their posts and their comments disappear      (muted)
-from your feed, your threads, your graph,
-and search. They are not told. Undo it in
-Settings.
+Their posts and comments disappear here,      (muted — the consequence, one sentence)
+and they aren't told.
 
 ( Block )                                    (btn danger)
 ( Cancel )                                   (btn ghost)
@@ -985,7 +987,6 @@ screen there reads as a broken app, so it says so:
 (avatar 72pt — initial only, their photo is not loaded)
 @tgs_ana                                     (mono muted)
 You blocked this node.                       (h2)
-Nothing they post reaches you.               (muted)
 ( Unblock )                                  (btn ghost)
 ```
 
@@ -1052,8 +1053,7 @@ and their posts are gone from the feed on the next render.
 is reachable inside the app without signing in.
 
 - **You screen footer** (§2.8), above the version line:
-  `Questions or reports: elijah@lucianlabs.ca` (muted, tapping opens the mail
-  composer) then `Reports are read by a person within 24 hours.` (faint).
+  `elijah@lucianlabs.ca` (muted, tapping opens the mail composer).
 - **Sign in screen** (§2.1), one muted line under the form:
   `elijah@lucianlabs.ca` — the only screen a signed-out reader sees.
 - **Settings** (§2.20), the `CONTACT` card, with the full commitment.
@@ -1064,17 +1064,16 @@ The commitment, verbatim, in the Settings `CONTACT` card:
 ```
 CONTACT                                      (section mark)
 elijah@lucianlabs.ca                         (link row, 40pt → mail composer)
-Reports are read by a person within 24        (muted)
-hours. Content that breaks the rules is
-reported to Telegram, the only party that
-can remove it from the network. Your copy is
-hidden on your device the moment you report
-it, whether or not anyone else acts.
+Read by a person within 24 hours.            (muted)
 ```
 
-That last clause is the honest part: a client with no server cannot delete
-someone else's channel, and saying so is better than implying a takedown it
-cannot perform.
+The commitment is the one line, because it is a promise a reader holds us to
+rather than an explanation. What happens next is here, not on the screen:
+content that breaks the rules is reported to Telegram (or Bluesky, §2.40), the
+only parties that can remove it from their networks; the reader's copy is
+hidden on their device the moment they report it, whether or not anyone else
+acts; and a client with no server cannot delete someone else's channel, so it
+does not imply a takedown it cannot perform.
 
 ### 2.20 Settings
 
@@ -1084,13 +1083,6 @@ list row is 40pt with the hit target as an overlay (`COMPONENTS.md` rule 6).
 
 ```
 ‹ Back                                          [Synced]
-
-SAFETY                                       (section mark)
-Blocked and reported content is hidden        (muted)
-everywhere in the app. The filter is always
-on; there is no switch. These lists live on
-this device only and nobody else can read
-them.
 
 BLOCKED · 2                                  (section mark, serif count)
 ┌ card ─────────────────────────────────┐
@@ -1120,9 +1112,12 @@ BLUESKY                                      (§2.35 — always, outside the dem
 CONTACT                                      (§2.19)
 
 ( Sign Out )                                 (btn danger)
-( Delete My Node )                           (btn danger)
+( Delete My Node )                           (btn danger — present only with a node)
 ```
 
+- The screen opens on the lists themselves. The `SAFETY` paragraph that used to
+  head it — the filter is always on, has no switch, and the lists live on this
+  device only — is §2.18's and `PROTOCOL §7.1`'s to say, not the screen's (§3).
 - `Sign Out` moves here from You and keeps its confirm (§4). `Delete My Node`
   sits below it (§2.21) — the order is deliberate: the reversible destructive
   action comes before the irreversible one.
@@ -1138,20 +1133,16 @@ CONTACT                                      (§2.19)
 Setup (§2.2) creates two public channels a person cannot remove from anywhere
 else in the app, so the app removes them. Last item in Settings, below
 Sign Out. With a private node the same action removes the private channels
-first, and the copy grows to say so (§2.33).
+first, and the copy grows to say so (§2.33). What the modal no longer says on screen, and still
+does: the public card other people read disappears, and the names are released
+for anyone to take.
 
 ```
 DELETE MY NODE                               (section mark)
 Delete my node.                              (h2)
-This deletes the channel @tgs_elijah and     (muted)
-your comments channel @tgs_elijah_r from
-Telegram. The public card other people read
-disappears, every post and comment in those
-two channels goes with it, and the names are
-released for anyone to take. This cannot be
-undone.
-
-Your feed channels are not touched.           (muted)
+Deletes @tgs_elijah and @tgs_elijah_r and     (muted — the consequence, one sentence)
+everything in them; your feeds stay.
+This can't be undone.                        (muted)
 
 TYPE @tgs_elijah TO CONFIRM                  (field label)
 [                            ]               (input, mono, no autocorrect)
@@ -1213,15 +1204,15 @@ phone field and above the contact line:
 
 ```
 ( Look Around First )                       (btn ghost, outside the card)
-Invented people, invented posts. Nothing     (muted)
-is sent to Telegram.
 ```
 
 It is ghost, it is outside the card, and it sits below the gold `Send Code` —
 the card still begins at `PHONE NUMBER` and ends at the one gold button, so the
-primary action keeps the only fill on the screen. It is absent on step 2
-(code), step 3 (2FA) and the other-device and registration steps: once a number
-is in flight the screen has one job. Tapping it enters the demo at Feed (§2.3)
+primary action keeps the only fill on the screen. The line that used to sit
+under it went with the rest of the on-screen explanation (§3): the `Demo` pill
+and strip below say what the demo is from its first frame. It is absent on
+step 2 (code), step 3 (2FA) and the other-device and registration steps: once
+a number is in flight the screen has one job. Tapping it enters the demo at Feed (§2.3)
 — at Feed even when the visit arrived on a public link (§2.13): that
 destination is parked for the length of the demo, not spent by it, and it is
 named on §2.1 again when the demo is left.
@@ -1246,6 +1237,8 @@ also leaves it, because nothing about the demo is written to disk (below).
    Demo. Everyone here is invented. Nothing leaves this device.
    ```
 
+   It is a label under §3, not an explanation: it names the state every frame
+   is in, so a cropped screenshot cannot pass for someone's real account.
    It persists into the full-screen media viewers and the carousel (§2.11) —
    the one place the topbar hides — drawn over the dark surface in the same
    mono small, because an unmarked full-screen photo is exactly the screenshot
@@ -1538,10 +1531,6 @@ Tapping the `Demo` pill opens a House Pour modal in the status sheet's place:
 ```
 DEMO                                         (section mark)
 You're in the demo.                          (h2)
-Everyone here is invented. Nothing is sent    (muted)
-to Telegram and nothing is saved on this
-device. Report, block and mute are real and
-work on these fixtures.
 
 Nodes             15                          (list rows, values mono)
 Feeds             6 sources · 15 posts
@@ -1638,14 +1627,11 @@ Empty states inside a present work card:
 
 - Tags but no vouches anywhere, under the tag card, muted:
   `No vouches from your network.`
-- **My own work card, no vouches**, under the tag card, muted then faint:
-  ```
-  No vouches from your network yet.
-  Someone may have vouched for you outside it. You'd only see it if you can
-  reach them.
-  ```
-  That second line is uncomfortable and it is true (`PROTOCOL §10.5`). A
-  client that omits it implies a completeness it does not have.
+- **My own work card, no vouches**, under the tag card, muted:
+  `No vouches from your network yet.` The word `network` is the whole of the
+  caveat on screen: a vouch from someone the reader cannot reach is not seen
+  (`PROTOCOL §10.5`), and the label says whose vouches these are rather than
+  implying there are none anywhere.
 
 #### Editing: the Edit Card modal grows a section
 
@@ -1654,9 +1640,6 @@ unchanged; below them:
 
 ```
 WORK                                          (section mark)
-Optional. All of this is your own claim, the   (muted)
-same as your bio. Nobody checks it and
-nothing here is verified.
 
 ROLE                                          (field label)
 [ Staff product architect at Lucian Labs ]    (input; hard cap 80)
@@ -1670,11 +1653,9 @@ OPEN TO                                       (field label)
 [ Nothing  Work  Contract  Hiring  Collab ]   (.tabs, five items)
 FOR                                           (field label; absent while Nothing)
 [ 30 days  60 days  90 days ]                 (.tabs, three items)
-Ends 5 Dec 2026. After that it stops showing.  (faint; the date derived, never typed)
+Ends 5 Dec 2026.                              (faint; the date derived, never typed)
 
 WORK FEEDS                                    (section mark)
-Which of your feeds is work. The rest stay     (muted)
-where they are.
 ┌ card: one row per feed on my card, each with an HPToggle ┐
 You have no feeds yet.                        (empty, muted; → §2.2's feeds card)
 
@@ -1691,8 +1672,7 @@ Refusals and toasts, verbatim:
 - The card would pass 4096 characters: the existing refusal, unchanged, plus
   one muted line under it:
   ```
-  Card is full.
-  Shorten your bio or drop a tag — your card is one Telegram message.
+  Card is full. Shorten your bio or drop a tag.
   ```
 - Offline: `You're offline.` Save is not attempted.
 - Success: `Card saved.`
@@ -1773,9 +1753,7 @@ reaching one hop further costs nothing; walking +1's feed history would cost a
 fetch per channel. A hiring notice one hop out is exactly the case worth the
 extra hop, and a post one hop out is not.
 
-Empty: `Nobody in your network is open right now.` And when I follow fewer than
-five nodes, one more faint line under it:
-`Your network is small. This reads the people you follow, and theirs.`
+Empty: `Nobody in your network is open right now.`
 
 **2. The work column.** Post cards (§2.3, unchanged — same card, same
 attribution, same long-press sheet) from the `work.feeds` of me and my
@@ -1784,8 +1762,7 @@ follows, merged newest-first exactly as §4.8 merges. Not +1.
 Suppressed: every post from a feed nobody marked as work. That is the entire
 filter. There is no scoring, no promotion, no "relevant to you".
 
-Empty: h2 `No work posts yet.` muted `Mark one of your feeds as work, or follow
-someone who has.` `( Edit Card )` btn accent.
+Empty: h2 `No work posts yet.` and `( Edit Card )` btn accent.
 
 #### A work post is an ordinary post, and this was the decision
 
@@ -1820,15 +1797,12 @@ only when the query matched something:
 WHAT THEY DO                                  (section mark)
 (avatar) Ana Iliovic             ( Follow )
          @tgs_ana · live sound · Followed by 3 of yours
-Searches the cards you can reach — your        (faint, always, under the section)
-network and the directory. There is no
-global search.
 ```
 
-That last line is permanent, not an empty state. It is the honest description
-of `PROTOCOL §10.7` and it is on the screen rather than in a footnote, because
-a search box that stays quiet about its reach is a search box that lies about
-it.
+The search reaches the cards the client can reach — the network and the
+directory — and there is no global search (`PROTOCOL §10.7`). That used to be a
+permanent faint line under the section; it is here instead (§3). The empty
+state, `Nobody you can reach lists that.`, carries it.
 
 Empty: `Nobody you can reach lists that.`
 
@@ -1850,8 +1824,7 @@ worth anything.
 ```
 VOUCH                                         (section mark)
 Say one thing Ana does.                       (h2)
-This goes in your comments channel, under      (muted)
-your name. Ana can't edit it or take it down.
+Public, under your name.                      (muted — the consequence)
 
 WHAT ANA DOES                                 (field label)
 [ live sound ] [ swift ] [ product architecture ]   (pills, single-select, 40pt targets)
@@ -1861,8 +1834,6 @@ WHAT ANA DOES                                 (field label)
 [ textarea, 4 rows, placeholder "Why." ]
 
 ( Post Vouch )   ( Cancel )                   (btn-row: primary + ghost)
-People who follow you will see it, and the     (faint)
-people who follow them.
 ```
 
 - The field label uses the subject's name, not a pronoun the app does not know:
@@ -1916,8 +1887,6 @@ VOUCHES · 2                                   (section mark, serif count)
 │ (avatar) Wren Alderiss     +1   Aug 2024   │  neutral +1 pill for nodes I don't follow
 │ Ran sound for the ferry sessions.          │
 └────────────────────────────────────────────┘
-Vouches from your network — you, who you       (faint, under the card, always)
-follow, and theirs.
 ```
 
 **The date is a month and a year, not a relative time.** Everywhere else in
@@ -1948,8 +1917,7 @@ block the node. `PROTOCOL §10.8` is why the format has no negative vouch to
 make this worse.
 
 Empty (reachable only when the last vouch was deleted between renders):
-`No vouches from your network.` muted `You see vouches written by people you
-can reach — you, who you follow, and theirs.`
+`No vouches from your network.`
 
 ### 2.26 Work in the demo
 
@@ -2015,37 +1983,24 @@ Nothing private yet.                          (muted)
 ( Make a Private Node )                       (btn neutral sm)
 ```
 
-Tapping it opens the confirm, which is the only place the promise is spelled
-out in full, and it is spelled out every time — this modal is not
-skippable and has no "don't show again":
+Tapping it opens the confirm, every time — this modal is not skippable and has
+no "don't show again":
 
 ```
 PRIVATE NODE                                  (section mark)
 Make your private node.                       (h2)
-A second channel of yours with no public       (muted)
-name. Nobody can find it. People get in only
-when you approve them, one at a time, and
-only they can read it.
-
-WHAT PRIVATE MEANS HERE                       (section mark)
-Telegram checks who is a member, and that is   (muted)
-the whole of it. Telegram can read what you
-post. Anyone you let in can screenshot or
-forward it. A new member sees everything
-you ever posted there.
-
-Your public card will note that a private     (faint)
-node exists — not how to reach it. Turn
-that off in Settings.
-
+People you approve can read everything in     (muted — the consequence, one sentence)
+it, and so can Telegram.
 ( Make It )                                   (btn primary)
 ( Cancel )                                    (btn ghost)
 ```
 
-- The second card is the honest part and it stays. A client that trims it to
-  the first card has promised end-to-end encryption by omission.
-- The faint line is `PROTOCOL §11.3`'s cost stated before it is paid; the switch
-  it points at is §2.33.
+- The sentence is the consequence, and it names Telegram on purpose: a confirm
+  that said only "people you approve" would promise end-to-end encryption by
+  omission (`PROTOCOL §11.9`). The rest of what private means — members can
+  screenshot and forward, a new member sees the whole history, the public card
+  notes that a private node exists (`PROTOCOL §11.3`, switched off in §2.33) —
+  is this spec's and the docs', not the modal's (§3).
 - `Make It` runs `PROTOCOL §11.4.1` with the pill at `Syncing` and the pending
   row reading `Making your private node`. On success the modal closes onto the
   Private screen (§2.28) with the invite sheet (§2.29) already open, because the
@@ -2105,11 +2060,8 @@ MEMBERS · 3                                      (section mark, serif count)
   ```
   REMOVE                                       (section mark)
   Remove Ana Iliovic?                          (h2)
-  They lose access to this channel now. They   (muted)
-  keep any screenshots or forwards they made,
-  and Telegram keeps its own copies. They
-  can't ask to join again unless you let them
-  back in from Telegram.
+  They lose access now; what they saved stays  (muted — the consequence, one sentence)
+  with them.
 
   [ ] Also remove from your private feeds      (checkbox row, 40pt; present only when they are in any)
 
@@ -2119,18 +2071,15 @@ MEMBERS · 3                                      (section mark, serif count)
 
   Toast: `Removed Ana Iliovic.` They are not told by the app; there is nothing
   to send it from.
-- Empty members: `Nobody yet. Share the invite.` (muted, under the section
-  mark; the card is absent).
+- Empty members: `No members yet.` (muted, under the section mark; the card is
+  absent).
 
 **Adding a private feed** (`PROTOCOL §11.4.2`), modal:
 
 ```
 PRIVATE FEED                                  (section mark)
 Add a private feed.                           (h2)
-A separate private channel with its own        (muted)
-members. Being in your private node doesn't
-get anyone in here — you approve each
-person again.
+You approve its members separately.           (muted — the consequence)
 
 FEED NAME
 [ Band notes                 ]                (input)
@@ -2161,10 +2110,6 @@ Invite someone to Elijah · private.           (h2)
 https://t.me/+AbCdEfGh12345678                (mono, selectable, one line, ellipsised middle)
 
 Anyone with this link can ask to join.        (muted)
-Anyone they pass it to can ask too. Nobody
-gets in until you approve them, so a link
-that travels costs you a request, not a
-member. Share it only from here.
 
 ( Copy Invite )                               (btn primary)
 ( Share… )                                    (btn neutral — native share sheet; web: hidden when navigator.share is absent)
@@ -2172,13 +2117,12 @@ member. Share it only from here.
 ( Close )                                     (btn ghost)
 ```
 
-- The muted paragraph is `PROTOCOL §11.7` and appears **every time** the sheet
-  opens; there is no "got it". The last sentence is 11.4.1's primary-link
-  hole: the link Telegram's own channel screen offers first joins without
-  approval, and the owner is told, in the one place they copy links, to copy
-  them here.
-- `Copy Invite`: toast `Invite copied. Anyone with it can ask to join.` — the
-  warning rides on the toast too, because the toast is what people read.
+- The muted line is `PROTOCOL §11.7`'s bearer-token fact and appears **every
+  time** the sheet opens; there is no "got it". It stays because it is the
+  consequence of the one thing this sheet does. What it no longer says —
+  nobody gets in unapproved, and Telegram's own channel screen offers a
+  primary link that joins without approval (11.4.1) — is this spec's to carry.
+- `Copy Invite`: toast `Invite copied.`
 - The app never posts the invite anywhere, never puts it on a card, never
   hands it to the Connector, and never opens a share sheet the owner did not
   tap.
@@ -2187,8 +2131,7 @@ member. Share it only from here.
   ```
   REVOKE                                       (section mark)
   Revoke this invite?                          (h2)
-  The old link stops working and you get a     (muted)
-  new one. Everyone already in stays in.
+  The old link stops working.                  (muted — the consequence)
 
   ( Revoke )                                   (btn danger)
   ( Cancel )                                   (btn ghost)
@@ -2246,9 +2189,6 @@ username (`PROTOCOL §11.4.6` step 1). The preview, a House Pour modal:
 INVITE                                        (section mark)
 (avatar 48pt)  Elijah · private               (title, body 600)
                3 members                      (mono muted)
-Ask to join this private channel. The owner    (muted)
-approves each person, and you'll see it here
-if they do.
 
 ( Ask to Join )                               (btn primary)
 ( Cancel )                                    (btn ghost)
@@ -2261,8 +2201,8 @@ if they do.
   (§2.6). A link needing a bot's approval: toast `This channel uses a bot to
   approve members. Open it in Telegram.` and stop.
 
-**Waiting.** After `Ask to Join`, toast `Asked. You'll see it here when
-they approve.` and Explore gains a section above `NEARBY`:
+**Waiting.** After `Ask to Join`, toast `Asked.` and Explore gains a section
+above `NEARBY`:
 
 ```
 WAITING                                       (section mark)
@@ -2272,19 +2212,17 @@ WAITING                                       (section mark)
 └───────────────────────────────────────────┘
 ```
 
-Under it, muted, every time:
-`If they decline, nothing arrives. Ask again if you think they missed it.`
-
-That line is `PROTOCOL §11.4.7`: Telegram tells a declined requester nothing,
-and the app does not pretend to know more than Telegram does. `Ask Again`
+No line under it. `PROTOCOL §11.4.7`: Telegram tells a declined requester
+nothing, so the row simply stays until an approval arrives; the app does not
+pretend to know more than Telegram does, and it does not explain that on
+screen (§3). `Ask Again`
 re-sends (11.4.6 step 3); a duplicate is whatever TDLib says, verbatim. There
 is no `Cancel` because there is no call for it; the row can be swiped away
 (`Forget`), which forgets it locally and nothing else. The section is absent
 when the list is empty.
 
 **Approved.** On the next refresh the row leaves `WAITING` and the person's
-private posts are in the feed (§2.32). Toast, once: `You're in. Elijah · private
-is in your feed now.`
+private posts are in the feed (§2.32). Toast, once: `You're in Elijah · private.`
 
 **Their card.** The private node's channel screen for a member (§2.28, feed
 variant) shows the private card's owner as a link when the card is
@@ -2297,13 +2235,12 @@ check. When it is **not** verified:
 (avatar 72pt)                        [Unconfirmed]  ⋮      ← neutral pill
 Elijah · private                                 (h2)
 says it belongs to @tgs_elijah                   (mono muted; taps to the profile, which is what it claims, not what it is)
-Nothing confirms that. Posts here are shown       (muted)
-as this channel, not as that person.
 ```
 
 Posts from an unverified private channel are attributed to the channel — its
 title and photo — never to the node it names (`PROTOCOL §11.5`). The pill and
-the paragraph stay until the public card confirms it; a client that shows a
+the `says it belongs to` line carry the doubt; they stay until the public card
+confirms it; a client that shows a
 person's name and face over an unconfirmed channel has handed that face to
 whoever made the channel.
 
@@ -2354,16 +2291,16 @@ SAFETY
 ```
 
 **Share** copies the post's `https://t.me/c/<id>/<n>` link — the only link a
-private post has — with the toast `Link copied. Only members can open it.`
+private post has — with the toast `Link copied. Members only.`
 Native share sheets get the same URL. There is no `t.me/s/` preview to fall
 back to and no public route (§2.13) to substitute, and the app does not
 manufacture one: a private post has no public address, and Share says so
 rather than pretending.
 
-**Safety on private content** (§2.15–§2.18) works unchanged, with two honest
-edits to the copy. The report confirm's muted paragraph gains a last
-sentence on a private post: `This is a private post. The maintainer can't
-open it — report it to Telegram from the post as well.` The email's `Link:`
+**Safety on private content** (§2.15–§2.18) works unchanged. The maintainer
+cannot open a private post, so a private report is worth also making to
+Telegram from the post; that is the reader's to know from this spec and the
+docs, and the confirm does not say it (§3). The email's `Link:`
 is the `t.me/c/` link, `Channel:` reads `private · <supergroupId>`, and the
 post is hidden on this device the moment `Send Report` is tapped, exactly as
 before. Block names the verified node and removes their private and public
@@ -2379,11 +2316,7 @@ when the reader has a private node or is a member of any:
 
 ```
 PRIVATE                                      (section mark)
-Confirm on public card       [ toggle ]  On  (list row, 40pt)
-Your public card notes that a private node    (muted)
-exists — not how to reach it. Off, and
-members' apps can't confirm your private
-node is yours; they see it as unconfirmed.
+Mention on public card       [ toggle ]  On  (list row, 40pt)
 
 Revoke invite                ( Revoke )       (list row; §2.29's confirm)
 
@@ -2395,9 +2328,10 @@ PRIVATE FOLLOWS · 2                           (section mark, serif count)
 You're not in anyone's private node.         (empty, muted)
 ```
 
-- `Confirm on public card` writes or strips `private.id` (`PROTOCOL §11.2`,
-  §4.4). It is on by default; the paragraph is the cost of off, and it is the
-  same cost §2.27's faint line named before the node existed. While on, a
+- `Mention on public card` writes or strips `private.id` (`PROTOCOL §11.2`,
+  §4.4). It is on by default. Its cost, no longer on screen: the public card
+  notes that a private node exists (not how to reach it); off, members' apps
+  cannot confirm the private node is yours and see it as unconfirmed. While on, a
   missing or wrong `private.id` — a §2-only client rewrote the card
   (`PROTOCOL §11.6`) — is repaired silently on the next card write and on the
   next read of your own card, with the toast `Card repaired.`
@@ -2406,9 +2340,7 @@ You're not in anyone's private node.         (empty, muted)
   ```
   LEAVE                                        (section mark)
   Leave Ana · private?                         (h2)
-  Their private posts leave your feed. To       (muted)
-  get back in you'd ask again, and they'd
-  approve you again.
+  Their private posts leave your feed.         (muted — the consequence)
 
   [x] Also leave their private feeds           (checkbox row; present when you are in any; on by default)
 
@@ -2419,18 +2351,14 @@ You're not in anyone's private node.         (empty, muted)
   Toast: `Left Ana · private.` The owner is not told by the app.
 
 **Delete My Node** (§2.21) grows to cover the private channels, and the copy
-grows with it. When a private node exists the muted paragraph reads:
+grows with it. When a private node exists the muted lines read:
 
 ```
-This deletes the channel @tgs_elijah, your
-comments channel @tgs_elijah_r, your private
-node and 1 private feed from Telegram. The
-public card other people read disappears,
-every post and comment in those channels
-goes with it, every member of your private
-channels loses them at once, and the public
-names are released for anyone to take. This
-cannot be undone.
+Deletes @tgs_elijah, @tgs_elijah_r, your
+private node and 1 private feed, and
+everything in them for every member; your
+feeds stay.
+This can't be undone.
 ```
 
 `1 private feed` is derived — `2 private feeds`, or the clause is absent with
@@ -2478,9 +2406,8 @@ Three surfaces, each excluded by construction and each saying so once.
   `t.me/c/…` or `t.me/+…` link pasted into a public route shows the §2.6
   empty card. Nothing is written about it on the page.
 - **The Connector** (§2.14) exposes no private source under any preset, and
-  `Custom` cannot name one (it lists usernames). The scope paragraph gains a
-  sentence: `Private chats and private channels are never included.` A
-  member's consent to read a friend's private channel is not consent to pipe
+  `Custom` cannot name one (it lists usernames). The screen no longer says so
+  (§3); `CONNECTOR.md §3` does. A member's consent to read a friend's private channel is not consent to pipe
   it to an assistant (`PROTOCOL §11.5`).
 - **The demo** (§2.22) carries no private fixtures and no `PRIVATE` section
   on You. `Make a Private Node` is not in the demo to refuse; a demo that
@@ -2507,15 +2434,14 @@ Signed out of Bluesky:
 
 ```
 BLUESKY                                      (section mark)
-Read Bluesky here too. Your node and your     (muted)
-Telegram sign-in stay as they are.
-
 ( Sign In with Bluesky )                     (btn neutral sm)
 
 #waveloop drops in your feed   [ toggle ] Off  (list row, 40pt)
-Drops people post to Bluesky from WaveLoop.   (faint)
-Anyone can post one.
 ```
+
+No explanation on the card (§3): the button and the toggle are labels enough.
+What the tag is — drops people post to Bluesky from WaveLoop, which anyone can
+post — is §2.36's and `PROTOCOL §12.6`'s to say.
 
 `Sign In with Bluesky` opens a sheet:
 
@@ -2524,28 +2450,67 @@ BLUESKY                                      (section mark)
 Sign in with Bluesky.                        (h2)
 
 HANDLE                                       (field label)
-[ elijah.bsky.social           ]             (input; a DID works too)
+[ elijah                     ]               (input, mono; placeholder `elijah.bsky.social`; a DID works too)
 
-Bluesky opens and asks you. tgsocial gets     (muted)
-permission to read who you follow, to post
-when you ask it to, and to link this account
-to your node. Nothing else.
-
-( Continue )                                 (btn primary)
+( Sign In with Bluesky )                     (btn primary; enabled once the handle rules below leave something to resolve)
 ( Cancel )                                   (btn ghost)
 ```
 
-- The muted paragraph is the scope list (`PROTOCOL §12.7`) said in words, and it
-  is the whole list: a client that asks for more has to change this paragraph
-  too.
-- `Continue` puts the pill at `Syncing` (pending row: `Finding your Bluesky
-  server`), then hands over to Bluesky's own page — the system auth sheet on
-  iOS and Mac, a Custom Tab on Android, the same tab on web. The password is
-  typed into Bluesky, never into tgsocial.
+- **No scope paragraph.** The scopes (`PROTOCOL §12.7`) are listed by
+  Bluesky's own consent page, which is where the person grants them; the app
+  does not restate them (§3). A client that asks for more changes
+  `PROTOCOL §12.7`'s table, and Bluesky's page shows the change.
+- `Sign In with Bluesky` puts the pill at `Syncing` (pending row: `Finding your
+  Bluesky server`), then opens Bluesky's own page **in the system default
+  browser** — Chrome, Safari, whatever the person set — in its most recent
+  window, so a browser already signed in to Bluesky is the login (RFC 8252's
+  external user agent; `PROTOCOL §12.7` step 6). The password is typed into
+  Bluesky, never into tgsocial. `Cancel` is live while the server is found:
+  it stops the attempt there, at once, and nothing is said, whatever the lookup
+  would have answered.
+- While Bluesky's page is open the sheet shows the waiting state in place of
+  the field:
+
+  ```
+  BLUESKY                                      (section mark)
+  Waiting for Bluesky…                         (h2)
+  @elijah.bsky.social                          (mono small — the resolved handle)
+  Finish in your browser.                      (muted — the screen's one helper line, §3)
+  ( Cancel )                                   (btn ghost)
+  ```
+
+- **It never hangs.** `Cancel` is on screen the whole time; closing the sheet
+  any other way cancels too. Coming back to the app with no callback keeps
+  waiting. At **10 minutes** the attempt ends on its own: toast
+  `Bluesky sign-in timed out.` and the sheet returns to the field with the
+  handle still typed. One sign-in at a time.
+- **The callback** arrives as `ca.lucianlabs:/tgsocial/oauth/callback?…`
+  through the app's registered URL scheme (§5, `PROTOCOL §12.7`). It completes
+  the attempt only when its `state` matches; a callback with an unknown or
+  stale `state` is ignored — no toast, the waiting state carries on.
+  `error=access_denied` (the person declined on Bluesky's page) ends it with
+  the toast `Not signed in to Bluesky.` Any other `error` ends it with §2.39's
+  `Bluesky didn't finish signing you in.` Cancel ends it with nothing said.
 - Back from Bluesky, the sheet closes onto Settings with the account row below.
   Toast: `Signed in to Bluesky as @elijah.bsky.social.` The follows toggle
-  starts **on**: reading who you follow is the reason to sign in.
-- Cancelled on Bluesky's page: the sheet closes, nothing is said.
+  starts **on**: reading who you follow is the reason to sign in. A failure or
+  the timeout keeps the sheet, so a mistyped handle is fixed where it was typed.
+
+**Handle entry**, on every surface that takes a handle (this sheet and
+`Sign In Again`, §2.39), before anything is resolved:
+
+1. Trim whitespace, then drop one leading `@`.
+2. A value starting `did:` is a DID and is used exactly as typed; the steps
+   below are for handles.
+3. A value with no `.` gets `.bsky.social` appended: `elijah` →
+   `elijah.bsky.social`, `@elijah` → `elijah.bsky.social`.
+4. A value with a `.` is used as typed — a custom domain is a handle
+   (`ana.example.com`).
+5. Then lowercase the handle, and resolve it (`PROTOCOL §12.7` step 1).
+
+Nothing left to resolve (an empty field, a lone `@`) keeps the button disabled.
+The cases are `docs/card-vectors.json` `atproto.handleInput`. The field shows
+what was typed; the waiting state shows the resolved handle.
 
 Signed in:
 
@@ -2573,18 +2538,17 @@ Linked to @tgs_elijah            [Verified]       (list row — §2.37; `( Link 
 ```
 BLUESKY                                      (section mark)
 Sign out of Bluesky?                         (h2)
-Posts from the people you follow on Bluesky   (muted)
-leave your feed. Your link to @tgs_elijah
-stays — it's two public lines, not a sign-in.
+Your Bluesky follows leave your feed.         (muted — the consequence, one sentence)
 
 ( Sign Out )                                 (btn danger)
 ( Cancel )                                   (btn ghost)
 ```
 
-Toast: `Signed out of Bluesky.` The second sentence is present only when a link
-exists. Signing out of Telegram (§4) signs out of Bluesky too — it clears
-local state, and the session is local state — and its confirm gains a line
-when a session exists: `You'll be signed out of Bluesky too.`
+Toast: `Signed out of Bluesky.` A link to the node stays — it is two public
+lines, not a sign-in (`PROTOCOL §12.8`) — and the confirm does not say so (§3).
+Signing out of Telegram (§4) signs out of Bluesky too — it clears local state,
+and the session is local state — and its confirm gains a line when a session
+exists: `You'll be signed out of Bluesky too.`
 
 **The Status sheet** (§2.10) gains one row, under `Feed`:
 
@@ -2704,8 +2668,7 @@ link is two public statements and the person should see both being made:
 ```
 LINK                                         (section mark)
 Link @elijah.bsky.social to @tgs_elijah.     (h2)
-People who follow your node here see your     (muted)
-Bluesky posts in their feed, under your name.
+Your followers here see your Bluesky posts.   (muted — the consequence)
 
 TWO LINES, BOTH PUBLIC                       (section mark)
 ┌ card ─────────────────────────────────┐
@@ -2715,7 +2678,6 @@ TWO LINES, BOTH PUBLIC                       (section mark)
 │    @elijah.bsky.social          [ — ]  │
 │ 3  Anyone can check both        [ — ]  │  `Checking` · `Verified`
 └───────────────────────────────────────┘
-Remove either line and the link stops.        (faint)
 
 ( Link )                                     (btn primary)
 ( Cancel )                                   (btn ghost)
@@ -2726,8 +2688,7 @@ Remove either line and the link stops.        (faint)
   signed out. Row 3's pill is the gold `Verified` when it passes — the same word
   the feed backlink earns (`PROTOCOL §3`), for the same reason: both sides said
   so.
-- Success closes the sheet. Toast: `Linked. Your Bluesky posts now reach your
-  followers here.`
+- Success closes the sheet. Toast: `Linked.`
 - **Step 1 failed**: nothing was written. Row 1 reads `Failed` and the sheet
   says `Bluesky said: <error>. Nothing was changed.` with `( Try Again )`.
 - **Step 2 failed**: the account names the node, the card does not, and that
@@ -2756,8 +2717,8 @@ owner; to everyone else an incomplete link is no link:
 ```
 UNLINK                                       (section mark)
 Unlink @elijah.bsky.social?                  (h2)
-Your Bluesky posts leave your followers'      (muted)
-feeds here. Nothing is deleted on Bluesky.
+Your Bluesky posts leave your followers'      (muted — the consequence)
+feeds here.
 
 ( Unlink )                                   (btn danger)
 ( Cancel )                                   (btn ghost)
@@ -2777,7 +2738,6 @@ POST TO
 [ textarea, 6 rows, placeholder "Say it." ]
 Also post to Bluesky          [ toggle ] Off  (list row, 40pt)
 212 / 300 · @elijah.bsky.social               (mono faint; only while on)
-Deleting it here won't delete it there.       (faint; only while on)
 ( Post )      ( Cancel )
 ```
 
@@ -2799,6 +2759,9 @@ Deleting it here won't delete it there.       (faint; only while on)
   the error came back, and a retry that posts twice is worse than asking the
   person to look.
 - Telegram failed: nothing is sent to Bluesky, and §4's error stands alone.
+- Deleting the Telegram post never deletes the Bluesky copy (`PROTOCOL §12.8`,
+  create-only scope). The sheet used to say so under the toggle; it no longer
+  does (§3), and this line is where it is written down.
 
 ### 2.39 Bluesky errors
 
@@ -2808,8 +2771,7 @@ what it can.
 - **The session ended** — Bluesky's two-week limit for apps like this one, a
   refresh that failed, access revoked from Bluesky's side. The follows source
   pauses; linked accounts and the tag keep coming, because they never needed the
-  session. One toast, once: `Bluesky signed you out. Your Bluesky follows are
-  paused.` The Settings card shows the account row with `Signed out by
+  session. One toast, once: `Bluesky signed you out.` The Settings card shows the account row with `Signed out by
   Bluesky` in muted and `( Sign In Again )`, which opens §2.35's sheet with the
   handle filled in. Status sheet: `Bluesky  Sign in again`. The compose toggle
   is absent until then.
@@ -2834,10 +2796,10 @@ what it can.
 §2.15–§2.18 work on Bluesky posts with the same controls, the same lists and the
 same address. What changes is honest copy about what nobody here can do.
 
-**Report.** The confirm's muted paragraph gains a last sentence on a Bluesky
-post: `This is a Bluesky post. Nobody here can remove it from Bluesky —
-report it there too.` and a ghost sm `( Report on Bluesky )` under the reasons,
-which opens the post on Bluesky, where Bluesky's own report lives. The email
+**Report.** The confirm gains a ghost sm `( Report on Bluesky )` under the
+reasons, which opens the post on Bluesky, where Bluesky's own report lives. The
+button is the whole of the difference on screen (§3): nobody here can remove a
+Bluesky post from Bluesky, and the button is where a reader acts on that. The email
 goes to the same address with a body shaped for a post that has no channel:
 
 ```
@@ -2865,10 +2827,11 @@ handle, and the confirm reads:
 ```
 BLOCK                                        (section mark)
 Block @ana.bsky.social?                      (h2)
-Their Bluesky posts disappear from your feed. (muted)
-They are not told, and nothing changes on
-Bluesky. Undo it in Settings.
+Their posts disappear here, and they aren't   (muted — §2.16's sentence)
+told.
 ```
+
+Nothing changes on Bluesky (`PROTOCOL §12.9`).
 
 **Mute** names the handle: `Muted @ana.bsky.social.` — out of the merged feed,
 nothing else. The tag is not muted; it is switched off in Settings.
@@ -2902,6 +2865,32 @@ chrome, no "Oops", no apologies. Buttons are verb-first title case. Empty
 states end in a full stop and offer one action at most. Numbers the user is
 meant to feel (follow counts in section marks) are serif.
 
+**On-screen copy is labels, not explanation** (Elijah, 2026-09-25: "remove all
+the exposition on the app"). What stays on screen: labels, buttons, section
+marks, field labels, pills, toasts and error messages. What goes: sentences
+about why, how it works, what Telegram or Bluesky does, and privacy caveats in
+body text. The reasoning lives in this file and the docs, where it has room to
+be right. Four rules, for every build:
+
+1. **At most one short helper line per screen**, and only where a person would
+   otherwise be stuck (`Finish in your browser.` on §2.35's waiting state; the
+   Connector's `Let an assistant read your feeds.`; the vouch sheet's
+   `You can't remove a vouch someone wrote. Report it or block them.`).
+2. **Empty states are a short label** (`No members yet.`, `Nothing here yet.`),
+   plus at most one action.
+3. **A confirm states its consequence in one sentence** (`Their posts and
+   comments disappear here, and they aren't told.`). A consequence is what will
+   happen to the person or to what they made; a reason is not a consequence.
+   `Delete My Node` keeps its type-to-confirm and `This can't be undone.` —
+   that is consequence.
+4. **A label that names a state stays** even when it reads like a sentence —
+   the demo strip (§2.22), `Signed out by Bluesky` (§2.39), `says it belongs to
+   @tgs_elijah` (§2.31). Each says what *is*, not why.
+
+A client that adds an explanatory line changes this file first. The verbatim
+copy in §2 is the source of truth, and a build whose strings differ from it is
+the one that is wrong.
+
 Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `reply`, `thread`, `comments channel`, `block`, `mute`, `report`, `hidden`,
 `demo` (§2.22 — never "sandbox", "sample", "test mode", "fake"),
@@ -2909,7 +2898,7 @@ Word list: `node`, `card`, `feed`, `follow`, `network`, `+1`, `comment`,
 `private`, `private node`, `private feed`, `invite`, `member`, `request`,
 `approve`, `unconfirmed` (§2.27–§2.34),
 `Bluesky`, `Bluesky account`, `link`, `linked`, `drop`, `Also post to
-Bluesky` (§2.35–§2.40).
+Bluesky`, `Sign In with Bluesky` (§2.35–§2.40).
 Never "friends", "subscribe", "timeline", "algorithm", "flag", "ban",
 "moderation", "community guidelines".
 
@@ -2969,10 +2958,14 @@ at all, because it is not shown.
 
 - **iOS**: SwiftUI, iOS 17+, iPhone and iPad (single column everywhere).
   Portrait and landscape. Request nothing at launch except what TDLib needs;
-  photo library access only when `Add Photo` is tapped.
+  photo library access only when `Add Photo` is tapped. Registers the URL
+  scheme `ca.lucianlabs` (`CFBundleURLTypes`) for the Bluesky callback
+  (`PROTOCOL §12.7`). A fork's scheme is derived at build time from its
+  `TGS_ATPROTO_REDIRECT` (`ios/scripts/redirect-scheme.sh`), never set by hand,
+  and a half-set or mismatched client pair fails the build.
 - **Android**: Kotlin + Jetpack Compose, minSdk 26, targetSdk 35. Edge-to-edge,
   light status bar icons on the ivory background. Predictive back supported.
-- **Mac**: the same SwiftUI app built for Mac Catalyst, plus the Connector tab (§2.14) and the bridge. Same TDLib session, same House Pour look.
+- **Mac**: the same SwiftUI app built for Mac Catalyst, plus the Connector tab (§2.14) and the bridge. Same TDLib session, same House Pour look. Bluesky sign-in opens the default browser with `UIApplication.shared.open`, as on iOS; the browser asks before it hands `ca.lucianlabs:` to the app, and that prompt is the browser's.
 - **Web**: static files, no bundler, no framework. Media via `<img>`, `<video>`, `<audio>` on object URLs from tdweb `readFile`/`readFilePart`. `tdweb` (TDLib wasm) loaded
   from `vendor/`. Must work from a plain nginx host over https. Installable
   PWA manifest with the ivory theme colour.

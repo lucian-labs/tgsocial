@@ -76,7 +76,7 @@ struct CommentThreadList: View {
     var body: some View {
         HPSectionMark("Comments", count: thread.count)
         if rows.isEmpty {
-            HPMuted("No comments from your network yet.")
+            HPMuted("No comments from your network.")
                 .padding(.bottom, HPTokens.Space.cardGap)
         } else {
             HPListCard {
@@ -377,7 +377,7 @@ struct CommentsChannelCard: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Your comments channel")
-            HPMuted("Your comments live in a public channel you own. Anyone can read it on Telegram; you can edit or delete anything there.")
+            HPMuted("It's public on Telegram.")
                 .padding(.bottom, HPTokens.Space.cardPad)
             HStack(alignment: .bottom, spacing: HPTokens.Space.rowGap) {
                 HPTextField(nil, text: $channelName, placeholder: model.suggestedRepliesUsername, kind: .text)

@@ -111,17 +111,19 @@ struct FeedRow: View {
 
 struct EmptyCard: View {
     let title: String
-    let message: String
+    /// PRODUCT §3: an empty state is a short label. The message line is for the few that name a
+    /// state rather than explain one; most callers pass none.
+    let message: String?
     let action: (label: String, run: () -> Void)?
 
-    init(_ title: String, message: String, action: (label: String, run: () -> Void)? = nil) {
+    init(_ title: String, message: String? = nil, action: (label: String, run: () -> Void)? = nil) {
         self.title = title; self.message = message; self.action = action
     }
 
     var body: some View {
         HPCard {
             HPH2(title)
-            HPMuted(message).padding(.top, HPTokens.Space.rowGap)
+            if let message { HPMuted(message).padding(.top, HPTokens.Space.rowGap) }
             if let action {
                 HPButton(action.label, style: .accent, action: action.run)
                     .padding(.top, HPTokens.Space.cardPad)

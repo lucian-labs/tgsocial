@@ -181,18 +181,18 @@ checkable by a number on screen:
   `HIDDEN · 1`, each with a one-tap reverse. The hidden row names the channel
   and message id and the reason, never the content.
 - **Contact.** elijah@lucianlabs.ca is on the sign-in screen, in the You
-  footer and in Settings, with the 24-hour commitment. There is no server, so
-  a report is an email the reader's own mail client sends plus an immediate
-  local hide; `PRODUCT §2.19` says so in the app rather than implying a
-  takedown we cannot perform.
+  footer, and in Settings with the line `Read by a person within 24 hours.`
+  There is no server, so a report is an email the reader's own mail client
+  sends plus an immediate local hide (`PRODUCT §2.19`); the app does not imply
+  a takedown we cannot perform.
 
 ### Guideline 5.1.1(v) — account deletion
 
 Also reachable without an account, which is why the demo is visible rather
 than hidden: You → `Settings` → `Delete My Node`. The modal names both public
 channels the app created (`@tgs_demo_you` and its comments channel
-`@tgs_demo_you_r`), explains that the public card and every post in them
-disappear and the names are released, and requires the node name typed exactly
+`@tgs_demo_you_r`), says in one sentence that they and everything in them are
+deleted and that it can't be undone, and requires the node name typed exactly
 before the button enables. Confirming runs the real flow — comments channel
 first, node second (`PROTOCOL §4.11`) — and, because a demo has no session to
 survive, ends the demo and returns to sign in.
@@ -200,6 +200,29 @@ survive, ends the demo and returns to sign in.
 In a real session the same control is in the same place and deletes the same
 two channels through TDLib; feed channels the person already owned are not
 touched, and the app lands back on Setup, still signed in.
+
+### Guideline 4.8 — Sign in with Apple
+
+The app does not offer Sign in with Apple, and 4.8 does not require it here.
+4.8 exempts an app that is a client for a specific third-party service where
+the user signs in to that service's own account, directly, to reach their
+content on it. tgsocial is that, twice:
+
+- **Telegram.** The sign-in is a Telegram account's own phone-and-code login,
+  through TDLib, to that account's Telegram channels and the public channels
+  it reads. The login is not tgsocial's: there is no tgsocial account, no
+  tgsocial user record and no tgsocial server (`docs/PRIVACY.md`).
+- **Bluesky.** Optional, from Settings once signed in to Telegram
+  (`PRODUCT §2.35`). The sign-in is Bluesky's own OAuth login, on Bluesky's
+  own page in the system browser — the password is typed into Bluesky, never
+  into the app — to that account's follows and posts on Bluesky
+  (`PROTOCOL §12.7`). Again, no tgsocial account results.
+
+Neither is a social login used to create or authenticate an account with
+tgsocial, which is what 4.8 is about: each gives access to the service's own
+content, and tgsocial is a client of both. Offering Sign in with Apple would
+have nothing to sign in to — an Apple identity reaches no Telegram channel
+and no Bluesky feed.
 
 ### Nothing else changes
 

@@ -48,6 +48,15 @@ targets:
           - "*.ttf"
     dependencies:
       - package: TDLibKit
+    # PROTOCOL §12.7 step 6: after Info.plist is processed (its path is the input, which orders
+    # this after it) and before signing, register the scheme the redirect actually uses. Fails the
+    # build on a half-set or inconsistent fork pair instead of shipping a sign-in that never returns.
+    postBuildScripts:
+      - name: Register the Bluesky redirect scheme
+        script: sh "$SRCROOT/scripts/redirect-scheme.sh" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
     configFiles:
       Debug: Secrets.xcconfig
       Release: Secrets.xcconfig
@@ -79,6 +88,21 @@ targets:
         # scheme and host or nothing, which is what catches the `https:` an unescaped `//`
         # leaves behind. See PublicLink in Sources/Protocol/Links.swift.
         TGSPublicOrigin: $(TGS_PUBLIC_ORIGIN)
+        # PROTOCOL §12.7: a fork's own client (docs/FORKING.md). Unset, both are empty and the
+        # reference client is used (AtprotoClientConfig.fromBundle).
+        TGSAtprotoClientId: $(TGS_ATPROTO_CLIENT_ID)
+        TGSAtprotoRedirect: $(TGS_ATPROTO_REDIRECT)
+        # The Bluesky sign-in redirect opens the app through this scheme (PRODUCT §2.35). Without
+        # it the system browser had nowhere to send `ca.lucianlabs:/tgsocial/oauth/callback`,
+        # and sign-in waited forever on `Continue` (measured on Catalyst, 2026-09-25).
+        # `ca.lucianlabs` is the reference client's; a fork's is derived from its
+        # TGS_ATPROTO_REDIRECT by scripts/redirect-scheme.sh (the build phase below), never set
+        # by hand, so the scheme registered and the redirect sent cannot drift apart.
+        CFBundleURLTypes:
+          - CFBundleURLName: ca.lucianlabs.tgsocial.bluesky-oauth
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes:
+              - ca.lucianlabs
         # `false` claims the only cryptography in the binary is the OS's own —
         # HTTPS through URLSession, the keychain. TDLib is not that: it compiles
         # MTProto, Telegram's own transport cryptography, into this binary, so

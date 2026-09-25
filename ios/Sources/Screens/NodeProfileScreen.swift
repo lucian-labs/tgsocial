@@ -87,7 +87,6 @@ struct NodeProfileScreen: View {
             NodeAvatar(photo: nil, size: HPTokens.Space.avatarProfile, initial: String(username.prefix(1)))
             HPMono("@" + username).padding(.top, HPTokens.Space.rowPad)
             HPH2("You blocked this node.").padding(.top, HPTokens.Space.rowGap)
-            HPMuted("Nothing they post reaches you.").padding(.top, HPTokens.Space.rowGap)
             HPButton("Unblock", style: .ghost) { model.unblock(username) }
                 .padding(.top, HPTokens.Space.cardPad)
         }

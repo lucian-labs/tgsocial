@@ -17,10 +17,8 @@ struct SignInScreen: View {
                         .padding(.top, HPTokens.Space.bottomSafe / 2)
                     HPH1("Your Telegram, as a feed.")
                         .padding(.top, HPTokens.Space.cardGap)
-                    HPMuted("Sign in with the Telegram account you already have. Nothing is stored anywhere but Telegram and this device.")
-                        .padding(.top, HPTokens.Space.rowGap)
-                        .padding(.bottom, HPTokens.Space.cardPad)
                     HPCard { step }
+                        .padding(.top, HPTokens.Space.cardPad)
                     // §2.22's entry point: ghost, OUTSIDE the card, below the gold `Send Code`, so
                     // the card still runs from `PHONE NUMBER` to the one filled button and the
                     // primary action keeps the only fill on the screen.
@@ -30,8 +28,6 @@ struct SignInScreen: View {
                     if case .phone = model.auth {
                         HPButton(DemoCopy.enterButton, style: .ghost) { model.enterDemo() }
                             .padding(.top, HPTokens.Space.cardGap)
-                        HPMuted(DemoCopy.enterMuted)
-                            .padding(.top, HPTokens.Space.rowGap)
                     }
                     // §2.19: the only screen a signed-out reader sees, so the address is on it.
                     Button { model.contactByMail() } label: {
@@ -75,7 +71,7 @@ struct SignInScreen: View {
             HPButton("Use another number", style: .ghost) { model.useAnotherNumber() }
                 .padding(.top, HPTokens.Space.rowGap)
         case .unsupported(let state):
-            HPMuted("Telegram wants a step this app doesn't have yet. Sign in with the Telegram app first, then come back.")
+            HPMuted("Sign in with the Telegram app first.")
             HPMonoSmall(state, color: HPTokens.Colors.faint).padding(.top, HPTokens.Space.rowGap)
             HPButton("Use another number", style: .ghost) { model.useAnotherNumber() }
                 .padding(.top, HPTokens.Space.rowGap)

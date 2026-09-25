@@ -63,7 +63,8 @@ struct AtprotoClientConfig: Equatable {
         ])
     }
 
-    /// `ASWebAuthenticationSession`'s callback scheme: everything before the redirect's colon.
+    /// The URL scheme the app registers (CFBundleURLTypes, project.yml): everything before the
+    /// redirect's colon. The callback comes back through it as an ordinary URL open (§12.7 step 6).
     var callbackScheme: String { String(redirectURI.prefix { $0 != ":" }) }
 }
 
@@ -159,7 +160,7 @@ struct AtprotoOAuth {
 
     /// Handle or DID → DID → PDS → issuer → validated metadata.
     func discover(_ input: String) async throws -> AuthTarget {
-        let typed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let typed = AtprotoIdentity.handleInput(input) else { throw AtprotoError.accountNotFound }
         let did: String
         var handle: String?
         if let d = Atproto.normaliseDid(typed) {

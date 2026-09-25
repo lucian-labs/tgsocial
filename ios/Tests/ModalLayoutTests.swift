@@ -83,14 +83,19 @@ private enum ModalFixture {
 @MainActor
 final class ModalLayoutTests: XCTestCase {
 
-    /// Why the bound exists, kept as a measurement rather than a claim: the report confirm does not
-    /// fit an iPhone SE at *default* Dynamic Type, so nothing about "it only breaks at 1.4×" would
-    /// save `Send Report` and `Cancel` from being off-window without a scroller.
+    /// Why the bound exists, kept as a measurement rather than a claim: the report confirm's card
+    /// does not fit the room an iPhone SE gives a modal at *default* Dynamic Type, so nothing about
+    /// "it only breaks at 1.4×" would save `Send Report` and `Cancel` from being off-window without
+    /// a scroller. Measured against the card (content plus `cardPad`) and the window less the
+    /// `columnSide` inset, not the bare phone height: PRODUCT §3's exposition pass cut the confirm
+    /// to one sentence (2026-09-25) and its bare content now measures just under 667, while the
+    /// card still overflows the space it is actually given.
     func testTheReportConfirmIsTallerThanTheSmallestPhone() {
         let width = ModalFixture.cardWidth(ModalFixture.phone.width)
-        let ideal = ModalFixture.ideal(ModalFixture.reportConfirm(), width: width)
-        print("[modal] report ideal=\(ideal) at width=\(width) phone=\(ModalFixture.phone.height)")
-        XCTAssertGreaterThan(ideal, ModalFixture.phone.height)
+        let card = ModalFixture.naturalCardHeight(ModalFixture.reportConfirm(), width: width)
+        let room = ModalFixture.phone.height - 2 * HPTokens.Space.columnSide
+        print("[modal] report card=\(card) at width=\(width) room=\(room)")
+        XCTAssertGreaterThan(card, room)
     }
 
     /// The fix, measured where it matters: on the smallest phone the card is wholly inside the

@@ -30,12 +30,12 @@ extension AppModel {
 
     enum PrivateCopy {
         static let ready = "Your private node is ready."
-        static let inviteCopied = "Invite copied. Anyone with it can ask to join."
+        static let inviteCopied = "Invite copied."
         static let newInvite = "New invite. The old one is dead."
-        static let asked = "Asked. You'll see it here when they approve."
-        static func youAreIn(_ title: String) -> String { "You're in. \(title) is in your feed now." }
+        static let asked = "Asked."
+        static func youAreIn(_ title: String) -> String { "You're in \(title)." }
         static let needsBot = "This channel uses a bot to approve members. Open it in Telegram."
-        static let privateLinkCopied = "Link copied. Only members can open it."
+        static let privateLinkCopied = "Link copied. Members only."
         static let cardRepaired = "Card repaired."
         static let declined = "Declined."
         static func approved(_ name: String) -> String { "Approved \(name)." }

@@ -26,7 +26,7 @@ struct YouScreen: View {
                 }
                 let feeds = model.myCard?.feeds ?? []
                 if feeds.isEmpty {
-                    HPCard { HPMuted("No feeds yet. Manage picks the channels that post as you.") }
+                    HPCard { HPMuted("No feeds yet.") }
                 } else {
                     HPListCard {
                         ForEach(Array(feeds.enumerated()), id: \.element) { i, f in
@@ -81,21 +81,19 @@ struct YouScreen: View {
                     .padding(.top, HPTokens.Space.rowGap)
             } else {
                 // No node: the §2.3 empty state, linking to Setup (PRODUCT §2.2).
-                EmptyCard("Nothing here yet.", message: "Follow a node and their feeds show up here, newest first.",
-                          action: ("Set Up", { model.openSetup() }))
+                EmptyCard("Nothing here yet.", action: ("Set Up", { model.openSetup() }))
                 HPButton("Settings", style: .ghost) { model.path.append(.settings) }
             }
-            // §2.19: the address is reachable from inside the app, and the commitment under it
-            // says what a client with no server can actually do about a report.
+            // §2.19: the address is reachable from inside the app. The 24-hour commitment is on
+            // Settings' CONTACT card, the one place it is said (§3: one helper line, not two).
             VStack(alignment: .center, spacing: HPTokens.Space.rowGap) {
                 Button { model.contactByMail() } label: {
-                    HPMuted("Questions or reports: \(Moderation.contactAddress)")
+                    HPMuted(Moderation.contactAddress)
                         .frame(minHeight: HPTokens.Space.touchMin)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Write to \(Moderation.contactAddress)")
-                HPSmall("Reports are read by a person within 24 hours.", color: HPTokens.Colors.faint)
                 HPMonoSmall(footer, color: HPTokens.Colors.faint)
             }
             .padding(.top, HPTokens.Space.cardPad)
@@ -179,11 +177,10 @@ struct EditCardModal: View {
     }
 
     @ViewBuilder private var workSection: some View {
+        // §10.8: nothing here is checkable. The fields do not imply otherwise because `Verified`
+        // is reserved for the feed backlink and appears nowhere here; the reason lives in PRODUCT
+        // §2.23, not on screen (§3).
         HPSectionMark("Work").padding(.top, HPTokens.Space.rowPad)
-        // §10.8: nothing here is checkable, and the modal says so rather than letting the fields
-        // imply otherwise. `Verified` is reserved for the feed backlink and appears nowhere here.
-        HPMuted("Optional. All of this is your own claim, the same as your bio. Nobody checks it and nothing here is verified.")
-            .padding(.bottom, HPTokens.Space.cardPad)
 
         HPTextField("Role", text: $role, placeholder: "", kind: .text)
             .onChange(of: role) { _, new in
@@ -218,14 +215,12 @@ struct EditCardModal: View {
             // The date is derived, never typed — §10.3's expiry is arithmetic on the card text and
             // the writer should be able to see exactly what it will say.
             if let ends = WorkCodec.day(after: horizon).flatMap(WorkDate.full) {
-                HPSmall("Ends \(ends). After that it stops showing.", color: HPTokens.Colors.faint)
+                HPSmall("Ends \(ends).", color: HPTokens.Colors.faint)
                     .padding(.bottom, HPTokens.Space.rowGap)
             }
         }
 
         HPSectionMark("Work feeds").padding(.top, HPTokens.Space.rowPad)
-        HPMuted("Which of your feeds is work. The rest stay where they are.")
-            .padding(.bottom, HPTokens.Space.rowGap)
         let feeds = model.myCard?.feeds ?? []
         if feeds.isEmpty {
             HPCard { HPMuted("You have no feeds yet.") }

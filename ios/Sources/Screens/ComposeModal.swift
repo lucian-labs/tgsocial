@@ -21,7 +21,7 @@ struct ComposeModal: View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Post to")
             if feeds.isEmpty {
-                HPMuted("No feeds to post to. Manage your feeds first.")
+                HPMuted("No feeds yet.")
                     .padding(.bottom, HPTokens.Space.rowPad)
             } else {
                 HPTabs(items: feeds, selected: $feed) { name in model.composeLabel(name) }

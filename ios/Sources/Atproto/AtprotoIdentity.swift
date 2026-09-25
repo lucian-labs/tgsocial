@@ -22,6 +22,20 @@ struct AtprotoIdentity {
     var plcDirectory = URL(string: "https://plc.directory")!
     var txtLookup: @Sendable (String) async -> [String] = { await DNSTXT.lookup($0) }
 
+    /// PRODUCT §2.35 "Handle entry" / PROTOCOL §12.7 step 1: what a typed value becomes before it is
+    /// resolved. A bare name gets `.bsky.social` — the host nearly every account has, and a bare
+    /// label is never a valid handle, so appending cannot change what a valid entry means. A dotted
+    /// name is a custom domain and is used as typed; a DID passes through exactly. Nil: nothing to
+    /// resolve, refused before any request. Vectors: `atproto.handleInput`.
+    static func handleInput(_ input: String) -> String? {
+        var s = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("@") { s.removeFirst() }
+        guard !s.isEmpty else { return nil }
+        if s.hasPrefix("did:") { return s }
+        if !s.contains(".") { s += ".bsky.social" }
+        return s.lowercased()
+    }
+
     /// A person types `@elijah.bsky.social`, `elijah.bsky.social`, or a DID. Lowercased, no `@`.
     static func normaliseHandle(_ input: String) -> String? {
         var s = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

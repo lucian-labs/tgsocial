@@ -36,7 +36,7 @@ struct SetupScreen: View {
         HPCard {
             HPSectionMark("Your node")
             HPH2("Make your node.")
-            HPMuted("A public channel that holds your feeds and who you follow. It lives on Telegram, and anyone can read it there.")
+            HPMuted("It's public on Telegram.")
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HStack(alignment: .bottom, spacing: HPTokens.Space.rowGap) {
@@ -96,12 +96,10 @@ struct FeedsCard: View {
     var body: some View {
         HPCard {
             HPSectionMark("Your feeds")
-            HPMuted("Pick the channels that post as you.")
-                .padding(.bottom, HPTokens.Space.rowGap)
             if model.candidatesLoading, model.candidates.isEmpty {
                 HPMuted("Looking through your channels.")
             } else if model.candidates.isEmpty {
-                HPMuted("No channels you can post to. Make one in Telegram and come back.")
+                HPMuted("No channels you can post to.")
             }
             VStack(spacing: 0) {
                 ForEach(Array(model.candidates.enumerated()), id: \.element.id) { index, c in
@@ -176,7 +174,7 @@ struct FeedsCard: View {
             }
             if verifyPrompt.contains(key) {
                 VStack(alignment: .leading, spacing: 0) {
-                    HPMuted("Add a line to this channel's description so readers can verify it's yours?")
+                    HPMuted("Add \"tgsocial: @\(model.myNode?.username ?? "")\" to its description?")
                     HStack(spacing: HPTokens.Space.btnRowGap) {
                         HPButton("Verify", style: .neutral, size: .small) {
                             Task {

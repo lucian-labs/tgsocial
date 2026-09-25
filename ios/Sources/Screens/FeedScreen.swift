@@ -53,11 +53,9 @@ struct FeedScreen: View {
                         .onAppear { Task { await model.loadMoreFeed() } }
                 } else if model.myNode == nil {
                     // PRODUCT §2.2: the skip path lands here with the §2.3 empty state linking back to Setup.
-                    EmptyCard("Nothing here yet.", message: "Follow a node and their feeds show up here, newest first.",
-                              action: ("Set Up", { model.openSetup() }))
+                    EmptyCard("Nothing here yet.", action: ("Set Up", { model.openSetup() }))
                 } else {
-                    EmptyCard("Nothing here yet.", message: "Follow a node and their feeds show up here, newest first.",
-                              action: ("Explore", { model.tab = .explore }))
+                    EmptyCard("Nothing here yet.", action: ("Explore", { model.tab = .explore }))
                 }
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {

@@ -369,8 +369,6 @@ struct BlueskySettingsSection: View {
                     }
                 }
             } else {
-                HPMuted(BlueskyCopy.intro)
-                    .padding(.bottom, HPTokens.Space.rowGap)
                 HPButton(BlueskyCopy.signIn, style: .neutral, size: .small) { model.modal = .blueskySignIn(prefill: nil) }
                     .padding(.bottom, HPTokens.Space.rowGap)
             }
@@ -380,9 +378,7 @@ struct BlueskySettingsSection: View {
                     Task { await model.refreshFeed() }
                 }
             }
-            HPSmall(BlueskyCopy.tagNote, color: HPTokens.Colors.faint)
-                .padding(.top, HPTokens.Space.rowGap)
-                .padding(.bottom, HPTokens.Space.cardGap)
+            .padding(.bottom, HPTokens.Space.cardGap)
         }
     }
 
@@ -442,28 +438,45 @@ struct BlueskySignInModal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Bluesky")
-            HPH2(BlueskyCopy.sheetTitle)
-                .padding(.bottom, HPTokens.Space.cardPad)
-            HPTextField("Handle", text: $handle, placeholder: "elijah.bsky.social", kind: .mono) { submit() }
-            // The scope list (§12.7) said in words, and the whole of it.
-            HPMuted(BlueskyCopy.scopes)
-                .padding(.bottom, HPTokens.Space.cardPad)
-            HPButton(running ? "Continue\u{2026}" : "Continue", style: .primary,
-                     enabled: !running && !handle.trimmingCharacters(in: .whitespaces).isEmpty) { submit() }
-            HPButton("Cancel", style: .ghost, enabled: !running) { model.modal = nil }
+            if let waiting = model.bluesky.waitingHandle {
+                // PRODUCT §2.35's waiting state. `Cancel` is on screen the whole time the browser is
+                // open, so the attempt can always be ended from here (§12.7 step 7).
+                HPH2(BlueskyCopy.waiting)
+                HPMonoSmall(waiting).lineLimit(1)
+                    .padding(.top, HPTokens.Space.rowGap)
+                HPMuted(BlueskyCopy.finishInBrowser)
+                    .padding(.top, HPTokens.Space.rowGap)
+                    .padding(.bottom, HPTokens.Space.cardPad)
+                HPButton("Cancel", style: .ghost) { model.bluesky.cancelSignIn() }
+            } else {
+                HPH2(BlueskyCopy.sheetTitle)
+                    .padding(.bottom, HPTokens.Space.cardPad)
+                HPTextField("Handle", text: $handle, placeholder: "elijah.bsky.social", kind: .mono) { submit() }
+                    .padding(.bottom, HPTokens.Space.cardPad)
+                HPButton(BlueskyCopy.signIn, style: .primary,
+                         enabled: !running && AtprotoIdentity.handleInput(handle) != nil) { submit() }
+                // Enabled while the server is still being found, too: Cancel stops the attempt
+                // before it opens the browser.
+                HPButton("Cancel", style: .ghost) {
+                    if running { model.bluesky.cancelSignIn() } else { model.modal = nil }
+                }
                 .padding(.top, HPTokens.Space.rowGap)
+            }
         }
         .onAppear { if handle.isEmpty, let prefill { handle = prefill } }
+        // Closed any other way (the scrim) while an attempt is out: end it, so no sign-in is left
+        // waiting with no Cancel on screen.
+        .onDisappear { if running { model.bluesky.cancelSignIn() } }
     }
 
     private func submit() {
-        guard !running, !handle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        guard !running, AtprotoIdentity.handleInput(handle) != nil else { return }
         running = true
         Task {
             let outcome = await model.signInBluesky(handle)
             running = false
-            // Success and a cancel on Bluesky's page both close the sheet; a failure keeps it, so a
-            // mistyped handle can be fixed where it was typed.
+            // Success and a cancel close the sheet; a failure or the timeout keeps it with the
+            // handle still typed, so it can be fixed or tried again where it was typed (§2.35).
             if outcome != .failed { model.modal = nil }
         }
     }
@@ -476,21 +489,15 @@ struct BlueskySignOutModal: View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Bluesky")
             HPH2(BlueskyCopy.signOutTitle)
-            HPMuted(body(linkedNode: linkedNode))
+            // §2.35: the consequence only. The link to the node stays (two public lines, not a
+            // sign-in); that is the spec's to say, not the confirm's (§3).
+            HPMuted(BlueskyCopy.signOutBody)
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButton("Sign Out", style: .danger) { Task { await model.signOutBluesky() } }
             HPButton("Cancel", style: .ghost) { model.modal = nil }
                 .padding(.top, HPTokens.Space.rowGap)
         }
-    }
-
-    /// The second sentence only when a link exists (§2.35).
-    private var linkedNode: String? { model.myAtprotoDid == nil ? nil : model.myNode?.username }
-
-    private func body(linkedNode: String?) -> String {
-        guard let linkedNode else { return BlueskyCopy.signOutBody }
-        return BlueskyCopy.signOutBody + " " + BlueskyCopy.signOutLink(linkedNode)
     }
 }
 
@@ -520,9 +527,7 @@ struct BlueskyLinkModal: View {
                 stepRow("2", "Your card names", handle, step2)
                 stepRow("3", BlueskyCopy.anyoneCanCheck, nil, step3, isLast: true)
             }
-            HPSmall(BlueskyCopy.removeEither, color: HPTokens.Colors.faint)
-                .padding(.top, HPTokens.Space.rowGap)
-                .padding(.bottom, HPTokens.Space.cardPad)
+            .padding(.bottom, HPTokens.Space.cardPad)
             if let message {
                 HPMuted(message).padding(.bottom, HPTokens.Space.rowPad)
             }
@@ -674,8 +679,6 @@ struct BlueskyComposeRow: View {
                     HPSmall(BlueskyCopy.tooLong, color: HPTokens.Colors.bad)
                         .padding(.top, HPTokens.Space.tabsGap)
                 }
-                HPSmall(BlueskyCopy.deleteNote, color: HPTokens.Colors.faint)
-                    .padding(.top, HPTokens.Space.tabsGap)
             }
         }
         .padding(.bottom, HPTokens.Space.rowGap)

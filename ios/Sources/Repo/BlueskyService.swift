@@ -6,7 +6,6 @@
 // they follow carries an `atproto.did` line (§2.35: "except that a node they follow may now carry
 // Bluesky posts, which needs nothing from them").
 
-import AuthenticationServices
 import Foundation
 import Observation
 import UIKit
@@ -95,8 +94,25 @@ final class BlueskyService {
     @ObservationIgnored private var firstPages: [String: (at: Date, page: JSONValue)] = [:]
     /// The follows the merge attributes through, set with the sources.
     @ObservationIgnored private var scope: [NodeInfo] = []
-    @ObservationIgnored private var webAuth: ASWebAuthenticationSession?
-    @ObservationIgnored private let anchor = AuthAnchor()
+    /// §12.7 steps 6–7: the one pending sign-in, between the browser opening and the callback.
+    @ObservationIgnored let authWait: AuthorizationWait
+    /// PRODUCT §2.35's waiting state: the resolved handle while Bluesky's page is open, else nil.
+    private(set) var waitingHandle: String?
+    /// A sign-in is running, discovery included — the "one sign-in at a time" of §2.35.
+    private(set) var signingIn = false
+    /// Cancel pressed before the browser opened: the attempt stops there instead of opening it.
+    @ObservationIgnored private var cancelRequested = false
+    /// Discovery and PAR in flight (§12.7 steps 1–5), raced against `Cancel` so that pressing it
+    /// ends the attempt at once instead of after up to two 20-second request timeouts.
+    @ObservationIgnored private var lookup: Lookup?
+
+    private struct Lookup {
+        /// Which attempt this is: a cancelled attempt's requests can finish after the next attempt
+        /// has started, and they must not resume it.
+        let id: UUID
+        let work: Task<Void, Never>
+        let continuation: CheckedContinuation<(AuthTarget, URL), Error>
+    }
     /// Called once when a read finds the session ended (§2.39's single toast).
     @ObservationIgnored var onSessionEnded: (() -> Void)?
     /// A background check changed what the merge would admit: one more feed pass, please.
@@ -112,8 +128,10 @@ final class BlueskyService {
     static let blocksRecheck: TimeInterval = 10 * 60
 
     init(store: LocalStore, activity: ActivityRegistry, config: AtprotoClientConfig = .fromBundle(),
-         transport: HTTPTransport = URLSessionTransport.shared, vault: SessionVault = KeychainVault()) {
+         transport: HTTPTransport = URLSessionTransport.shared, vault: SessionVault = KeychainVault(),
+         openBrowser: @escaping @MainActor (URL) async -> Bool = { await UIApplication.shared.open($0) }) {
         self.store = store; self.activity = activity; self.config = config; self.vault = vault; self.transport = transport
+        authWait = AuthorizationWait(redirectURI: config.redirectURI, openBrowser: openBrowser)
         oauth = AtprotoOAuth(config: config, transport: transport)
         reader = AtprotoReader(transport: transport)
         auth = BlueskyAuth(oauth: oauth, vault: vault, transport: transport)
@@ -135,12 +153,18 @@ final class BlueskyService {
 
     // MARK: Sign in (§12.7, §2.35)
 
+    /// `refused` is the person declining on Bluesky's page (`error=access_denied`); `denied` is any
+    /// other `error` on the callback. PRODUCT §2.35 gives them different words.
     enum SignInError: Error, Equatable {
-        case notFound, denied, failed(String), cancelled, rateLimited(Int)
+        case notFound, denied, refused, timedOut, busy, failed(String), cancelled, rateLimited(Int)
     }
 
     /// The whole of §12.7 steps 1–9. Throws the §2.39 outcome; returns the account on success.
     func signIn(_ typed: String) async throws -> BlueskyAccount {
+        guard !signingIn else { throw SignInError.busy }
+        signingIn = true
+        cancelRequested = false
+        defer { signingIn = false; waitingHandle = nil }
         do {
             let token = activity.begin("Finding your Bluesky server")
             let target: AuthTarget
@@ -150,11 +174,32 @@ final class BlueskyService {
             let state = Base64URL.encode(PKCE.randomBytes(16))
             let url: URL
             do {
-                target = try await oauth.discover(typed)
-                url = try await oauth.pushAuthorization(target, pkce: pkce, state: state, dpop: sender)
+                (target, url) = try await lookUp { [oauth] in
+                    let target = try await oauth.discover(typed)
+                    return (target, try await oauth.pushAuthorization(target, pkce: pkce, state: state, dpop: sender))
+                }
                 activity.end(token)
-            } catch { activity.end(token); throw error }
-            let callback = try await openAuthorization(url)
+            } catch {
+                activity.end(token)
+                // PRODUCT §2.35: a cancel says nothing, whatever the lookup was about to say. A
+                // `notFound` that lands after Cancel belongs to an attempt the person already ended.
+                if cancelRequested { throw SignInError.cancelled }
+                throw error
+            }
+            if cancelRequested { throw SignInError.cancelled }
+            waitingHandle = target.handle.map { "@" + $0 } ?? target.did
+            let callback: URL
+            do { callback = try await authWait.wait(opening: url, state: state) } catch let e as AuthorizationWait.Ending {
+                switch e {
+                case .cancelled: throw SignInError.cancelled
+                case .timedOut: throw SignInError.timedOut
+                case .busy: throw SignInError.busy
+                case .couldNotOpen: throw SignInError.failed("Couldn't open the browser.")
+                }
+            }
+            waitingHandle = nil
+            // §12.7 step 7: `access_denied` is the person saying no, not a failure.
+            if Self.callbackParam(callback, "error") == "access_denied" { throw SignInError.refused }
             let code = try AtprotoOAuth.callbackCode(callback, state: state, issuer: target.metadata.issuer, redirectURI: config.redirectURI)
             let tokens = try await oauth.exchange(code: code, pkce: pkce, target: target, dpop: sender)
             let checked = try await oauth.verify(tokens, target: target)
@@ -192,21 +237,44 @@ final class BlueskyService {
         }
     }
 
-    private func openAuthorization(_ url: URL) async throws -> URL {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
-            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: config.callbackScheme) { callback, error in
-                if let callback { cont.resume(returning: callback); return }
-                if let e = error as? ASWebAuthenticationSessionError, e.code == .canceledLogin {
-                    cont.resume(throwing: AtprotoError.cancelled); return
-                }
-                cont.resume(throwing: AtprotoError.authorizationDenied(error?.localizedDescription ?? "no callback"))
-            }
-            session.presentationContextProvider = anchor
-            // Non-ephemeral: an existing bsky.social login is reused (§12.7 step 6).
-            session.prefersEphemeralWebBrowserSession = false
-            webAuth = session
-            if !session.start() { cont.resume(throwing: AtprotoError.authFailed("Couldn't open Bluesky.")) }
+    /// A URL the app was asked to open (`onOpenURL`). True when it was a Bluesky callback — matched
+    /// or, if its `state` is unknown or stale, ignored (§12.7 step 7).
+    @discardableResult
+    func receiveCallback(_ url: URL) -> Bool { authWait.receive(url) }
+
+    /// PRODUCT §2.35's `Cancel`: ends the pending attempt, or stops one still finding the server
+    /// before it opens the browser. Nothing is said.
+    func cancelSignIn() {
+        guard signingIn else { return }
+        cancelRequested = true
+        if let l = lookup {
+            // Before the browser: stop the requests and end the attempt now. Whatever they answer
+            // later finds no `lookup` to resume and is dropped.
+            lookup = nil
+            l.work.cancel()
+            l.continuation.resume(throwing: SignInError.cancelled)
         }
+        authWait.cancel()
+    }
+
+    /// Runs `body` (discovery + PAR) as a child the attempt can abandon: the caller resumes on the
+    /// first of `body` finishing or `cancelSignIn()`, never both.
+    private func lookUp(_ body: @escaping @MainActor () async throws -> (AuthTarget, URL)) async throws -> (AuthTarget, URL) {
+        let id = UUID()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(AuthTarget, URL), Error>) in
+            let work = Task { @MainActor [weak self] in
+                let result: Result<(AuthTarget, URL), Error>
+                do { result = .success(try await body()) } catch { result = .failure(error) }
+                guard let self, let l = self.lookup, l.id == id else { return }
+                self.lookup = nil
+                l.continuation.resume(with: result)
+            }
+            lookup = Lookup(id: id, work: work, continuation: cont)
+        }
+    }
+
+    private static func callbackParam(_ url: URL, _ name: String) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
     }
 
     /// `Sign Out of Bluesky` (§2.35): revoke, then forget. The link stays — it is two public lines.
@@ -542,13 +610,5 @@ extension BlueskyService {
             current = UIGraphicsImageRenderer(size: size).image { _ in current.draw(in: CGRect(origin: .zero, size: size)) }
         }
         return nil
-    }
-}
-
-/// The window Bluesky's page is presented over.
-private final class AuthAnchor: NSObject, ASWebAuthenticationPresentationContextProviding {
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        return scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first.map { UIWindow(windowScene: $0) } ?? ASPresentationAnchor()
     }
 }

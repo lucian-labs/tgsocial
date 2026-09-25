@@ -42,7 +42,10 @@ gen:
 build:
 	$(XCB) -configuration Debug -destination '$(SIM)' build
 
+# XCTest sees only the one Info.plist this build made, so the redirect-scheme build phase's fork
+# cases are measured here first (PROTOCOL §12.7 step 6, scripts/redirect-scheme.sh).
 test:
+	sh scripts/redirect-scheme.test.sh
 	$(XCB) -configuration Debug -destination '$(SIM)' test
 
 device:

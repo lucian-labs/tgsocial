@@ -1611,7 +1611,15 @@ own, because the person consented to a list and the list is the promise.
 
 **The flow.**
 
-1. The person types a handle or a DID. Resolve a handle to a DID (DNS TXT
+1. The person types a handle or a DID, and the client normalises it first:
+   trim; drop one leading `@`; a value starting `did:` is a DID, used exactly as
+   typed (§12.2 compares `did:plc` exactly); for a handle, a value with
+   no `.` gets `.bsky.social` appended (`elijah` → `elijah.bsky.social`) — the
+   host nearly every account has, and a bare label is never a valid handle, so
+   the append cannot change what a valid entry means; a value with a `.` is
+   used as typed, so custom-domain handles work; then lowercase it (handles are
+   case-insensitive). Nothing left to resolve (an empty value, a lone `@`) is
+   refused before any request. Vectors: `atproto.handleInput`. Resolve a handle to a DID (DNS TXT
    `_atproto.<handle>`, else `https://<handle>/.well-known/atproto-did`; a
    client MAY ask the AppView's `resolveHandle`), then the DID to its PDS (§12.3
    step 1). Measured for `bsky.app`: the TXT record answered and the well-known
@@ -1631,13 +1639,32 @@ own, because the person consented to a list and the list is the promise.
    `login_hint` (what the person typed) — with a DPoP proof. The first answer is
    400 `use_dpop_nonce` with a `DPoP-Nonce` header; retry once with the nonce →
    201 `{ request_uri, expires_in: 299 }` (measured). `plain` PKCE is refused.
-6. Open `<authorization_endpoint>?client_id=…&request_uri=…` in
-   `ASWebAuthenticationSession` with callback scheme `ca.lucianlabs` and a
-   non-ephemeral session, so an existing `bsky.social` login is reused (iOS,
-   Mac Catalyst); a Custom Tab with an intent filter on the scheme and path
-   (Android); a top-level navigation (web).
-7. On the callback: `state` must match and `iss` must equal the issuer. An
-   `error` parameter ends the attempt (`PRODUCT §2.39`).
+6. Open `<authorization_endpoint>?client_id=…&request_uri=…` in the **system
+   default browser** — `UIApplication.shared.open` (iOS, Mac Catalyst), a
+   Custom Tab, which is the default browser's (Android), a top-level navigation
+   (web). This is RFC 8252's external user agent, and it is what makes a login
+   the person already has in their browser count: on a Mac whose default is
+   Chrome, the page opens in Chrome's most recent window, signed in.
+   `ASWebAuthenticationSession` is not used. On Catalyst it hands the page to
+   the default browser too, but the redirect only comes back through a scheme
+   the app itself registers, and a session left waiting on one it never
+   receives has no timeout and no cancel — measured 2026-09-25: approved in
+   Chrome, stuck on `Continue` indefinitely. The native app registers the
+   redirect scheme for itself (`CFBundleURLTypes` on iOS and Mac; an intent
+   filter on scheme and path on Android) and receives the callback as an
+   ordinary URL open.
+7. On the callback: find the pending attempt whose `state` matches. There is
+   at most one pending attempt per client; a callback with no match — unknown,
+   stale, or arriving after cancel or timeout — is ignored, without error and
+   without ending the attempt that is pending. On a match, `iss` must equal the
+   issuer. `error=access_denied` ends the attempt as the person's refusal; any
+   other `error` ends it as a failure (`PRODUCT §2.35`, §2.39). The attempt
+   also ends at **10 minutes** with no callback, and on the person's cancel —
+   at once, at any step from 1 on: a cancel during discovery or PAR abandons
+   those requests, and whatever they answer afterwards (an account not found,
+   a timeout) is dropped rather than told. An ended attempt's PKCE verifier,
+   `state` and DPoP key are discarded, so a late callback for it cannot
+   complete.
 8. **Token**: POST `grant_type=authorization_code`, `code`, `redirect_uri`,
    `client_id`, `code_verifier`, with a DPoP proof and the issuer's current
    nonce. Measured: no proof → 401 `invalid_dpop_proof`; no nonce → 400

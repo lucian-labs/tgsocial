@@ -107,18 +107,13 @@ struct ReportConfirm: View {
     var onOpenBluesky: (() -> Void)? = nil
     @State private var reason: String?
 
-    /// The muted paragraph, and on a private post its one honest addition (PRODUCT §2.32): the
-    /// maintainer is not a member and cannot open the link.
-    static let paragraph = "This sends an email from your mail app to the person who maintains tgsocial, with a link to it. It disappears from this device as soon as you send."
-    static let privateAddendum = "This is a private post. The maintainer can't open it \u{2014} report it to Telegram from the post as well."
+    /// PRODUCT §2.15: the consequence, one sentence, the same on every subject. A private post's
+    /// "the maintainer can't open it" (§2.32) and a Bluesky post's "nobody here can remove it"
+    /// (§2.40) are reasons, not consequences, so they live in the spec (§3); on a Bluesky post the
+    /// `Report on Bluesky` button is the whole of the difference on screen.
+    static let paragraph = "It's hidden here and emailed to \(Moderation.contactAddress)."
 
-    /// PRODUCT §2.40: the honest clause on a Bluesky post — nobody reachable from here can take it down.
-    static let blueskyAddendum = "This is a Bluesky post. Nobody here can remove it from Bluesky \u{2014} report it there too."
-
-    static func paragraph(for subject: ReportSubject) -> String {
-        if subject.isBluesky { return paragraph + " " + blueskyAddendum }
-        return subject.isPrivate ? paragraph + " " + privateAddendum : paragraph
-    }
+    static func paragraph(for subject: ReportSubject) -> String { paragraph }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -168,8 +163,7 @@ struct ReportConfirm: View {
     }
 }
 
-/// The block confirm (PRODUCT §2.16). It says what a block does and what it does not do — they are
-/// not told, and it is undone in Settings.
+/// The block confirm (PRODUCT §2.16): its consequence in one sentence (§3).
 struct BlockModal: View {
     @Environment(AppModel.self) private var model
     let username: String
@@ -178,7 +172,7 @@ struct BlockModal: View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Block")
             HPH2("Block @\(username)?")
-            HPMuted("Their posts and their comments disappear from your feed, your threads, your graph, and search. They are not told. Undo it in Settings.")
+            HPMuted("Their posts and comments disappear here, and they aren't told.")
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {

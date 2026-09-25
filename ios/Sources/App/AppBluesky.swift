@@ -15,20 +15,16 @@ enum LinkStep: Equatable { case idle, writing, done, failed, checking, verified 
 /// Every Bluesky string in one place, verbatim from PRODUCT §2.35–§2.40, so the three builds
 /// cannot drift apart one word at a time (§3).
 enum BlueskyCopy {
-    static let intro = "Read Bluesky here too. Your node and your Telegram sign-in stay as they are."
     static let signIn = "Sign In with Bluesky"
     static let signInAgain = "Sign In Again"
     static let tagRow = "#waveloop drops in your feed"
-    static let tagNote = "Drops people post to Bluesky from WaveLoop. Anyone can post one."
     static let followsRow = "Your Bluesky follows in your feed"
     static let linkButton = "Link to My Node"
     static let signOut = "Sign Out of Bluesky"
     static let endedByBluesky = "Signed out by Bluesky"
     static let sheetTitle = "Sign in with Bluesky."
-    static let scopes = "Bluesky opens and asks you. tgsocial gets permission to read who you follow, to post when you ask it to, and to link this account to your node. Nothing else."
     static let signOutTitle = "Sign out of Bluesky?"
-    static let signOutBody = "Posts from the people you follow on Bluesky leave your feed."
-    static func signOutLink(_ node: String) -> String { "Your link to @\(node) stays \u{2014} it's two public lines, not a sign-in." }
+    static let signOutBody = "Your Bluesky follows leave your feed."
     static let telegramSignOutLine = "You'll be signed out of Bluesky too."
     static let pill = "Bluesky"
     static let openOn = "Open on Bluesky"
@@ -36,32 +32,51 @@ enum BlueskyCopy {
     static func quoting(_ handle: String) -> String { "Quoting @\(handle)" }
     static func signedIn(_ handle: String) -> String { "Signed in to Bluesky as \(handle)." }
     static let signedOut = "Signed out of Bluesky."
-    static let linked = "Linked. Your Bluesky posts now reach your followers here."
+    static let linked = "Linked."
     static let unlinked = "Unlinked."
     static let postedBoth = "Posted here and on Bluesky."
     static func postedHereOnly(_ error: String) -> String { "Posted here. Bluesky didn't take it \u{2014} \(error)." }
-    static let sessionEnded = "Bluesky signed you out. Your Bluesky follows are paused."
+    static let sessionEnded = "Bluesky signed you out."
     static func wait(_ s: Int) -> String { "Bluesky asked us to wait \(s) s." }
     static let notFound = "Couldn't find that Bluesky account."
     static let denied = "Bluesky didn't finish signing you in."
+    /// `error=access_denied`: the person declined on Bluesky's page (PRODUCT §2.35).
+    static let refused = "Not signed in to Bluesky."
+    static let timedOut = "Bluesky sign-in timed out."
+    static let waiting = "Waiting for Bluesky\u{2026}"
+    /// §2.35's waiting state carries the screen's one helper line: without it a person looking at a
+    /// spinner would not know the browser is where the next step is.
+    static let finishInBrowser = "Finish in your browser."
     static let failed = "Couldn't sign in to Bluesky."
     static let alsoPost = "Also post to Bluesky"
-    static let deleteNote = "Deleting it here won't delete it there."
     static let tooLong = "Too long for Bluesky. Shorten it or turn this off."
-    static let blockBody = "Their Bluesky posts disappear from your feed. They are not told, and nothing changes on Bluesky. Undo it in Settings."
+    static let blockBody = "Their posts disappear here, and they aren't told."
     static func linkTitle(_ handle: String, _ node: String) -> String { "Link \(handle) to @\(node)." }
-    static let linkBody = "People who follow your node here see your Bluesky posts in their feed, under your name."
+    static let linkBody = "Your followers here see your Bluesky posts."
     static let twoLines = "Two lines, both public"
     static let anyoneCanCheck = "Anyone can check both"
-    static let removeEither = "Remove either line and the link stops."
     static func pendingRecord(_ node: String) -> String { "Your Bluesky account doesn't name @\(node) yet." }
     static let finishLinking = "Finish Linking"
     static let differentAccount = "Your card names a different Bluesky account."
     static let replace = "Replace"
     static func unlinkTitle(_ handle: String) -> String { "Unlink \(handle)?" }
-    static let unlinkBody = "Your Bluesky posts leave your followers' feeds here. Nothing is deleted on Bluesky."
+    static let unlinkBody = "Your Bluesky posts leave your followers' feeds here."
     static let cardRepaired = "Card repaired."
     static let notSignedIn = "Not signed in"
+
+    /// How a sign-in that did not finish is told (PRODUCT §2.35, §2.39). Nil: nothing is said — the
+    /// person cancelled, or a second attempt was refused while one was already open.
+    static func toast(for ending: BlueskyService.SignInError) -> String? {
+        switch ending {
+        case .cancelled, .busy: return nil
+        case .notFound: return notFound
+        case .denied: return denied
+        case .refused: return refused
+        case .timedOut: return timedOut
+        case .rateLimited(let s): return wait(s)
+        case .failed: return failed
+        }
+    }
 }
 
 extension AppModel {
@@ -118,21 +133,21 @@ extension AppModel {
             await refreshFeed()
             return .signedIn
         } catch let e as BlueskyService.SignInError {
-            switch e {
-            case .cancelled: return .cancelled
-            case .notFound: showToast(BlueskyCopy.notFound, tone: .bad)
-            case .denied: showToast(BlueskyCopy.denied, tone: .bad)
-            case .rateLimited(let s): showToast(BlueskyCopy.wait(s), tone: .bad)
-            case .failed(let message):
-                // §2.39: the server's words go to `Last error` verbatim.
-                noteBlueskyError(message)
-                showToast(BlueskyCopy.failed, tone: .bad)
-            }
+            // §2.39: the server's words go to `Last error` verbatim.
+            if case .failed(let message) = e { noteBlueskyError(message) }
+            guard let words = BlueskyCopy.toast(for: e) else { return .cancelled }
+            showToast(words, tone: .bad)
             return .failed
         } catch {
             showToast(BlueskyCopy.failed, tone: .bad)
             return .failed
         }
+    }
+
+    /// `onOpenURL`: the Bluesky callback on the registered scheme (PROTOCOL §12.7 steps 6–7). Any
+    /// other URL is not ours to handle here and is left alone.
+    func handleOpenURL(_ url: URL) {
+        _ = bluesky?.receiveCallback(url)
     }
 
     func signOutBluesky() async {

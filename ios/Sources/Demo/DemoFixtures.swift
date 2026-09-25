@@ -19,7 +19,6 @@ import Foundation
 enum DemoCopy {
     /// §2.1, step 1 only.
     static let enterButton = "Look Around First"
-    static let enterMuted = "Invented people, invented posts. Nothing is sent to Telegram."
 
     /// The status pill, in place of §2.10's. Never gold: gold on that pill means a live Telegram
     /// connection (§1).
@@ -35,7 +34,6 @@ enum DemoCopy {
     /// §2.22.5, the demo sheet.
     static let sheetMark = "Demo"
     static let sheetTitle = "You're in the demo."
-    static let sheetBody = "Everyone here is invented. Nothing is sent to Telegram and nothing is saved on this device. Report, block and mute are real and work on these fixtures."
     static let leaveButton = "Leave Demo"
     static let telegramRow = "Not connected"
 

@@ -3199,6 +3199,43 @@
           ]
         }
       ]
+    },
+    "handleInput": {
+      "$comment": "PROTOCOL §12.7 step 1 / PRODUCT §2.35: what a typed handle becomes before resolution. A bare name gets .bsky.social; a dotted name is a custom domain and is used as typed; a DID passes through. out null = nothing to resolve.",
+      "cases": [
+        {
+          "in": "elijah",
+          "out": "elijah.bsky.social"
+        },
+        {
+          "in": "@elijah",
+          "out": "elijah.bsky.social"
+        },
+        {
+          "in": "  Elijah  ",
+          "out": "elijah.bsky.social"
+        },
+        {
+          "in": "elijah.bsky.social",
+          "out": "elijah.bsky.social"
+        },
+        {
+          "in": "@Ana.Example.com",
+          "out": "ana.example.com"
+        },
+        {
+          "in": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
+          "out": "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+        },
+        {
+          "in": "@",
+          "out": null
+        },
+        {
+          "in": "",
+          "out": null
+        }
+      ]
     }
   }
 }

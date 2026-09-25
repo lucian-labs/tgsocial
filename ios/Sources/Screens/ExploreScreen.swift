@@ -21,13 +21,10 @@ struct ExploreScreen: View {
             if query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
                 let matches = model.capabilityMatches(query)
                 HPSectionMark("What they do")
-                // Permanent, not an empty state. It is the honest description of PROTOCOL §10.7 —
-                // `searchPublicChats` indexes usernames and titles, never card contents — and it is
-                // on the screen rather than in a footnote, because a search box that stays quiet
-                // about its reach is a search box that lies about it.
-                HPSmall("Searches the cards you can reach \u{2014} your network and the directory. There is no global search.",
-                        color: HPTokens.Colors.faint)
-                    .padding(.bottom, HPTokens.Space.rowGap)
+                // PROTOCOL §10.7: `searchPublicChats` indexes usernames and titles, never card
+                // contents, so this reaches only the cards the client has read. That used to be a
+                // permanent line here; PRODUCT §2.24 moved it into the empty state's own words
+                // (`Nobody you can reach …`), which is where it is true (§3).
                 if matches.isEmpty {
                     HPCard { HPMuted("Nobody you can reach lists that.") }
                 } else {
@@ -51,7 +48,7 @@ struct ExploreScreen: View {
 
             HPSectionMark("Nearby")
             if nearby.isEmpty {
-                HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "Follow someone and their people appear here.") }
+                HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "Nobody nearby yet.") }
             } else {
                 HPListCard {
                     ForEach(Array(nearby.enumerated()), id: \.element.id) { i, entry in
@@ -64,7 +61,7 @@ struct ExploreScreen: View {
 
             HPSectionMark("Directory")
             if directory.isEmpty {
-                HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "No nodes found. Be the first: make yours public.") }
+                HPCard { HPMuted(model.exploreLoading ? "Loading\u{2026}" : "No nodes found.") }
             } else {
                 HPListCard {
                     ForEach(Array(directory.enumerated()), id: \.element.id) { i, entry in

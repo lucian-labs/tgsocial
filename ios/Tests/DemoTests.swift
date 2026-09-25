@@ -241,7 +241,6 @@ final class DemoWorldTests: XCTestCase {
 
     func testTheDemoStringsAreTheOnesTheSpecWritesDown() {
         XCTAssertEqual(DemoCopy.enterButton, "Look Around First")
-        XCTAssertEqual(DemoCopy.enterMuted, "Invented people, invented posts. Nothing is sent to Telegram.")
         XCTAssertEqual(DemoCopy.pill, "Demo")
         XCTAssertEqual(DemoCopy.strip, "Demo. Everyone here is invented. Nothing leaves this device.")
         XCTAssertEqual(DemoCopy.noWrite, "The demo doesn't write to Telegram.")
@@ -257,9 +256,9 @@ final class DemoWorldTests: XCTestCase {
     /// §3's banned words for this feature. The demo is called `demo` everywhere, never one of the
     /// four things §3 names it is not.
     func testTheDemoIsNeverCalledSandboxSampleTestModeOrFake() {
-        let strings = [DemoCopy.enterButton, DemoCopy.enterMuted, DemoCopy.pill, DemoCopy.strip,
+        let strings = [DemoCopy.enterButton, DemoCopy.pill, DemoCopy.strip,
                        DemoCopy.noWrite, DemoCopy.notOnTelegram, DemoCopy.noLinks,
-                       DemoCopy.sheetMark, DemoCopy.sheetTitle, DemoCopy.sheetBody,
+                       DemoCopy.sheetMark, DemoCopy.sheetTitle,
                        DemoCopy.leaveButton, DemoCopy.leftToast, DemoCopy.deletedToast,
                        DemoCopy.reportPrefix]
         for banned in ["sandbox", "sample", "test mode", "fake"] {

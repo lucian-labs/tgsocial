@@ -1,9 +1,10 @@
 // Screens — the private layer (PRODUCT.md §2.27–§2.34, PROTOCOL.md §11).
 //
 // One section on You, two pushed screens, one channel screen, and the modals. Every string here
-// is PRODUCT §2.27–§2.34 verbatim; the two paragraphs that matter most — WHAT PRIVATE MEANS HERE
-// and the invite sheet's bearer-token warning — appear every time, with no "got it", because a
-// client that trims them has promised something Telegram membership does not do.
+// is PRODUCT §2.27–§2.34 verbatim; the two lines that matter most — the make-it confirm's "and so
+// can Telegram" and the invite sheet's bearer-token warning — appear every time, with no "got it",
+// because a client that drops them has promised something Telegram membership does not do (§3
+// keeps each to one sentence; the rest of what private means is the spec's, not the screen's).
 
 import CoreImage.CIFilterBuiltins
 import SwiftUI
@@ -59,30 +60,22 @@ struct PrivateSection: View {
     static func requests(_ n: Int) -> String { "\(n) request\(n == 1 ? "" : "s")" }
 }
 
-/// §2.27: the confirm, which is the only place the promise is spelled out in full — and it is
-/// spelled out every time. Not skippable; no "don't show again".
+/// §2.27: the confirm, every time; not skippable, no "don't show again". Its one sentence is the
+/// consequence and names Telegram on purpose: "people you approve" alone would promise end-to-end
+/// encryption by omission (PROTOCOL §11.9). The rest of what private means — screenshots,
+/// forwards, a new member sees the history, the public card's mention — is the spec's (§3).
 struct MakePrivateNodeModal: View {
     @Environment(AppModel.self) private var model
     @State private var making = false
 
-    static let promise = "A second channel of yours with no public name. Nobody can find it. People get in only when you approve them, one at a time, and only they can read it."
-    static let meaning = "Telegram checks who is a member, and that is the whole of it. Telegram can read what you post. Anyone you let in can screenshot or forward it. A new member sees everything you ever posted there."
-    static let cost = "Your public card will note that a private node exists \u{2014} not how to reach it. Turn that off in Settings."
+    static let consequence = "People you approve can read everything in it, and so can Telegram."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Private node")
             HPH2("Make your private node.")
-            HPMuted(Self.promise)
+            HPMuted(Self.consequence)
                 .padding(.top, HPTokens.Space.rowGap)
-                .padding(.bottom, HPTokens.Space.cardPad)
-            // The honest part, and it stays: trimmed to the first paragraph this modal promises
-            // end-to-end encryption by omission (§2.27).
-            HPSectionMark("What private means here")
-            HPMuted(Self.meaning)
-                .padding(.bottom, HPTokens.Space.cardPad)
-            // PROTOCOL §11.3's cost, stated before it is paid.
-            HPSmall(Self.cost, color: HPTokens.Colors.faint)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {
                 HPButton(making ? "Making your private node" : "Make It", style: .primary, enabled: !making) {
@@ -197,7 +190,7 @@ struct PrivateScreen: View {
         let list = model.privateMembers[node.chatId] ?? []
         HPSectionMark("Members", count: list.count)
         if list.isEmpty {
-            HPMuted("Nobody yet. Share the invite.")
+            HPMuted("No members yet.")
         } else {
             HPListCard {
                 ForEach(Array(list.enumerated()), id: \.element.id) { i, member in
@@ -233,14 +226,14 @@ struct MemberRow: View {
     }
 }
 
-/// §2.28: `Remove Ana Iliovic?` — what removal does, and what it does not undo.
+/// §2.28: `Remove Ana Iliovic?` — the consequence, one sentence.
 struct RemoveMemberModal: View {
     @Environment(AppModel.self) private var model
     let member: PrivateMember
     let chatId: Int64
     @State private var alsoFeeds = false
 
-    static let body = "They lose access to this channel now. They keep any screenshots or forwards they made, and Telegram keeps its own copies. They can't ask to join again unless you let them back in from Telegram."
+    static let body = "They lose access now; what they saved stays with them."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -291,7 +284,7 @@ struct AddPrivateFeedModal: View {
     @State private var title = ""
     @State private var adding = false
 
-    static let body = "A separate private channel with its own members. Being in your private node doesn't get anyone in here \u{2014} you approve each person again."
+    static let body = "You approve its members separately."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -326,9 +319,10 @@ struct PrivateInviteModal: View {
     @State private var link: String?
     @State private var showQR = false
 
-    /// PROTOCOL §11.7, every time the sheet opens. The last sentence is §11.4.1's primary-link
-    /// hole: the link Telegram's own channel screen offers first joins without approval.
-    static let warning = "Anyone with this link can ask to join. Anyone they pass it to can ask too. Nobody gets in until you approve them, so a link that travels costs you a request, not a member. Share it only from here."
+    /// PROTOCOL §11.7's bearer-token fact, every time the sheet opens: the consequence of the one
+    /// thing this sheet does. §11.4.1's primary-link hole and "nobody gets in unapproved" are
+    /// PRODUCT §2.29's to carry, not the sheet's (§3).
+    static let warning = "Anyone with this link can ask to join."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -404,7 +398,7 @@ struct RevokeInviteModal: View {
         VStack(alignment: .leading, spacing: 0) {
             HPSectionMark("Revoke")
             HPH2("Revoke this invite?")
-            HPMuted("The old link stops working and you get a new one. Everyone already in stays in.")
+            HPMuted("The old link stops working.")
                 .padding(.top, HPTokens.Space.rowGap)
                 .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {
@@ -482,7 +476,6 @@ struct InvitePreviewModal: View {
     let preview: InvitePreview
     @State private var asking = false
 
-    static let body = "Ask to join this private channel. The owner approves each person, and you'll see it here if they do."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -494,9 +487,7 @@ struct InvitePreviewModal: View {
                     HPMonoSmall(PrivateSection.members(preview.memberCount))
                 }
             }
-            HPMuted(Self.body)
-                .padding(.top, HPTokens.Space.rowGap)
-                .padding(.bottom, HPTokens.Space.cardPad)
+            .padding(.bottom, HPTokens.Space.cardPad)
             HPButtonRow {
                 HPButton("Ask to Join", style: .primary, enabled: !asking) {
                     asking = true
@@ -509,12 +500,11 @@ struct InvitePreviewModal: View {
     }
 }
 
-/// Explore's `WAITING` section (§2.31): the requests I have out, and the line that says what
-/// Telegram does not tell a declined requester. Absent when the list is empty.
+/// Explore's `WAITING` section (§2.31): the requests I have out. No line under it: Telegram tells
+/// a declined requester nothing (PROTOCOL §11.4.7), and the spec says so, not the screen (§3).
+/// Absent when the list is empty.
 struct WaitingSection: View {
     @Environment(AppModel.self) private var model
-
-    static let line = "If they decline, nothing arrives. Ask again if you think they missed it."
 
     var body: some View {
         let pending = model.privateRecord.pending
@@ -540,8 +530,7 @@ struct WaitingSection: View {
                     }
                 }
             }
-            HPMuted(Self.line)
-                .padding(.bottom, HPTokens.Space.cardGap)
+            .padding(.bottom, HPTokens.Space.cardGap)
         }
     }
 
@@ -565,8 +554,6 @@ struct PrivateChannelScreen: View {
     @State private var loading = false
     @State private var failed = false
     @State private var observerId = UUID()
-
-    static let unverifiedLine = "Nothing confirms that. Posts here are shown as this channel, not as that person."
 
     private var isMine: Bool { model.ownsPrivateChat(chatId) }
     private var follow: PrivateFollow? { model.privateOwner(chatId: chatId) }
@@ -637,9 +624,6 @@ struct PrivateChannelScreen: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open @\(follow.card.node)")
-                if !follow.verified {
-                    HPMuted(Self.unverifiedLine).padding(.top, HPTokens.Space.rowGap)
-                }
             } else {
                 HPMono("private")
             }
@@ -702,7 +686,7 @@ struct LeavePrivateModal: View {
     let follow: PrivateFollow
     @State private var alsoFeeds = true
 
-    static let body = "Their private posts leave your feed. To get back in you'd ask again, and they'd approve you again."
+    static let body = "Their private posts leave your feed."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -731,25 +715,21 @@ struct LeavePrivateModal: View {
 struct PrivateSettingsSection: View {
     @Environment(AppModel.self) private var model
 
-    static let confirmBody = "Your public card notes that a private node exists \u{2014} not how to reach it. Off, and members' apps can't confirm your private node is yours; they see it as unconfirmed."
-
     var body: some View {
         if model.hasPrivateLayer {
             HPSectionMark("Private")
             if let node = model.privateRecord.privateNode {
                 HPCard {
                     HPListItem {
-                        HPBody("Confirm on public card")
+                        HPBody("Mention on public card")
                     } trailing: {
                         HStack(spacing: HPTokens.Space.rowGap) {
                             HPMonoSmall(model.confirmPrivateOnCard ? "On" : "Off")
                             HPToggle(isOn: Binding(get: { model.confirmPrivateOnCard },
                                                    set: { on in Task { await model.setConfirmPrivateOnCard(on) } }),
-                                     label: "Confirm on public card")
+                                     label: "Mention on public card")
                         }
                     }
-                    HPMuted(Self.confirmBody)
-                        .padding(.vertical, HPTokens.Space.rowGap)
                     HPListItem(isLast: true) {
                         HPBody("Revoke invite")
                     } trailing: {

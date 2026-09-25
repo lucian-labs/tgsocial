@@ -932,7 +932,7 @@ final class AppModel {
     static let newerCardText = "Newer card. Update the app."
     /// PRODUCT §2.23's two-line refusal, verbatim. §2's cap is unmoved; the second line names the
     /// two dials the writer can actually turn.
-    static let cardFullText = "Card is full.\nShorten your bio or drop a tag \u{2014} your card is one Telegram message."
+    static let cardFullText = "Card is full.\nShorten your bio or drop a tag."
 
     func skipSetup() {
         inSetup = false

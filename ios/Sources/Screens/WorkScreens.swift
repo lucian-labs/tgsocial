@@ -75,16 +75,15 @@ struct WorkCardSection: View {
         }
     }
 
-    /// §2.23's two empty states. The second line of the second one is uncomfortable and it is true
-    /// (§10.5): a client that omits it implies a completeness it does not have.
+    /// §2.23's two empty states. On my own card the word `network` and the `yet` carry §10.5's
+    /// caveat — a vouch from someone I cannot reach is not seen — without a second line saying so
+    /// (§3: labels, not explanation).
     @ViewBuilder private func emptyNote(_ rows: (claimed: [WorkTagRow], unclaimed: [WorkTagRow])) -> some View {
         let anyVouches = rows.claimed.contains { $0.count > 0 } || !rows.unclaimed.isEmpty
         if !rows.claimed.isEmpty, !anyVouches {
             VStack(alignment: .leading, spacing: HPTokens.Space.rowGap) {
                 if model.isMe(node.username) {
                     HPMuted("No vouches from your network yet.")
-                    HPSmall("Someone may have vouched for you outside it. You'd only see it if you can reach them.",
-                            color: HPTokens.Colors.faint)
                 } else {
                     HPMuted("No vouches from your network.")
                 }
@@ -154,8 +153,7 @@ struct VouchesScreen: View {
             HPMono(model.node(node)?.displayName ?? "@" + node)
                 .padding(.bottom, HPTokens.Space.cardGap)
             if vouches.isEmpty {
-                EmptyCard("No vouches from your network.",
-                          message: "You see vouches written by people you can reach \u{2014} you, who you follow, and theirs.")
+                EmptyCard("No vouches from your network.")
             } else {
                 HPSectionMark("Vouches", count: vouches.count)
                 HPListCard {
@@ -163,9 +161,6 @@ struct VouchesScreen: View {
                         VouchRow(vouch: vouch, isLast: i == vouches.count - 1)
                     }
                 }
-                HPSmall("Vouches from your network \u{2014} you, who you follow, and theirs.",
-                        color: HPTokens.Colors.faint)
-                    .padding(.top, HPTokens.Space.rowGap)
             }
         }
         .task { await model.refreshComments() }
@@ -347,7 +342,7 @@ struct VouchModal: View {
 
     @ViewBuilder private var composer: some View {
         HPH2(name.map { "Say one thing \($0) does." } ?? "Say one thing they do.")
-        HPMuted("This goes in your comments channel, under your name. \(name ?? "They") can't edit it or take it down.")
+        HPMuted("Public, under your name.")
             .padding(.top, HPTokens.Space.rowGap)
             .padding(.bottom, HPTokens.Space.cardPad)
         HPFieldLabel(fieldLabel)
@@ -372,8 +367,6 @@ struct VouchModal: View {
             if let already = alreadyVouched {
                 HPSmall("You already vouched \(name ?? "them") for \(already).", color: HPTokens.Colors.faint)
             }
-            HPSmall("People who follow you will see it, and the people who follow them.",
-                    color: HPTokens.Colors.faint)
         }
         .padding(.top, HPTokens.Space.rowGap)
     }
@@ -487,11 +480,8 @@ struct WorkModeView: View {
         let open = model.openNow
         HPSectionMark("Open now", count: open.isEmpty ? nil : open.count)
         if open.isEmpty {
-            VStack(alignment: .leading, spacing: HPTokens.Space.rowGap) {
-                HPCard { HPMuted("Nobody in your network is open right now.") }
-                smallNetworkNote
-            }
-            .padding(.bottom, HPTokens.Space.cardGap)
+            HPCard { HPMuted("Nobody in your network is open right now.") }
+                .padding(.bottom, HPTokens.Space.cardGap)
         } else {
             VStack(alignment: .leading, spacing: HPTokens.Space.rowGap) {
                 HPListCard {
@@ -499,16 +489,13 @@ struct WorkModeView: View {
                         OpenNowRow(entry: entry, isLast: i == open.count - 1)
                     }
                 }
-                smallNetworkNote
             }
             .padding(.bottom, HPTokens.Space.cardGap)
         }
 
         if posts.isEmpty {
             if showEmptyColumn {
-                EmptyCard("No work posts yet.",
-                          message: "Mark one of your feeds as work, or follow someone who has.",
-                          action: ("Edit Card", { model.modal = .editCard }))
+                EmptyCard("No work posts yet.", action: ("Edit Card", { model.modal = .editCard }))
             }
         } else {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -519,14 +506,6 @@ struct WorkModeView: View {
         }
     }
 
-    /// §2.24: one more faint line when I follow fewer than five, because a thin `OPEN NOW` is more
-    /// often a small network than a quiet one.
-    @ViewBuilder private var smallNetworkNote: some View {
-        if (model.myCard?.follows.count ?? 0) < 5 {
-            HPSmall("Your network is small. This reads the people you follow, and theirs.",
-                    color: HPTokens.Colors.faint)
-        }
-    }
 }
 
 struct OpenNowRow: View {

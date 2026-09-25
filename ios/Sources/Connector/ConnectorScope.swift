@@ -125,22 +125,12 @@ struct ScopeResolution: Equatable {
         sources.filter { $0.kind == kind }.map(\.username)
     }
 
-    /// PRODUCT §2.14: the muted line under the preset tabs. The count is live; the sentence is
-    /// the preset's own description, and every one of them ends the same way.
-    var summary: String {
-        let n = count
-        let noun = n == 1 ? "source" : "sources"
-        let what: String
-        switch preset {
-        case .graph: what = "your feeds and the feeds of the nodes you follow"
-        case .mine: what = "your own feeds and your own card"
-        case .custom: what = "exactly the usernames you list"
-        }
-        // PRODUCT §2.34: a member's consent to read a friend's private channel is not consent to
-        // pipe it to an assistant (PROTOCOL §11.5). No preset can name one — every key is a
-        // username — and `exposable` is the second lock on the merged window.
-        return "\(n) \(noun) \u{2014} \(what). Private chats and private channels are never included."
-    }
+    /// PRODUCT §2.14: the mono line under the preset tabs — the live count and nothing else. What
+    /// each preset exposes is CONNECTOR.md's to say (§3), and `Review Sources` is one tap away.
+    /// PRODUCT §2.34 still holds without the sentence: a member's consent to read a friend's
+    /// private channel is not consent to pipe it to an assistant (PROTOCOL §11.5). No preset can
+    /// name one — every key is a username — and `exposable` is the second lock on the window.
+    var summary: String { "\(count) source\(count == 1 ? "" : "s")" }
 }
 
 extension ScopeResolution {
