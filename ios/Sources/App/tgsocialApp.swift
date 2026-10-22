@@ -37,7 +37,12 @@ struct tgsocialApp: App {
                     .preferredColorScheme(.light)
                     // Mac only in practice: this is where the Connector bridge comes back up if
                     // the user left it on (PRODUCT §2.14). A no-op everywhere else.
-                    .task { await model.startServices() }
+                    .task {
+                        #if targetEnvironment(macCatalyst)
+                        MacMenuBar.start()
+                        #endif
+                        await model.startServices()
+                    }
                     // PROTOCOL §12.7 step 6: Bluesky's redirect comes back from the system browser
                     // on the scheme registered in project.yml (CFBundleURLTypes), as a URL open.
                     .onOpenURL { url in model.handleOpenURL(url) }

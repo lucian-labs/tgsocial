@@ -985,6 +985,13 @@ tgsocial graph — and, if you allow it, post as you. The wire contract is
 [`CONNECTOR.md`](./CONNECTOR.md); this is the screen that governs it. It is a
 fifth tab, `Connector`, present only on macOS.
 
+On Mac, closing the window (including Command-W) hides it and keeps the
+session and any enabled bridge running. A `tg` menu-bar item offers
+`Open tgsocial` and `Quit tgsocial`. Reopening restores the existing window;
+Quit (including Command-Q) ends the process and stops the bridge. This system
+menu uses native macOS chrome; the app screens retain House Pour. The Connector
+screen includes: `Closing the window keeps the bridge running. Quit tgsocial to stop it.`
+
 ```
 CONNECTOR                                     (section mark)
 Let an assistant read your feeds.             (muted)

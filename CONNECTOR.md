@@ -15,6 +15,11 @@ Same account, same session, same card. Nothing new to sign into, and no
 Telegram credential ever leaves the app — the bridge speaks in nodes, feeds
 and posts, never in session keys.
 
+On Mac, closing the window hides it to the `tg` menu-bar item; an enabled
+bridge keeps running. Choose `Open tgsocial` to return or `Quit tgsocial` to
+stop the app and bridge. Closing a window never enables the bridge or changes
+its permissions.
+
 ## 1. Why it is built this way
 
 Handing an assistant a messaging account is a real grant, so the design is

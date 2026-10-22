@@ -28,6 +28,21 @@ packages:
     exactVersion: 1.5.2-tdlib-1.8.66-022d6020
 
 targets:
+  MacMenuBar:
+    type: bundle
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: MacMenuBar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.lucianlabs.tgsocial.menubar
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSPrincipalClass: TGMenuBarController
+        CLANG_ENABLE_OBJC_ARC: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: AppKit.framework
   tgsocial:
     type: application
     platform: iOS
@@ -48,6 +63,11 @@ targets:
           - "*.ttf"
     dependencies:
       - package: TDLibKit
+      - target: MacMenuBar
+        platformFilter: macOS
+        embed: true
+        link: false
+        codeSign: true
     # PROTOCOL §12.7 step 6: after Info.plist is processed (its path is the input, which orders
     # this after it) and before signing, register the scheme the redirect actually uses. Fails the
     # build on a half-set or inconsistent fork pair instead of shipping a sign-in that never returns.

@@ -72,6 +72,9 @@ struct ConnectorScreen: View {
 
             bridgeCard
 
+            HPMuted("Closing the window keeps the bridge running. Quit tgsocial to stop it.")
+                .padding(.bottom, HPTokens.Space.cardGap)
+
             HPSectionMark("Scope")
             scopeCard
 
