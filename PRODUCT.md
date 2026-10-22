@@ -1036,6 +1036,11 @@ Behaviour:
 - Switching scope preset repaints the source count immediately; `Review
   Sources` pushes a plain list of the usernames currently exposed, so the
   answer to "what can it see" is always one tap away.
+  The Scope card says `Connected agents can manage public sources.` Once the
+  user enables the connection, agents can perform explicitly requested public
+  source additions/removals through `PATCH /scope` (CONNECTOR §3). Changes
+  preserve existing sources unless removed, activate Custom, save/read back
+  atomically, and appear in Activity. Telegram write switches remain separate.
 - `Custom` scope pushes an editable list of usernames with the same
   availability check as feeds elsewhere.
   The local screen also offers `Find a channel`, placeholder `Channel name`,

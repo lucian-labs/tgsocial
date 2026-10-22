@@ -36,6 +36,16 @@ final class LocalStore {
         try? data.write(to: url(name), options: .atomic)
     }
 
+    /// Use for acknowledged permission changes: success means the exact bytes were read back.
+    func saveVerified<T: Encodable>(_ value: T, _ name: String) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try encoder.encode(value)
+        try data.write(to: url(name), options: .atomic)
+        guard try Data(contentsOf: url(name)) == data else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
     /// Wipe everything (sign out) — except the safety lists, which survive by design.
     ///
     /// PROTOCOL §7.1: the block, mute and report record protects the person holding the phone, not

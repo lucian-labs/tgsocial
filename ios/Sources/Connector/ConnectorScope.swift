@@ -2,10 +2,8 @@
 //
 // This file is the whole of the answer to "what can the assistant see". Two rules make it hold:
 //
-//  1. A scope is *derived*, never *supplied*. `ScopeResolver.resolve` reads the preset, my card
-//     and the cards of the nodes I follow. Nothing in an HTTP request reaches it — there is no
-//     parameter, header or body field anywhere in §4 that widens a scope, and no endpoint that
-//     writes one. Widening happens in the app, by a person, or not at all.
+//  1. Reads use persisted scope, never request-supplied scope. The local screen and explicit
+//     authenticated PATCH /scope management operation can update the named custom list.
 //
 //  2. A username the resolver did not admit cannot be read, because the reading functions do not
 //     take usernames. They take `ScopedSource`, whose initialiser is private to this file, and the
@@ -20,6 +18,34 @@
 #if targetEnvironment(macCatalyst)
 
 import Foundation
+
+/// Explicit edits from an authenticated agent. Never a wildcard or implicit discovery grant.
+struct ConnectorScopeChange: Decodable {
+    var add: [String]?
+    var remove: [String]?
+
+    func normalized() throws -> (add: [String], remove: [String]) {
+        func names(_ values: [String]) throws -> [String] {
+            guard values.count <= 100 else { throw ConnectorError.badRequest("at most 100 scope edits per request") }
+            var result: [String] = []
+            for value in values {
+                guard let name = Username.normalise(value) else { throw ConnectorError.badRequest("invalid channel username") }
+                if !result.contains(Username.key(name)) { result.append(Username.key(name)) }
+            }
+            return result
+        }
+        let additions = try names(add ?? []), removals = try names(remove ?? [])
+        guard !additions.isEmpty || !removals.isEmpty else { throw ConnectorError.badRequest("add or remove is required") }
+        guard Set(additions).isDisjoint(with: removals) else { throw ConnectorError.badRequest("cannot add and remove the same source") }
+        return (additions, removals)
+    }
+
+    static func applying(add: [String], remove: [String], to scope: ScopeResolution) -> [String] {
+        var result = scope.sources.map { Username.key($0.username) }.filter { !remove.contains($0) }
+        for name in add where !result.contains(name) { result.append(name) }
+        return result
+    }
+}
 
 /// The three presets plus the custom list (CONNECTOR.md §3).
 enum ScopePreset: String, Codable, CaseIterable, Equatable {

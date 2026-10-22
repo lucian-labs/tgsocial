@@ -52,6 +52,12 @@ final class StubConnectorReader: ConnectorReader {
     var maxMediaBytes: Int64 { 25 * 1024 * 1024 }
 
     func scopeInputs() -> ScopeInputs { inputs }
+    func updateScope(add: [String], remove: [String]) async throws -> ScopeResolution {
+        let current = ScopeResolver.resolve(preset: preset, inputs: inputs)
+        inputs.custom = ConnectorScopeChange.applying(add: add, remove: remove, to: current)
+        preset = .custom
+        return ScopeResolver.resolve(preset: preset, inputs: inputs)
+    }
     func mergedPosts() async throws -> [Post] { window }
 
     func channelPosts(_ source: ScopedSource, limit: Int, before: Foundation.Date?) async throws -> [Post] {
@@ -450,9 +456,8 @@ final class ConnectorBridgeTests: XCTestCase {
         XCTAssertFalse(response.body.contains("should not be visible"))
     }
 
-    func testThereIsNoEndpointThatWidensScope() async throws {
-        // §3 is explicit that scope is set in the app and nowhere else. The reporting endpoint is
-        // read-only, and the obvious guesses are not routes.
+    func testScopeRejectsUnsupportedReplacementBodies() async throws {
+        // Only the explicit PATCH delta is accepted; replacement bodies and read queries fail closed.
         let write = try await send("POST", "/scope", token: reader.tokenValue,
                                              body: #"{"preset":"custom","sources":["private_person"]}"#)
         XCTAssertEqual(write.status, 400)
@@ -465,6 +470,37 @@ final class ConnectorBridgeTests: XCTestCase {
 
         let reported = try await get("/scope")
         XCTAssertEqual(reported.json?["preset"] as? String, "graph")
+    }
+
+    func testAgentScopeDeltaPreservesSourcesAndWriteGrants() async throws {
+        let before = try await get("/scope")
+        let oldNames = Set(try XCTUnwrap(before.json?["sources"] as? [[String: Any]]).compactMap { $0["username"] as? String })
+        await MainActor.run { reader.writes = ConnectorWrites(post: true, comment: false, card: false) }
+        let result = try await send("PATCH", "/scope", token: reader.tokenValue,
+                                    body: #"{"add":["@Captain_Log","captain_log"]}"#)
+        XCTAssertEqual(result.status, 200)
+        XCTAssertEqual(result.json?["preset"] as? String, "custom")
+        let names = Set(try XCTUnwrap(result.json?["sources"] as? [[String: Any]]).compactMap { $0["username"] as? String })
+        XCTAssertEqual(names, oldNames.union(["captain_log"]))
+        let status = try await get("/status")
+        XCTAssertEqual(status.json?["writes"] as? [String: Bool], ["post": true, "comment": false, "card": false])
+        let audit = try await get("/audit")
+        XCTAssertTrue(audit.body.contains("captain_log"))
+        let removed = try await send("PATCH", "/scope", token: reader.tokenValue,
+                                     body: #"{"remove":["captain_log"]}"#)
+        XCTAssertEqual(removed.status, 200)
+        XCTAssertEqual(removed.json?["count"] as? Int, oldNames.count)
+    }
+
+    func testScopeEditsRequireAuthAndRejectAmbiguousNames() async throws {
+        let denied = try await send("PATCH", "/scope", token: nil, body: #"{"add":["captain_log"]}"#)
+        XCTAssertEqual(denied.status, 401)
+        for body in [#"{"add":["*"]}"#, #"{"add":["captain_log"],"remove":["@CAPTAIN_LOG"]}"#, #"{}"#] {
+            let response = try await send("PATCH", "/scope", token: reader.tokenValue, body: body)
+            XCTAssertEqual(response.status, 400)
+        }
+        let scope = try await get("/scope")
+        XCTAssertEqual(scope.json?["preset"] as? String, "graph")
     }
 
     // MARK: 2b — the safety lists (PRODUCT §2.15–§2.20, PROTOCOL §7.1)

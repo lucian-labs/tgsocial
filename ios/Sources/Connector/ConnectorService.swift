@@ -134,6 +134,34 @@ final class ConnectorService: ConnectorReader {
         persist()
     }
 
+    /// Connection grants include managing named public sources; posting remains a separate grant.
+    func updateScope(add: [String], remove: [String]) async throws -> ScopeResolution {
+        guard !model.isDemo, isSignedIn, settings.enabled else { throw ConnectorError.signedOut }
+        let original = settings
+        let originalToken = token
+        let snapshot = scope
+        // Resolve only explicitly added names, and refuse people, private chats and groups.
+        for username in add {
+            let chat = try await model.td.api.searchPublicChat(username: username)
+            guard Mapping.isChannel(chat.type), let id = Mapping.supergroupId(of: chat) else {
+                throw ConnectorError.outOfScope("@\(username) is not a public channel")
+            }
+            let group = try await model.td.api.getSupergroup(supergroupId: id)
+            guard group.usernames?.activeUsernames.contains(where: { Username.key($0) == username }) == true else {
+                throw ConnectorError.outOfScope("@\(username) is not a public channel")
+            }
+        }
+        guard isSignedIn, settings == original, token == originalToken, scope == snapshot else {
+            throw ConnectorError.conflict("Scope changed. Read /scope and retry.")
+        }
+        var next = settings
+        next.preset = .custom
+        next.custom = ConnectorScopeChange.applying(add: add, remove: remove, to: snapshot)
+        try model.store.saveVerified(next, Self.storeKey)
+        settings = next
+        return scope
+    }
+
     func setWrite(_ keyPath: WritableKeyPath<ConnectorWrites, Bool>, _ on: Bool) {
         // The three write grants, refused for the same reason as the bridge itself (§2.22.3).
         if refuseInDemo() { return }

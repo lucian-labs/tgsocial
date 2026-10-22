@@ -26,7 +26,7 @@ enum ConnectorBodies {
         ]
     }
 
-    /// §3: the preset and the resolved username list. There is no endpoint that changes it.
+    /// §3: the preset and resolved username list, also returned after PATCH /scope.
     static func scope(_ scope: ScopeResolution) -> [String: Any] {
         [
             "preset": scope.preset.rawValue,

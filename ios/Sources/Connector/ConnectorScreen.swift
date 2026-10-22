@@ -178,6 +178,7 @@ struct ConnectorScreen: View {
                                  })) { $0.label }
         HPCard {
             HPMonoSmall(scope.summary)
+            HPMuted("Connected agents can manage public sources.")
             HPButton("Review Sources", style: .ghost, size: .small) {
                 model.path.append(.connectorSources)
             }

@@ -32,7 +32,8 @@ built to be *narrow, visible and revocable* rather than convenient:
 - **Scoped by default.** With no scope configured the connector exposes your
   **tgsocial graph only** — your feeds, the feeds of nodes you follow, and
   their cards. Your private chats are not in scope and cannot be brought into
-  scope by the assistant; only you can widen it, in the app.
+  scope by the assistant. Connected agents may manage explicitly named public
+  sources with `PATCH /scope` when you request it; there is no blanket chat access.
 - **Read-only by default.** Posting, commenting and card edits are refused
   unless you enable writes, and each write kind is its own switch.
 - **Audited.** Every request is logged with time, tool, scope decision and
@@ -91,8 +92,28 @@ or node username. The app offers three presets and a custom list:
 
 Private chats, group chats and direct messages are **never** in scope in v1,
 under any preset. `GET /scope` reports the current preset and the resolved
-username list; there is no endpoint that changes scope — that is deliberate,
-and it is done in the app.
+username list. The local screen and authenticated `PATCH /scope` can change
+the public source list. Enabling the connector delegates this management to
+connected agents for user-requested changes, independently of the three
+Telegram write grants. Agents must not add sources on their own initiative.
+
+`PATCH /scope` accepts `{ "add": ["channel_name"], "remove": [] }`.
+Either array may be omitted; at least one entry is required. Each array is
+limited to 100 names; invalid usernames, wildcards or adding and removing the
+same name return 400. Names are normalized and deduplicated. Every addition
+must resolve to a public channel, or the entire change fails. The operation
+starts from the currently resolved sources, preserves them unless explicitly
+removed, applies the edits and activates the resulting Custom list. It does
+not include inactive saved Custom entries automatically. No chat is joined,
+no Telegram content is changed and write switches are untouched.
+
+Settings are atomically saved and read back before success. An overlapping
+scope/settings/token change during validation returns 409; read `/scope` and
+retry. The 200 response has the same `{preset,sources,count}` shape as GET
+`/scope`. Every attempt is audited; successful changes list added/removed
+usernames in Activity. The local Scope screen immediately reflects the new
+list and explains `Connected agents can manage public sources.` Token rotation
+or disabling the connector still revokes the connection.
 
 **The reader's safety lists apply on top of scope.** Settings says "Blocked and
 reported content is hidden everywhere in the app" (`PRODUCT §2.20`) and the

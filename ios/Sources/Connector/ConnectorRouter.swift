@@ -21,9 +21,8 @@
 //   7. Audit, always: on the way out of every branch, including the refusals, including the
 //      failures. Counts and verdicts; never bodies.
 //
-// The "no code path widens its own scope" claim rests on there being no setter: `ScopeResolution`
-// is a `let` built at step 3, `admit` is the only way to turn a string into something readable,
-// and no endpoint in §4 writes scope — §3 says that on purpose.
+// Reads cannot widen scope. PATCH /scope is the explicit, authenticated management path;
+// it validates named public channels, persists and audits the change, then returns its readback.
 
 #if targetEnvironment(macCatalyst)
 
@@ -60,6 +59,7 @@ protocol ConnectorReader: AnyObject {
     var maxMediaBytes: Int64 { get }
 
     func scopeInputs() -> ScopeInputs
+    func updateScope(add: [String], remove: [String]) async throws -> ScopeResolution
     /// The reader's own block, mute and report lists (PROTOCOL §7.1), read fresh per request like
     /// the scope: a block takes effect on the next request, not the next launch.
     var safety: SafetyLists { get }
@@ -191,6 +191,11 @@ final class ConnectorRouter {
         switch (request.method, segments.first ?? "") {
         case ("GET", "status"): return status(scope: scope, policy: policy)
         case ("GET", "scope"): return (.json(200, ConnectorBodies.scope(scope)), "sources=\(scope.count)")
+        case ("PATCH", "scope"):
+            let change = try request.decode(ConnectorScopeChange.self).normalized()
+            let updated = try await reader.updateScope(add: change.add, remove: change.remove)
+            return (.json(200, ConnectorBodies.scope(updated)),
+                    "\(updated.count) sources. Added: \(change.add.joined(separator: ", ")). Removed: \(change.remove.joined(separator: ", ")).")
         case ("GET", "feeds"): return feeds(scope: scope)
         case ("GET", "audit"): return auditBody(request)
         case ("GET", "graph"): return graph(request, scope: scope, safety: safety)

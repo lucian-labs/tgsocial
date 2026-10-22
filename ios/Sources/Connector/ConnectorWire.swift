@@ -24,12 +24,13 @@ enum ConnectorError: Swift.Error, Equatable {
     case floodWait(seconds: Int)
     case notFound(String)
     case badRequest(String)
+    case conflict(String)
     case tooLarge(bytes: Int64, maxBytes: Int64)
 
     var status: Int {
         switch self {
         case .unauthorized: return 401
-        case .signedOut: return 409
+        case .signedOut, .conflict: return 409
         case .outOfScope, .readOnly: return 403
         case .telegram: return 502
         case .floodWait: return 429
@@ -50,6 +51,7 @@ enum ConnectorError: Swift.Error, Equatable {
         case .floodWait: return "flood wait"
         case .notFound: return "not found"
         case .badRequest: return "bad request"
+        case .conflict: return "conflict"
         case .tooLarge: return "too large"
         }
     }
@@ -61,7 +63,7 @@ enum ConnectorError: Swift.Error, Equatable {
         var out: [String: Any] = ["error": wire]
         switch self {
         case .outOfScope(let what): out["detail"] = what
-        case .badRequest(let what), .notFound(let what): out["detail"] = what
+        case .badRequest(let what), .notFound(let what), .conflict(let what): out["detail"] = what
         case .telegram(let code, let message):
             out["code"] = code
             out["message"] = message
