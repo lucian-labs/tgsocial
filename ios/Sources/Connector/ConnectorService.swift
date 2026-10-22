@@ -328,7 +328,7 @@ final class ConnectorService: ConnectorReader {
         let info = try await channel(source)
         let result = try await model.perform {
             try await self.model.td.api.getChatHistory(chatId: info.chatId,
-                fromMessageId: before == 0 ? 0 : before - 1,
+                fromMessageId: before,
                 limit: limit, offset: 0, onlyLocal: false)
         }
         let messages = result.messages ?? []
