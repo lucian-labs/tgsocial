@@ -13,6 +13,8 @@
 import Foundation
 import Observation
 import TDLibKit
+import AVFoundation
+import ImageIO
 
 /// What the user set, persisted next to the rest of the app's local state so signing out — which
 /// wipes that directory — takes the bridge's configuration with it.
@@ -57,6 +59,10 @@ final class ConnectorService: ConnectorReader {
     @ObservationIgnored private var mediaLeases: [Int: Int] = [:]
     @ObservationIgnored private var mediaCleanup: [Int: Task<Void, Never>] = [:]
 
+    @ObservationIgnored private var uploadStore: ConnectorUploadStore?
+    @ObservationIgnored private var uploadTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var earlyUploadEvents: [String: Update] = [:]
+
     private(set) var settings: ConnectorSettings
     private(set) var status: Status = .off
     /// The bearer token. Minted on first enable and never regenerated behind the user's back.
@@ -80,6 +86,8 @@ final class ConnectorService: ConnectorReader {
     /// Restores the listener at launch when the user left it on. Not automatic beyond that:
     /// enabling is a grant, and a grant survives a relaunch but is never invented by one.
     func restore() async {
+        guard !model.isDemo else { return }
+        _ = try? uploads()
         // CONNECTOR.md §2: the Connector needs Telegram. Signed in to Bluesky alone the bridge does
         // not listen at all — connection refused, as if off (PROTOCOL §12.11).
         guard settings.enabled, !model.telegramKnownSignedOut else {
@@ -131,12 +139,14 @@ final class ConnectorService: ConnectorReader {
         if refuseInDemo() { return }
         settings.preset = preset
         persist()
+        revokeUploads(onlyOutsideScope: true)
     }
 
     func setCustom(_ usernames: [String]) {
         if refuseInDemo() { return }
         settings.custom = usernames.compactMap(Username.normalise)
         persist()
+        revokeUploads(onlyOutsideScope: true)
     }
 
     /// Connection grants include managing named public sources; posting remains a separate grant.
@@ -164,6 +174,7 @@ final class ConnectorService: ConnectorReader {
         next.custom = ConnectorScopeChange.applying(add: add, remove: remove, to: snapshot)
         try model.store.saveVerified(next, Self.storeKey)
         settings = next
+        revokeUploads(onlyOutsideScope: true)
         return scope
     }
 
@@ -172,6 +183,7 @@ final class ConnectorService: ConnectorReader {
         if refuseInDemo() { return }
         settings.writes[keyPath: keyPath] = on
         persist()
+        if !settings.writes.post { revokeUploads() }
     }
 
     /// §2: "Rotating writes a new token and drops all in-flight requests."
@@ -196,6 +208,9 @@ final class ConnectorService: ConnectorReader {
     /// second confirm, and a custom source list naming the previous account's choices.
     func signOut() {
         stop()
+        if let uploadStore { for job in uploadStore.jobs.values { uploadStore.removeData(job) } }
+        uploadStore = nil
+        earlyUploadEvents = [:]
         settings = .signedOut
         persist()
         token = ""
@@ -237,6 +252,7 @@ final class ConnectorService: ConnectorReader {
     }
 
     private func stop() {
+        revokeUploads()
         server?.stop()
         server = nil
         status = .off
@@ -549,6 +565,219 @@ final class ConnectorService: ConnectorReader {
         case .document(let file, _): return typed(file, "application/octet-stream")
         case .sticker(let file, _, _, _, _, _): return typed(file, "image/webp")
         case .linkPreview, .summary: return (nil, 0, "application/octet-stream")
+        }
+    }
+
+    // MARK: Temporary media upload / durable idempotency receipts
+
+    private func uploads() throws -> ConnectorUploadStore {
+        if let uploadStore { return uploadStore }
+        let directory = (LocalStore.testDirectory ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("tgsocial-agent-uploads", isDirectory: true)
+        let created = try ConnectorUploadStore(store: model.store, directory: directory)
+        uploadStore = created
+        return created
+    }
+
+    func uploadFeed(_ id: String) throws -> String { try uploads().job(id).spec.feed }
+
+    private func uploadPermission(_ source: ScopedSource) async throws -> Chat {
+        let currentToken = token
+        let chat = try await channelChat(source)
+        guard let groupID = Mapping.supergroupId(of: chat) else { throw ConnectorError.outOfScope("public channel required") }
+        let group = try await model.td.api.getSupergroup(supergroupId: groupID)
+        guard Self.canPostMedia(group.status) else { throw ConnectorError.outOfScope("You cannot post to this channel") }
+        guard currentToken == token, status.isOn, settings.writes.post, isSignedIn else { throw ConnectorError.readOnly }
+        _ = try scope.admit(source.username)
+        return chat
+    }
+
+    nonisolated static func canPostMedia(_ status: ChatMemberStatus) -> Bool {
+        switch status {
+        case .chatMemberStatusCreator(let creator): return creator.isMember
+        case .chatMemberStatusAdministrator(let admin): return admin.rights.canPostMessages
+        default: return false
+        }
+    }
+
+    func upload(_ request: ConnectorRequest, source: ScopedSource) async throws -> ConnectorResponse {
+        let u = try uploads()
+        try u.expire()
+        let id = request.segments[1]
+        switch (request.method, request.segments.count) {
+        case ("POST", 2):
+            _ = try await uploadPermission(source)
+            let spec = try request.decode(ConnectorUploadSpec.self).validated(maxBytes: maxMediaBytes)
+            return .json(200, try u.create(id: id, spec: spec).body)
+        case ("GET", 2): return .json(200, try u.job(id).body)
+        case ("PUT", 2):
+            guard let offset = request.query["offset"].flatMap(Int64.init) else { throw ConnectorError.badRequest("offset required") }
+            return .json(200, try u.append(id: id, offset: offset, data: request.body).body)
+        case ("POST", 3):
+            let existing = try u.job(id)
+            if ["queued", "sent", "failed", "uncertain"].contains(existing.state) { return .json(200, existing.body) }
+            var job = try await u.verify(id: id)
+            do {
+                let chat = try await uploadPermission(source)
+                let content = try await uploadContent(job: job, url: u.url(job))
+                _ = try await uploadPermission(source) // recheck after media inspection
+                try Task.checkCancellation()
+                job.state = "queued"; job.chatId = chat.id
+                // Persist intent BEFORE the single send call. A crash cannot cause an automatic resend.
+                try u.save(job)
+                let sendToken = token
+                uploadTasks[id] = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.uploadTasks.removeValue(forKey: id) }
+                    do {
+                        try Task.checkCancellation()
+                        guard sendToken == self.token, self.settings.writes.post, self.status.isOn,
+                              self.uploadStore === u else { throw ConnectorError.readOnly }
+                        let pending = try await self.model.td.api.sendMessage(chatId: chat.id,
+                            inputMessageContent: content, options: nil, replyMarkup: nil, replyTo: nil, topicId: nil)
+                        guard self.uploadStore === u else { return }
+                        var latest = try u.job(id)
+                        latest.pendingId = pending.id
+                        latest.fileId = Self.uploadFile(pending)?.id
+                        try u.save(latest)
+                        if pending.sendingState == nil { self.finishUpload(id: id, sent: pending); return }
+                        if let event = self.earlyUploadEvents.removeValue(forKey: "\(chat.id):\(pending.id)") { self.handleUploadUpdate(event) }
+                        if Task.isCancelled || sendToken != self.token || !self.status.isOn || !self.settings.writes.post {
+                            self.cancelPendingUpload(id: id)
+                        }
+                        Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: .seconds(10 * 60))
+                            guard let self, self.uploadStore === u, var waiting = try? u.job(id), waiting.state == "queued" else { return }
+                            waiting.state = "uncertain"; waiting.error = "No final acknowledgment. Do not resend; reconcile with Telegram."
+                            try? u.save(waiting)
+                            self.cancelPendingUpload(id: id)
+                        }
+                    } catch {
+                        guard self.uploadStore === u, var failed = try? u.job(id), failed.state != "sent" else { return }
+                        // Even an RPC error can leave an uncertain remote result. Never re-send this ID.
+                        failed.state = "uncertain"; failed.error = "Send was not confirmed. Do not resend; check Telegram."
+                        try? u.save(failed); u.removeData(failed)
+                    }
+                }
+                return .json(202, job.body)
+            } catch {
+                job.state = "failed"; job.error = "Upload could not be prepared or permission was revoked."
+                try? u.save(job); u.removeData(job)
+                throw error
+            }
+        case ("DELETE", 2):
+            var job = try u.job(id)
+            if job.state == "sent" { return .json(200, job.body) }
+            if ["queued", "uncertain"].contains(job.state) {
+                uploadTasks[id]?.cancel(); cancelPendingUpload(id: id)
+                job.state = "uncertain"; job.error = "Cancellation requested; a send already accepted by Telegram may complete."
+            } else { job.state = "failed"; job.error = "Cancelled"; u.removeData(job) }
+            try u.save(job); return .json(200, job.body)
+        default: throw ConnectorError.notFound(request.path)
+        }
+    }
+
+    private func uploadContent(job: ConnectorUploadJob, url: URL) async throws -> InputMessageContent {
+        let caption = FormattedText(entities: [], text: job.spec.caption)
+        let file = InputFile.inputFileLocal(InputFileLocal(path: url.path))
+        switch job.spec.kind {
+        case "video":
+            let asset = AVURLAsset(url: url)
+            let duration = try await asset.load(.duration).seconds
+            guard duration.isFinite, duration > 0, let track = try await asset.loadTracks(withMediaType: .video).first else {
+                throw ConnectorError.badRequest("Video could not be read")
+            }
+            let size = try await track.load(.naturalSize)
+            let video = InputVideo(addedStickerFileIds: [], cover: nil, duration: Int(duration.rounded(.up)),
+                height: Int(abs(size.height)), startTimestamp: 0, supportsStreaming: true, thumbnail: nil, video: file, width: Int(abs(size.width)))
+            return .inputMessageVideo(InputMessageVideo(caption: caption, hasSpoiler: false,
+                selfDestructType: nil, showCaptionAboveMedia: false, video: video))
+        case "photo":
+            guard let image = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(image, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width <= 10000, height <= 10000 else { throw ConnectorError.badRequest("Photo could not be read") }
+            let photo = InputPhoto(addedStickerFileIds: [], height: height, photo: file, thumbnail: nil, video: nil, width: width)
+            return .inputMessagePhoto(InputMessagePhoto(caption: caption, hasSpoiler: false, photo: photo,
+                selfDestructType: nil, showCaptionAboveMedia: false))
+        default:
+            return .inputMessageDocument(InputMessageDocument(caption: caption,
+                document: InputDocument(disableContentTypeDetection: true, document: file, thumbnail: nil)))
+        }
+    }
+
+    private static func uploadFile(_ message: Message) -> TDLibKit.File? {
+        switch message.content {
+        case .messageVideo(let value): return value.video.video
+        case .messageDocument(let value): return value.document.document
+        case .messagePhoto(let value): return value.photo.sizes.last?.photo
+        default: return nil
+        }
+    }
+
+    func handleUploadUpdate(_ update: Update) {
+        guard let u = uploadStore else { return }
+        let oldID: Int64
+        let eventChatID: Int64
+        switch update {
+        case .updateMessageSendSucceeded(let event): oldID = event.oldMessageId; eventChatID = event.message.chatId
+        case .updateMessageSendFailed(let event): oldID = event.oldMessageId; eventChatID = event.message.chatId
+        case .updateFile(let event):
+            for var job in u.jobs.values where job.fileId == event.file.id && ["queued", "uncertain"].contains(job.state) {
+                job.uploadedBytes = event.file.remote.uploadedSize; try? u.save(job)
+            }
+            return
+        default: return
+        }
+        guard let job = u.jobs.values.first(where: { $0.chatId == eventChatID && $0.pendingId == oldID && ["queued", "uncertain"].contains($0.state) }) else {
+            if earlyUploadEvents.count >= 128 { earlyUploadEvents.removeAll() }
+            earlyUploadEvents["\(eventChatID):\(oldID)"] = update; return
+        }
+        switch update {
+        case .updateMessageSendSucceeded(let event): finishUpload(id: job.id, sent: event.message)
+        case .updateMessageSendFailed:
+            var failed = job; failed.state = "failed"; failed.error = "Telegram reported that the upload failed."
+            try? u.save(failed); u.removeData(failed)
+            audit.append(AuditEntry(tool: "UPLOAD", decision: "feed=" + job.spec.feed, outcome: .failed("send-failed"), detail: "request=" + job.id))
+        default: break
+        }
+    }
+
+    private func finishUpload(id: String, sent: Message) {
+        guard let u = uploadStore, var job = try? u.job(id), job.state != "sent" else { return }
+        job.state = "sent"; job.error = nil; job.uploadedBytes = job.spec.bytes
+        job.postURL = "https://t.me/" + job.spec.feed + "/" + String(DeepLink.serverMessageId(sent.id))
+        try? u.save(job); u.removeData(job)
+        if let fileID = Self.uploadFile(sent)?.id {
+            let api = model.td.api
+            Task { _ = try? await api.deleteFile(fileId: fileID) }
+        }
+        model.feed.apply(sent: sent, oldMessageId: job.pendingId ?? sent.id); model.posts = model.feed.posts
+        audit.append(AuditEntry(tool: "UPLOAD", decision: "feed=" + job.spec.feed, outcome: .ok, detail: "request=" + id + " sent=" + String(DeepLink.serverMessageId(sent.id))))
+    }
+
+    private func cancelPendingUpload(id: String) {
+        guard let u = uploadStore, let job = try? u.job(id), let chatID = job.chatId, let pendingID = job.pendingId else { return }
+        let currentToken = token
+        Task { @MainActor [weak self] in
+            guard let self, currentToken == self.token, self.uploadStore === u else { return }
+            if let message = try? await self.model.td.api.getMessage(chatId: chatID, messageId: pendingID), message.sendingState != nil {
+                _ = try? await self.model.td.api.deleteMessages(chatId: chatID, messageIds: [pendingID], revoke: false)
+            }
+            u.removeData(job)
+        }
+    }
+
+    private func revokeUploads(onlyOutsideScope: Bool = false) {
+        if !onlyOutsideScope { for task in uploadTasks.values { task.cancel() } }
+        guard let u = uploadStore else { return }
+        for var job in u.jobs.values where ["uploading", "staged", "verifying", "queued"].contains(job.state) {
+            if onlyOutsideScope && scope.contains(job.spec.feed) { continue }
+            uploadTasks[job.id]?.cancel()
+            if job.state == "queued" { job.state = "uncertain"; cancelPendingUpload(id: job.id) }
+            else { job.state = "failed"; u.removeData(job) }
+            job.error = "Connector permission revoked or app stopped."; try? u.save(job)
         }
     }
 

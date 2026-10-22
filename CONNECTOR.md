@@ -322,3 +322,67 @@ API operations. Sign-out revokes the connector; the agent cannot grant itself
 Telegram posting permissions. Existing `/post`, `/comment` and `/card` actions
 work headlessly with their respective enabled grants. Public source additions
 and removals preserve other sources and all write grants.
+
+## 10. Headless media posting
+
+Uses the existing **Post to my feeds** grant. The target must be a currently
+in-scope public channel where Telegram says the signed-in account is creator
+or administrator with `can_post_messages`. Unlike text `/post`, a media target
+need not also be listed in the node card. This does not allow DMs or groups.
+No endpoint accepts an arbitrary local path or remote URL.
+
+1. `POST /uploads/{requestId}` with JSON:
+   `{ "feed":"tastycrow", "kind":"video", "filename":"edit.mp4",
+      "bytes":142756677, "sha256":"<64 hex characters>", "caption":"" }`.
+   Use a fresh random request ID (8–80 ASCII letters/digits, `-`, `_`).
+   Kinds: `video`, `photo`, `document`. All six fields are required. Captions are
+   plain text, at most 1024 UTF-16 units. Photos are at most 10 MiB; other media
+   use `/capabilities.mediaUpload.maxBytes` (default 1 GiB).
+2. Read the source file in chunks of at most `chunkBytes` (1 MiB) and send each
+   raw binary chunk using `PUT /uploads/{requestId}?offset=<receivedBytes>`.
+   The normal bearer header is required for every chunk. This is bounded
+   file-backed streaming over repeated HTTP requests, not JSON/base64. Chunk
+   offsets must be contiguous. A repeated offset with identical saved bytes is
+   acknowledged without appending twice; different bytes or gaps fail `409`.
+3. `POST /uploads/{requestId}/send` with no body verifies the complete SHA-256,
+   inspects the media and checks current posting rights/scope/grant again.
+   Returns `202` with `state:queued` when a single Telegram send is scheduled.
+   There is no automatic Telegram retry. Repeating this endpoint never schedules
+   another send for that request ID.
+4. Poll `GET /uploads/{requestId}`. Responses contain `state`, `phase`,
+   `receivedBytes`, `uploadedBytes`, `bytes`, `postURL`, `error`, and `chunkBytes`.
+   Local receipt is `uploading`, then `staged`/`verifying`. `queued` with phase
+   `telegram-upload` reports network upload progress; phase `telegram-queue`
+   means all bytes are uploaded but Telegram has not acknowledged the message.
+   Only a final Telegram message acknowledgment produces `sent` and `postURL`.
+   Use that link as the result, not a locally queued message ID.
+5. `DELETE /uploads/{requestId}` cancels staging. For a queued send cancellation
+   is best effort: pending messages are cancelled if still pending, but a post
+   already accepted by Telegram can complete. This never deletes a confirmed
+   published post. Disabling Post/Bridge, rotating the token, signing out, or
+   removing the source also revokes pending work with this same boundary.
+
+A request ID and its normalized metadata form an idempotency key. Creating the
+same ID with different metadata fails `409`; creating it with the same metadata
+returns the existing receipt. Small receipts persist across restarts. Send intent
+is saved **before** the send call. Restart/network ambiguity yields `uncertain`,
+never a second automatic send. If uncertain, inspect Telegram and the receipt;
+do not invent a new ID and repost blindly. Late acknowledgments can still settle
+the receipt. A send without acknowledgment after 10 minutes becomes uncertain.
+Definite checksum/validation errors or Telegram send-failed events yield `failed`.
+Terminal IDs cannot be reset or resent. GET remains readable if Post is disabled.
+
+Staging is private temporary storage (`tgsocial-agent-uploads`, mode 700, files
+600), at most four active jobs and a combined 1 GiB reservation. Unsent staging
+expires after 15 minutes. Payloads are removed after success, failure, cancellation
+or restart; the caller's original file is never read or removed by the app.
+The receipt ledger is capped at 1000 IDs; it refuses new work rather than dropping
+old duplicate protection. Signing out resets the account's ledger. A restarted
+upload must use a new ID only after the old receipt is known not to have sent.
+
+Video input must already be a Telegram-compatible MP4/H.264 file; the connector
+inspects duration/dimensions but does not transcode. Photo and document paths
+share the authorization and transfer checks. This API sends one media item per
+post; albums, scheduling, caption formatting and editing published posts are
+not supported. Audit entries record request ID, destination and final outcome,
+never payloads or captions.

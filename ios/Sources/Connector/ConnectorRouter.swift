@@ -85,6 +85,9 @@ protocol ConnectorReader: AnyObject {
     func mediaResponse(post: Post, index: Int, maxBytes: Int64) async throws -> ConnectorResponse
     func mediaStatus(post: Post, index: Int) async throws -> [String: Any]
 
+    func uploadFeed(_ id: String) throws -> String
+    func upload(_ request: ConnectorRequest, source: ScopedSource) async throws -> ConnectorResponse
+
     func writePost(to source: ScopedSource, text: String) async throws -> Post
     func writeComment(target: String, text: String) async throws -> Comment
     func writeCard(name: String?, bio: String?, link: String?) async throws -> NodeInfo
@@ -193,7 +196,7 @@ final class ConnectorRouter {
         }
         switch (request.method, segments.first ?? "") {
         case ("GET", "capabilities"):
-            return (.json(200, capabilities(policy: policy)), "actions=21")
+            return (.json(200, capabilities(policy: policy)), "actions=26")
         case ("GET", "connections"):
             return (.json(200, reader.connections()), "connection-status")
         case ("GET", "channels"):
@@ -212,6 +215,16 @@ final class ConnectorRouter {
             let updated = try await reader.updateScope(add: change.add, remove: change.remove)
             return (.json(200, ConnectorBodies.scope(updated)),
                     "\(updated.count) sources. Added: \(change.add.joined(separator: ", ")). Removed: \(change.remove.joined(separator: ", ")).")
+        case (_, "uploads"):
+            guard segments.count == 2 || (segments.count == 3 && segments[2] == "send"),
+                  ConnectorUploadStore.validID(segments[1]) else { throw ConnectorError.notFound(request.path) }
+            let feed: String
+            if request.method == "POST", segments.count == 2 {
+                feed = try request.decode(ConnectorUploadSpec.self).validated(maxBytes: reader.maxMediaBytes).feed
+            } else { feed = try reader.uploadFeed(segments[1]) }
+            let source = try scope.admit(feed)
+            if request.method != "GET", !policy.writes.post { throw ConnectorError.readOnly }
+            return (try await reader.upload(request, source: source), "request=\(segments[1]) feed=\(source.username)")
         case ("GET", "feeds"): return feeds(scope: scope)
         case ("GET", "audit"): return auditBody(request)
         case ("GET", "graph"): return graph(request, scope: scope, safety: safety)
@@ -266,7 +279,7 @@ final class ConnectorRouter {
         }
     }
 
-    private static let nouns: Set<String> = ["capabilities", "connections", "channels", "refresh", "history", "status", "scope", "feed", "feeds", "node", "graph",
+    private static let nouns: Set<String> = ["capabilities", "connections", "channels", "refresh", "uploads", "history", "status", "scope", "feed", "feeds", "node", "graph",
                                              "thread", "search", "audit", "media", "post", "comment", "card"]
     /// Everything except `/feed/{username}`, `/node/{username}`, `/thread/…` and `/media/…`.
     private static let leafNouns: Set<String> = ["capabilities", "connections", "channels", "refresh", "status", "scope", "feeds", "graph", "search",
@@ -292,16 +305,24 @@ final class ConnectorRouter {
             ("GET", "/media/{postId}/{index}", "scoped-read", []),
             ("GET", "/media/{postId}/{index}/status", "scoped-read", []),
             ("GET", "/audit", "inspect", ["limit"]),
+            ("POST", "/uploads/{requestId}", "post", ["feed", "kind", "filename", "bytes", "sha256", "caption"]),
+            ("PUT", "/uploads/{requestId}", "post", ["offset"]),
+            ("GET", "/uploads/{requestId}", "scoped-read", []),
+            ("POST", "/uploads/{requestId}/send", "post", []),
+            ("DELETE", "/uploads/{requestId}", "post", []),
             ("POST", "/post", "post", ["feed", "text"]),
             ("POST", "/comment", "comment", ["target", "text"]),
             ("PATCH", "/card", "card", ["name", "bio", "link"]),
         ]
         return ["version": 1, "transport": "loopback-http", "uiRequiredForRequests": false,
                 "requiresRunningApp": true,
+                "mediaUpload": ["chunkBytes": ConnectorUploadStore.chunkBytes, "maxBytes": reader.maxMediaBytes,
+                                "stagingBudget": ConnectorUploadStore.stagingBudget, "maxActive": ConnectorUploadStore.maxActive,
+                                "kinds": ["video", "photo", "document"], "idempotent": true, "temporaryStorage": true],
                 "mediaTransfer": ["fileBacked": true, "temporaryStorage": true, "cleanup": "after-last-reader", "chunkBytes": ConnectorServer.fileChunkBytes, "timeoutSeconds": Int(ConnectorServer.transferTimeout), "rangeSupported": false],
                 "actions": routes.map { method, path, permission, fields -> [String: Any] in
                     ["method": method, "path": path, "permission": permission,
-                     "parameterLocation": method == "GET" ? "query" : "body", "fields": fields]
+                     "parameterLocation": method == "GET" ? "query" : (method == "PUT" ? "query+binary-body" : "body"), "fields": fields]
                 },
                 "writes": ["post": policy.writes.post, "comment": policy.writes.comment, "card": policy.writes.card],
                 "unsupported": ["private-chats", "account-sign-in", "account-sign-out", "change-write-grants"],

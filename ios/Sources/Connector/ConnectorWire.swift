@@ -168,6 +168,7 @@ struct ConnectorResponse: Sendable {
     var statusText: String {
         switch status {
         case 200: return "OK"
+        case 202: return "Accepted"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
         case 403: return "Forbidden"

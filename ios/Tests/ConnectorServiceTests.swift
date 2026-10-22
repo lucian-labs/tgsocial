@@ -52,6 +52,75 @@ final class ConnectorServiceTests: XCTestCase {
         XCTAssertEqual(mode?.intValue, 0o700)
     }
 
+    @MainActor
+    func testUploadChunksRetriesChecksumAndReceipts() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let local = LocalStore(); let key = UUID().uuidString
+        let uploads = try ConnectorUploadStore(store: local, directory: directory, key: key)
+        let spec = try ConnectorUploadSpec(feed: "@waveloop_devlog", kind: "document", filename: "sample.txt", bytes: 5,
+            sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", caption: "").validated(maxBytes: 100)
+        let id = "upload-test-123"
+        _ = try uploads.create(id: id, spec: spec)
+        let part = Data("hel".utf8)
+        XCTAssertEqual(try uploads.append(id: id, offset: 0, data: part).receivedBytes, 3)
+        XCTAssertEqual(try uploads.append(id: id, offset: 0, data: part).receivedBytes, 3)
+        XCTAssertThrowsError(try uploads.append(id: id, offset: 0, data: Data("bad".utf8)))
+        XCTAssertThrowsError(try uploads.append(id: id, offset: 4, data: Data("o".utf8)))
+        _ = try uploads.append(id: id, offset: 3, data: Data("lo".utf8))
+        var verified = try await uploads.verify(id: id)
+        verified.state = "queued"; try uploads.save(verified)
+        let reopened = try ConnectorUploadStore(store: local, directory: directory, key: key)
+        XCTAssertEqual(try reopened.job(id).state, "uncertain")
+        XCTAssertEqual(try reopened.create(id: id, spec: spec).state, "uncertain")
+        XCTAssertThrowsError(try reopened.append(id: id, offset: 0, data: part))
+        var changed = spec; changed.caption = "different"
+        XCTAssertThrowsError(try reopened.create(id: id, spec: changed))
+        verified.state = "sent"; verified.postURL = "https://t.me/waveloop_devlog/99"
+        try reopened.save(verified)
+        let again = try ConnectorUploadStore(store: local, directory: directory, key: key)
+        XCTAssertEqual(try again.create(id: id, spec: spec).postURL, verified.postURL)
+    }
+
+    @MainActor
+    func testUploadMismatchExpiryAndInvalidPaths() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let uploads = try ConnectorUploadStore(store: LocalStore(), directory: directory, key: UUID().uuidString)
+        var spec = ConnectorUploadSpec(feed: "waveloop_devlog", kind: "document", filename: "sample.txt", bytes: 5,
+            sha256: String(repeating: "0", count: 64), caption: "")
+        XCTAssertFalse(ConnectorUploadStore.validID("../escape"))
+        spec.filename = "../escape"
+        XCTAssertThrowsError(try spec.validated(maxBytes: 100))
+        spec.filename = "sample.txt"
+        let id = "upload-mismatch"
+        _ = try uploads.create(id: id, spec: spec)
+        _ = try uploads.append(id: id, offset: 0, data: Data("hello".utf8))
+        do { _ = try await uploads.verify(id: id); XCTFail("bad hash accepted") } catch {}
+        XCTAssertEqual(try uploads.job(id).state, "failed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: uploads.url(try uploads.job(id)).path))
+        let next = try uploads.create(id: "upload-expired", spec: spec)
+        try uploads.expire(at: next.createdAt.addingTimeInterval(901))
+        XCTAssertEqual(try uploads.job(next.id).state, "failed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: uploads.url(next).path))
+    }
+
+    @MainActor
+    func testDemoRestoreDoesNotCreateUploadLedger() async {
+        let store = LocalStore()
+        let before = store.load([String: ConnectorUploadJob].self, "connector-upload-receipts")?.count
+        let model = AppModel()
+        model.enterDemo()
+        await model.connector.restore()
+        XCTAssertEqual(store.load([String: ConnectorUploadJob].self, "connector-upload-receipts")?.count, before)
+    }
+
+    func testPublicMediaPostingRequiresCreatorOrPostingAdministrator() {
+        XCTAssertTrue(ConnectorService.canPostMedia(.chatMemberStatusCreator(ChatMemberStatusCreator(isAnonymous: false, isMember: true))))
+        XCTAssertFalse(ConnectorService.canPostMedia(.chatMemberStatusLeft))
+        XCTAssertFalse(ConnectorService.canPostMedia(.chatMemberStatusCreator(ChatMemberStatusCreator(isAnonymous: false, isMember: false))))
+    }
+
     private func scopedSource(_ username: String) throws -> ScopedSource {
         var inputs = ScopeInputs()
         inputs.custom = [username]

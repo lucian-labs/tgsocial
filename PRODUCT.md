@@ -1032,6 +1032,9 @@ sign-in are `CONNECTOR.md`'s to say, not the screen's (§3).
 The authenticated agent can discover its supported actions, search public channel
 names, inspect connection state, refresh the feed, manage public source access,
 and query or perform granted writes without opening any screen (CONNECTOR §9).
+Media posting uses the existing Post grant, checks current Telegram channel posting
+rights, stages bytes temporarily, and reports success only after Telegram's final
+acknowledgment. Persistent request receipts prevent duplicate sends (CONNECTOR §10).
 
 Behaviour:
 

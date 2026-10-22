@@ -750,6 +750,9 @@ final class AppModel {
     /// a client to send them (`mayStartTDLib`).
     func handle(_ update: Update) {
         sends.handle(update)
+        #if targetEnvironment(macCatalyst)
+        connector.handleUploadUpdate(update)
+        #endif
         switch update {
         case .updateAuthorizationState(let u):
             apply(authState: u.authorizationState)

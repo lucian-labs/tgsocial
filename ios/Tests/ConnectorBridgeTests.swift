@@ -123,6 +123,10 @@ final class StubConnectorReader: ConnectorReader {
         ["downloadedBytes": 8, "expectedBytes": 8, "active": false, "complete": true]
     }
 
+    func uploadFeed(_ id: String) throws -> String { "waveloop_devlog" }
+    func upload(_ request: ConnectorRequest, source: ScopedSource) async throws -> ConnectorResponse {
+        .json(200, ["requestId": request.segments[1]])
+    }
     func writePost(to source: ScopedSource, text: String) async throws -> Post {
         wroteText = text
         return ConnectorFixture.post(feed: source.username, node: inputs.myNode, text: text)
@@ -785,6 +789,23 @@ final class ConnectorBridgeTests: XCTestCase {
             XCTAssertEqual(reader.refreshCount, 1)
             XCTAssertEqual(reader.writes, .none)
         }
+    }
+
+    func testUploadRoutesRequirePostGrantScopeAndAuthentication() async throws {
+        let id = "upload-router-test"
+        let spec = #"{"feed":"waveloop_devlog","kind":"document","filename":"test.txt","bytes":5,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","caption":""}"#
+        let denied = try await send("POST", "/uploads/\(id)", token: stubConnectorToken, body: spec)
+        XCTAssertEqual(denied.status, 403)
+        let unauthenticated = try await send("GET", "/uploads/\(id)", token: nil)
+        XCTAssertEqual(unauthenticated.status, 401)
+        await MainActor.run { reader.writes.post = true }
+        let allowed = try await send("POST", "/uploads/\(id)", token: stubConnectorToken, body: spec)
+        XCTAssertEqual(allowed.status, 200)
+        let outside = spec.replacingOccurrences(of: "waveloop_devlog", with: "stranger_feed")
+        let refused = try await send("POST", "/uploads/\(id)", token: stubConnectorToken, body: outside)
+        XCTAssertEqual(refused.status, 403)
+        let invalid = try await get("/uploads/a")
+        XCTAssertEqual(invalid.status, 404)
     }
 
     func testTheRemainingReadEndpointsAnswer() async throws {
