@@ -32,8 +32,11 @@ struct ConnectorSettings: Codable, Equatable {
 
 @MainActor @Observable
 final class ConnectorService: ConnectorReader {
-    /// §5: "a file above `maxMediaBytes` (default 25 MB) is refused with `413`".
-    static let maxMediaBytes: Int64 = 25 * 1024 * 1024
+    /// Local process configuration, bounded even if the environment is misconfigured.
+    static let maxMediaBytes: Int64 = {
+        let configured = ProcessInfo.processInfo.environment["TGSOCIAL_CONNECTOR_MAX_MEDIA_BYTES"].flatMap(Int64.init)
+        return min(max(configured ?? (1 << 30), 1), 2 << 30)
+    }()
     static let storeKey = "connector"
     /// How far `findPost` will page a channel looking for a post that is not in the window.
     static let lookupRounds = 6
@@ -462,24 +465,47 @@ final class ConnectorService: ConnectorReader {
         return hit
     }
 
-    func mediaBytes(post: Post, index: Int, maxBytes: Int64) async throws -> (data: Data, contentType: String) {
+    func mediaStatus(post: Post, index: Int) async throws -> [String: Any] {
+        guard index >= 0, index < post.media.count, let id = Self.file(for: post.media[index]).fileId else {
+            throw ConnectorError.notFound("media")
+        }
+        let file = try await model.td.api.getFile(fileId: id)
+        return ["downloadedBytes": file.local.downloadedSize, "expectedBytes": file.size > 0 ? file.size : file.expectedSize,
+                "active": file.local.isDownloadingActive, "complete": file.local.isDownloadingCompleted,
+                "maxBytes": maxMediaBytes]
+    }
+
+    func mediaResponse(post: Post, index: Int, maxBytes: Int64) async throws -> ConnectorResponse {
         guard index >= 0, index < post.media.count else { throw ConnectorError.notFound("media index \(index)") }
         let (fileId, declared, contentType) = Self.file(for: post.media[index])
-        guard let fileId else { throw ConnectorError.notFound("media index \(index) has no file") }
-        // A declared size over budget is refused before a byte is downloaded — §5's cap is there
-        // to keep megabytes out of tool calls, and downloading first would defeat it.
-        if declared > 0, declared > maxBytes { throw ConnectorError.tooLarge(bytes: declared, maxBytes: maxBytes) }
-        guard let path = await model.media.download(fileId, priority: MediaLoader.tappedPriority,
-                                                    label: "Connector downloading media") else {
-            throw ConnectorError.telegram(code: 500, message: "The download didn't finish.")
+        guard let fileId else { throw ConnectorError.notFound("media has no file") }
+        if declared > maxBytes { throw ConnectorError.tooLarge(bytes: declared, maxBytes: maxBytes) }
+        var file = try await model.td.api.getFile(fileId: fileId)
+        let expected = max(declared, Int64(file.size))
+        if expected > maxBytes { throw ConnectorError.tooLarge(bytes: expected, maxBytes: maxBytes) }
+        if !file.local.isDownloadingCompleted {
+            // Request at most budget + 1; never begin an unlimited unknown-size download.
+            file = try await model.td.api.downloadFile(fileId: fileId, limit: maxBytes + 1,
+                offset: 0, priority: MediaLoader.tappedPriority, synchronous: false)
         }
-        let url = URL(fileURLWithPath: path)
-        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)??.int64Value ?? 0
-        if size > maxBytes { throw ConnectorError.tooLarge(bytes: size, maxBytes: maxBytes) }
-        guard let data = try? Data(contentsOf: url) else {
-            throw ConnectorError.telegram(code: 500, message: "The file couldn't be read.")
+        let deadline = Date().addingTimeInterval(10 * 60)
+        while !file.local.isDownloadingCompleted {
+            try Task.checkCancellation()
+            if Int64(file.local.downloadedSize) > maxBytes {
+                throw ConnectorError.tooLarge(bytes: Int64(file.local.downloadedSize), maxBytes: maxBytes)
+            }
+            guard Date() < deadline else { throw ConnectorError.telegram(code: 504, message: "Media download timed out. Retry to use the cached progress.") }
+            guard file.local.isDownloadingActive else { throw ConnectorError.telegram(code: 502, message: "Media download stopped. Retry.") }
+            try await Task.sleep(for: .milliseconds(500))
+            file = try await model.td.api.getFile(fileId: fileId)
         }
-        return (data, contentType)
+        try Task.checkCancellation()
+        do {
+            let opened = try ConnectorFileBody(url: URL(fileURLWithPath: file.local.path), maxBytes: maxBytes,
+                                              expectedBytes: max(expected, Int64(file.size)))
+            return .file(opened, contentType: contentType)
+        } catch let error as ConnectorError { throw error }
+        catch { throw ConnectorError.telegram(code: 500, message: "The cached file could not be opened. Retry the download.") }
     }
 
     /// The file behind one media item, its declared size, and what to serve it as.

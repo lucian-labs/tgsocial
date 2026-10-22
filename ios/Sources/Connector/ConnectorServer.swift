@@ -29,6 +29,8 @@ final class ConnectorServer: @unchecked Sendable {
 
     /// A connection that has said nothing for this long is not a client of this bridge.
     static let readTimeout: TimeInterval = 15
+    static let transferTimeout: TimeInterval = 15 * 60
+    static let fileChunkBytes = 256 * 1024
 
     private let queue = DispatchQueue(label: "ca.lucianlabs.tgsocial.connector", qos: .userInitiated)
     private let handler: ConnectorHandler
@@ -165,12 +167,38 @@ final class ConnectorServer: @unchecked Sendable {
             self.send(response, on: connection)
         }
         lock.withLock { tasks[id] = task }
+        // Keep receiving to notice a client disconnect while Telegram is downloading.
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, _, _ in
+            self?.close(connection)
+        }
+        queue.asyncAfter(deadline: .now() + Self.transferTimeout) { [weak self, weak connection] in
+            guard let connection else { return }
+            self?.close(connection)
+        }
     }
 
     private func send(_ response: ConnectorResponse, on connection: NWConnection) {
-        connection.send(content: response.serialised(), completion: .contentProcessed { [weak self] _ in
-            self?.close(connection)
+        connection.send(content: response.serialised(), completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
+            guard error == nil, let file = response.file else { self.close(connection); return }
+            self.sendFile(file, remaining: file.size, on: connection)
         })
+    }
+
+    private func sendFile(_ file: ConnectorFileBody, remaining: Int64, on connection: NWConnection) {
+        guard remaining > 0,
+              lock.withLock({ connections[ObjectIdentifier(connection)] != nil }) else {
+            close(connection); return
+        }
+        do {
+            let chunk = try file.read(upToCount: Int(min(Int64(Self.fileChunkBytes), remaining)))
+            guard !chunk.isEmpty else { close(connection); return } // truncated files fail Content-Length validation
+            connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
+                guard let self else { return }
+                guard error == nil else { self.close(connection); return }
+                self.sendFile(file, remaining: remaining - Int64(chunk.count), on: connection)
+            })
+        } catch { close(connection) }
     }
 
     private func close(_ connection: NWConnection) {

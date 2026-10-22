@@ -41,6 +41,8 @@ final class StubConnectorReader: ConnectorReader {
         ConnectorFixture.post(feed: "private_person", title: "Not in scope", node: nil,
                               messageId: 7 << 20, chatId: -100_9, text: "secret"),
     ]
+    var revokeMediaScope = false
+    var mediaLength = 8
     private(set) var wroteText: String?
 
     var policy: ConnectorPolicy { ConnectorPolicy(token: token, preset: preset, writes: writes) }
@@ -110,8 +112,15 @@ final class StubConnectorReader: ConnectorReader {
         return hit
     }
 
-    func mediaBytes(post: Post, index: Int, maxBytes: Int64) async throws -> (data: Data, contentType: String) {
-        (Data(repeating: 0x2A, count: 8), "image/jpeg")
+    func mediaResponse(post: Post, index: Int, maxBytes: Int64) async throws -> ConnectorResponse {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0x2A, count: mediaLength).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        if revokeMediaScope { preset = .custom; inputs.custom = [] }
+        return .file(try ConnectorFileBody(url: url, maxBytes: maxBytes, expectedBytes: Int64(mediaLength)), contentType: "image/jpeg")
+    }
+    func mediaStatus(post: Post, index: Int) async throws -> [String: Any] {
+        ["downloadedBytes": 8, "expectedBytes": 8, "active": false, "complete": true]
     }
 
     func writePost(to source: ScopedSource, text: String) async throws -> Post {
@@ -810,6 +819,43 @@ final class ConnectorBridgeTests: XCTestCase {
         XCTAssertEqual(bytes.status, 200)
         XCTAssertEqual(bytes.headers["content-type"], "image/jpeg")
         XCTAssertEqual(bytes.headers["content-length"], "8")
+    }
+
+    func testFileTransferCrossesChunkBoundariesAndReportsProgress() async throws {
+        let count = ConnectorServer.fileChunkBytes * 3 + 17
+        let post = await MainActor.run {
+            reader.mediaLength = count
+            reader.window[0].media = [ConnectorFixture.photo()]
+            return reader.window[0]
+        }
+        let response = try await get("/media/\(post.id)/0")
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual(response.headers["content-length"], String(count))
+        XCTAssertEqual(response.body, String(repeating: "*", count: count))
+        let progress = try await get("/media/\(post.id)/0/status")
+        XCTAssertEqual(progress.json?["complete"] as? Bool, true)
+        let refused = try await send("GET", "/media/\(post.id)/0/status", token: nil)
+        XCTAssertEqual(refused.status, 401)
+    }
+
+    func testMediaScopeRevokedDuringPreparationIsRechecked() async throws {
+        let post = await MainActor.run {
+            reader.revokeMediaScope = true
+            reader.window[0].media = [ConnectorFixture.photo()]
+            return reader.window[0]
+        }
+        let response = try await get("/media/\(post.id)/0")
+        XCTAssertEqual(response.status, 403)
+    }
+
+    func testFileSizeChecksRejectOversizedOrIncompleteCache() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(repeating: 42, count: 9).write(to: url)
+        XCTAssertThrowsError(try ConnectorFileBody(url: url, maxBytes: 8)) { error in
+            XCTAssertEqual(error as? ConnectorError, .tooLarge(bytes: 9, maxBytes: 8))
+        }
+        XCTAssertThrowsError(try ConnectorFileBody(url: url, maxBytes: 20, expectedBytes: 10))
     }
 
     func testMediaForAnOutOfScopePostIsRefused() async throws {

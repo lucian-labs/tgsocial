@@ -120,10 +120,28 @@ struct ConnectorRequest: Sendable, Equatable {
     }
 }
 
+/// An opened cache file, never a public path. One bounded read follows each socket send.
+final class ConnectorFileBody: @unchecked Sendable {
+    let size: Int64
+    private let handle: FileHandle
+    init(url: URL, maxBytes: Int64, expectedBytes: Int64 = 0) throws {
+        handle = try FileHandle(forReadingFrom: url)
+        size = Int64(try handle.seekToEnd())
+        try handle.seek(toOffset: 0)
+        guard size <= maxBytes else { throw ConnectorError.tooLarge(bytes: size, maxBytes: maxBytes) }
+        guard size > 0, expectedBytes == 0 || size == expectedBytes else {
+            throw ConnectorError.telegram(code: 500, message: "Downloaded file size does not match Telegram.")
+        }
+    }
+    func read(upToCount count: Int) throws -> Data { try handle.read(upToCount: count) ?? Data() }
+    deinit { try? handle.close() }
+}
+
 struct ConnectorResponse: Sendable {
     var status: Int
     var headers: [String: String]
     var body: Data
+    var file: ConnectorFileBody? = nil
 
     static func json(_ status: Int, _ object: Any) -> ConnectorResponse {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed]))
@@ -137,6 +155,11 @@ struct ConnectorResponse: Sendable {
 
     static func bytes(_ data: Data, contentType: String) -> ConnectorResponse {
         ConnectorResponse(status: 200, headers: ["Content-Type": contentType], body: data)
+    }
+
+    static func file(_ file: ConnectorFileBody, contentType: String) -> ConnectorResponse {
+        let safeType = ConnectorHTTP.hasControlCharacters(contentType) ? "application/octet-stream" : contentType
+        return ConnectorResponse(status: 200, headers: ["Content-Type": safeType], body: Data(), file: file)
     }
 
     var statusText: String {
@@ -161,7 +184,7 @@ struct ConnectorResponse: Sendable {
     func serialised() -> Data {
         var head = "HTTP/1.1 \(status) \(statusText)\r\n"
         var all = headers
-        all["Content-Length"] = String(body.count)
+        all["Content-Length"] = file.map { String($0.size) } ?? String(body.count)
         all["Connection"] = "close"
         // The bridge is not a browser target, but a stray page that guessed the port should never
         // be able to read a response out of it.

@@ -206,9 +206,33 @@ dimensions) so an assistant can reason about a post without pulling megabytes
 through a tool call. To actually fetch bytes:
 
 `GET /media/{postId}/{index}` — downloads via TDLib and returns the file with
-its real content type. Bounded by the same byte budget the app uses; a file
-above `maxMediaBytes` (default 25 MB) is refused with `413`. Downloads are
-audited like everything else.
+its real content type and exact `Content-Length`. Delivery is file-backed:
+one 256 KiB chunk at a time, with socket backpressure; the bridge never loads
+the entire video into RAM. `maxMediaBytes` defaults to 1 GiB. Set the local app
+process environment `TGSOCIAL_CONNECTOR_MAX_MEDIA_BYTES` and restart to change
+it (clamped to 1 byte–2 GiB). `/capabilities.limits.mediaBytes` reports the
+actual cap. Known oversized files fail `413` before download; requests to
+TDLib are bounded to cap + 1 bytes, with size checks before and after download.
+Completed cache size must match Telegram's declared size when available.
+
+`GET /media/{postId}/{index}/status` returns `downloadedBytes`, `expectedBytes`,
+`active`, `complete`, `maxBytes`. It is authenticated and applies the same scope
+and safety checks; it does not start a download or expose a local path.
+
+The media request waits up to 10 minutes for Telegram, then streams the file.
+Clients should allow that first-byte delay, poll status from another connection,
+stream into a private file, and validate the received count against Content-Length.
+The whole connection has a 15-minute deadline. Disconnecting cancels the bridge
+request/delivery; disabling the bridge, rotating its token or signing out drops
+all active sockets. A shared TDLib cache download can continue after a client
+disconnects so app playback is not cancelled. Retrying reuses that private cache.
+No HTTP Range/resume or cryptographic digest is provided yet. On a truncated
+transfer clients must discard their partial output or retry. Cache files remain
+inside the existing app/TDLib storage, with no additional shared export copy.
+
+Downloads are audited as `prepared-bytes` when the validated file is ready;
+this does not assert that the client received every byte. Scope and safety are
+rechecked after the potentially long download before any file headers are sent.
 
 Transcription, OCR and any other interpretation are the assistant's job, not
 the bridge's.

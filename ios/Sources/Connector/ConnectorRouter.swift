@@ -82,7 +82,8 @@ protocol ConnectorReader: AnyObject {
     func threadComments(for post: Post) -> [Comment]
     func findPost(_ source: ScopedSource, serverMessageId: Int64) async throws -> Post
     func findPost(id: String) async throws -> Post
-    func mediaBytes(post: Post, index: Int, maxBytes: Int64) async throws -> (data: Data, contentType: String)
+    func mediaResponse(post: Post, index: Int, maxBytes: Int64) async throws -> ConnectorResponse
+    func mediaStatus(post: Post, index: Int) async throws -> [String: Any]
 
     func writePost(to source: ScopedSource, text: String) async throws -> Post
     func writeComment(target: String, text: String) async throws -> Comment
@@ -192,7 +193,7 @@ final class ConnectorRouter {
         }
         switch (request.method, segments.first ?? "") {
         case ("GET", "capabilities"):
-            return (.json(200, capabilities(policy: policy)), "actions=20")
+            return (.json(200, capabilities(policy: policy)), "actions=21")
         case ("GET", "connections"):
             return (.json(200, reader.connections()), "connection-status")
         case ("GET", "channels"):
@@ -246,10 +247,10 @@ final class ConnectorRouter {
             return try await thread(scope: scope, safety: safety, username: segments[1], serverMessageId: messageId)
 
         case ("GET", "media"):
-            guard segments.count == 3, let index = Int(segments[2]) else {
+            guard (segments.count == 3 || (segments.count == 4 && segments[3] == "status")), let index = Int(segments[2]) else {
                 throw ConnectorError.notFound(request.path)
             }
-            return try await media(scope: scope, safety: safety, postId: segments[1], index: index)
+            return try await media(scope: scope, safety: safety, postId: segments[1], index: index, statusOnly: segments.count == 4)
 
         case ("POST", "post"): return try await writePost(request, scope: scope, policy: policy)
         case ("POST", "comment"): return try await writeComment(request, scope: scope, policy: policy)
@@ -289,6 +290,7 @@ final class ConnectorRouter {
             ("GET", "/thread/{username}/{id}", "scoped-read", []),
             ("GET", "/search", "scoped-read", ["q", "limit"]),
             ("GET", "/media/{postId}/{index}", "scoped-read", []),
+            ("GET", "/media/{postId}/{index}/status", "scoped-read", []),
             ("GET", "/audit", "inspect", ["limit"]),
             ("POST", "/post", "post", ["feed", "text"]),
             ("POST", "/comment", "comment", ["target", "text"]),
@@ -296,6 +298,7 @@ final class ConnectorRouter {
         ]
         return ["version": 1, "transport": "loopback-http", "uiRequiredForRequests": false,
                 "requiresRunningApp": true,
+                "mediaTransfer": ["fileBacked": true, "chunkBytes": ConnectorServer.fileChunkBytes, "timeoutSeconds": Int(ConnectorServer.transferTimeout), "rangeSupported": false],
                 "actions": routes.map { method, path, permission, fields -> [String: Any] in
                     ["method": method, "path": path, "permission": permission,
                      "parameterLocation": method == "GET" ? "query" : "body", "fields": fields]
@@ -513,14 +516,20 @@ final class ConnectorRouter {
     }
 
     private func media(scope: ScopeResolution, safety: SafetyLists, postId: String,
-                       index: Int) async throws -> (ConnectorResponse, String) {
+                       index: Int, statusOnly: Bool) async throws -> (ConnectorResponse, String) {
         let post = try await reader.findPost(id: postId)
         _ = try scope.admit(post.sourceUsername)
         // Hidden means hidden: the bytes of a reported post are the post (PRODUCT §2.18).
         guard safety.allows(post: post, inMainFeed: false) else { throw ConnectorError.notFound("post \(postId)") }
         guard index >= 0, index < post.media.count else { throw ConnectorError.notFound("media index \(index)") }
-        let (data, contentType) = try await reader.mediaBytes(post: post, index: index, maxBytes: reader.maxMediaBytes)
-        return (.bytes(data, contentType: contentType), "bytes=\(data.count)")
+        if statusOnly { return (.json(200, try await reader.mediaStatus(post: post, index: index)), "download-status") }
+        let response = try await reader.mediaResponse(post: post, index: index, maxBytes: reader.maxMediaBytes)
+        try Task.checkCancellation()
+        // A long download must not retain permission removed while it was waiting.
+        guard reader.isSignedIn else { throw ConnectorError.signedOut }
+        _ = try ScopeResolver.resolve(preset: reader.policy.preset, inputs: reader.scopeInputs()).admit(post.sourceUsername)
+        guard reader.safety.allows(post: post, inMainFeed: false) else { throw ConnectorError.notFound("post") }
+        return (response, "prepared-bytes=\(response.file?.size ?? Int64(response.body.count))")
     }
 
     // MARK: Writes (§4 — each refused unless its switch is on)
