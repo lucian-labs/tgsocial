@@ -67,7 +67,7 @@ struct ConnectorScreen: View {
     private var connectorBody: some View {
         Screen {
             HPSectionMark("Connector")
-            HPMuted("Let an assistant read your feeds.")
+            HPMuted("Control tgsocial from a local agent.")
                 .padding(.bottom, HPTokens.Space.cardGap)
 
             bridgeCard

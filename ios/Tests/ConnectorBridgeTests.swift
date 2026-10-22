@@ -51,6 +51,14 @@ final class StubConnectorReader: ConnectorReader {
     var appLabel: String { "1.0.0 (202608240210)" }
     var maxMediaBytes: Int64 { 25 * 1024 * 1024 }
 
+    var discoveryQueries: [String] = []
+    var refreshCount = 0
+    func connections() -> [String: Any] { ["telegram": ["signedIn": isSignedIn]] }
+    func discoverChannels(_ query: String) async throws -> [[String: String]] {
+        discoveryQueries.append(query)
+        return [["title": "Public channel", "username": "public_channel"]]
+    }
+    func refreshApp() async -> [String: Any] { refreshCount += 1; return connections() }
     func scopeInputs() -> ScopeInputs { inputs }
     func updateScope(add: [String], remove: [String]) async throws -> ScopeResolution {
         let current = ScopeResolver.resolve(preset: preset, inputs: inputs)
@@ -745,6 +753,30 @@ final class ConnectorBridgeTests: XCTestCase {
     }
 
     // MARK: 6 — shape of the rest of §4
+
+    func testControlDiscoveryAndRefreshRequireAuthentication() async throws {
+        for (method, path) in [("GET", "/capabilities"), ("GET", "/connections"),
+                               ("GET", "/channels?q=Captain"), ("POST", "/refresh")] {
+            let response = try await send(method, path, token: nil)
+            XCTAssertEqual(response.status, 401)
+        }
+        let capabilities = try await get("/capabilities")
+        let actions = try XCTUnwrap(capabilities.json?["actions"] as? [[String: Any]])
+        XCTAssertTrue(actions.contains { $0["path"] as? String == "/history/{username}" })
+        XCTAssertEqual(capabilities.json?["uiRequiredForRequests"] as? Bool, false)
+        let channels = try await get("/channels?q=Captain")
+        XCTAssertEqual(channels.status, 200)
+        XCTAssertEqual((channels.json?["channels"] as? [[String: String]])?.first?["username"], "public_channel")
+        let invalid = try await get("/channels")
+        XCTAssertEqual(invalid.status, 400)
+        let refreshed = try await send("POST", "/refresh", token: stubConnectorToken)
+        XCTAssertEqual(refreshed.status, 200)
+        await MainActor.run {
+            XCTAssertEqual(reader.discoveryQueries, ["Captain"])
+            XCTAssertEqual(reader.refreshCount, 1)
+            XCTAssertEqual(reader.writes, .none)
+        }
+    }
 
     func testTheRemainingReadEndpointsAnswer() async throws {
         let feeds = try await get("/feeds")

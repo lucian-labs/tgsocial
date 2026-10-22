@@ -259,3 +259,31 @@ assistant can tell the difference between "not allowed" and "broken".
   security model than a bearer token on loopback.
 - Not a second session to maintain: it is the Mac app's own TDLib client, so
   signing out of Telegram revokes the connector too — with or without Bluesky.
+
+## 9. Headless agent control
+
+After the owner enables Connector, all supported requests work while the window
+is hidden. The app must remain running in the Mac login session. Read the local
+handshake file for its current port and bearer token; do not hard-code either.
+
+- `GET /capabilities`: machine-readable methods, paths, fields, permission names,
+  current write grants, limits and unsupported operations. All routes require bearer auth.
+- `GET /connections`: Telegram sign-in/transport state, Bluesky sign-in status
+  (Bluesky data is not exposed), app offline state and feed refresh state.
+- `GET /channels?q=Captain`: search the signed-in account's locally known channels
+  by title. Required nonblank query, at most 200 characters. Returns
+  `{channels:[{title,username}],limit:100}`. Only public channels appear;
+  private titles/IDs are excluded. This is discovery metadata, not message access.
+  Use `PATCH /scope` to connect a result, then `/history/{username}` to query it.
+- `POST /refresh`: requests the app's feed refresh and returns the same state as
+  `/connections`. Inspect `refresh.inProgress`, `refresh.stale`, and
+  `refresh.lastCompletedAt` (ISO-8601 or null): a queued or offline refresh is not
+  a completed network sync. Poll `/connections` if still in progress.
+
+`/status`, `/capabilities` and `/connections` can answer during a transient
+signed-out state if the listener still exists. Other operations require sign-in.
+Account authentication, account sign-out and changing write grants are not agent
+API operations. Sign-out revokes the connector; the agent cannot grant itself
+Telegram posting permissions. Existing `/post`, `/comment` and `/card` actions
+work headlessly with their respective enabled grants. Public source additions
+and removals preserve other sources and all write grants.

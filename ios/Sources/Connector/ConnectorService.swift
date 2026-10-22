@@ -378,7 +378,29 @@ final class ConnectorService: ConnectorReader {
         let username: String?
     }
 
-    /// Owner-only discovery for the local screen. Never exposed by a bridge endpoint.
+    func connections() -> [String: Any] {
+        ["telegram": ["signedIn": isSignedIn, "state": model.connectionLabel],
+         "bluesky": ["signedIn": model.bluesky.isSignedIn, "connectorSupported": false],
+         "app": ["running": true, "offline": model.isOffline],
+         "refresh": ["inProgress": model.feedLoading, "stale": model.feedStale,
+                     "lastCompletedAt": ConnectorJSON.optional(model.lastFeedRefresh.map { ConnectorJSON.string(from: $0) })]]
+    }
+
+    func discoverChannels(_ query: String) async throws -> [[String: String]] {
+        try await findChannels(query).compactMap { choice in
+            guard let username = choice.username, let normalized = Username.normalise(username) else { return nil }
+            return ["title": choice.title, "username": normalized]
+        }
+    }
+
+    func refreshApp() async -> [String: Any] {
+        await model.refreshFeed()
+        // Refresh may be queued behind an existing pass or return cached data offline.
+        // These observed fields avoid promising a network sync that did not happen.
+        return connections()
+    }
+
+    /// Local channel search; the agent endpoint only returns rows with public usernames.
     func findChannels(_ query: String) async throws -> [ChannelChoice] {
         guard !model.isDemo else { return [] }
         let ids = try await model.td.api.searchChats(limit: 100, query: query, typeFilter: .searchChatTypeFilterChannel).chatIds

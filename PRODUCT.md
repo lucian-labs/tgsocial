@@ -994,7 +994,7 @@ screen includes: `Closing the window keeps the bridge running. Quit tgsocial to 
 
 ```
 CONNECTOR                                     (section mark)
-Let an assistant read your feeds.             (muted)
+Control tgsocial from a local agent.             (muted)
 
 Bridge              [ toggle ]  Off           (list rows)
 Port                8477                      (mono; editable when off)
@@ -1019,10 +1019,14 @@ ACTIVITY
 ( Clear Activity )                            (btn ghost sm)
 ```
 
-`Let an assistant read your feeds.` is the screen's one helper line: without
+`Control tgsocial from a local agent.` is the screen's one helper line: without
 it, `Bridge` names nothing a person recognises. What each preset exposes, that
 writes are off by default, and that an assistant never sees the Telegram
 sign-in are `CONNECTOR.md`'s to say, not the screen's (§3).
+
+The authenticated agent can discover its supported actions, search public channel
+names, inspect connection state, refresh the feed, manage public source access,
+and query or perform granted writes without opening any screen (CONNECTOR §9).
 
 Behaviour:
 
@@ -3290,7 +3294,7 @@ be right. Four rules, for every build:
 
 1. **At most one short helper line per screen**, and only where a person would
    otherwise be stuck (`Finish in your browser.` on §2.35's waiting state; the
-   Connector's `Let an assistant read your feeds.`; the vouch sheet's
+   Connector's `Control tgsocial from a local agent.`; the vouch sheet's
    `You can't remove a vouch someone wrote. Report it or block them.`; §2.41's
    `Sign in to Telegram to find nodes.`).
 2. **Empty states are a short label** (`No members yet.`, `Nothing here yet.`),

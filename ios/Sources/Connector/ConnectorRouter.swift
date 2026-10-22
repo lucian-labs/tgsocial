@@ -44,9 +44,8 @@ struct ConnectorPolicy {
     var writes: ConnectorWrites
 }
 
-/// Everything the router can ask the app for. Note what is *not* here: there is no
-/// "read chat by id", no "list my chats", no "search Telegram". The bridge's vocabulary is the
-/// vocabulary of §4, and a chat that is not a feed, a node or a comments channel has no verb.
+/// App control and scoped content operations. Discovery returns public channel metadata
+/// only; private chats and arbitrary TDLib calls have no route.
 @MainActor
 protocol ConnectorReader: AnyObject {
     var policy: ConnectorPolicy { get }
@@ -57,6 +56,10 @@ protocol ConnectorReader: AnyObject {
     var tdlibVersion: String { get }
     var appLabel: String { get }
     var maxMediaBytes: Int64 { get }
+
+    func connections() -> [String: Any]
+    func discoverChannels(_ query: String) async throws -> [[String: String]]
+    func refreshApp() async -> [String: Any]
 
     func scopeInputs() -> ScopeInputs
     func updateScope(add: [String], remove: [String]) async throws -> ScopeResolution
@@ -113,9 +116,8 @@ final class ConnectorRouter {
             return refuse(request, decision: "auth=bearer", error: .unauthorized, detail: "")
         }
 
-        // 2. Signed in. `/status` still answers, because "is it signed in" is the one question
-        //    worth answering when it is not (§7: tools report it as a plain, actionable message).
-        let isStatus = request.path == "/status"
+        // 2. Status and capability discovery still answer during a transient signed-out state.
+        let isStatus = ["/status", "/capabilities", "/connections"].contains(request.path)
         guard reader.isSignedIn || isStatus else {
             return refuse(request, decision: "auth=ok", error: .signedOut, detail: "")
         }
@@ -189,6 +191,19 @@ final class ConnectorRouter {
             throw ConnectorError.notFound(request.path)
         }
         switch (request.method, segments.first ?? "") {
+        case ("GET", "capabilities"):
+            return (.json(200, capabilities(policy: policy)), "actions=20")
+        case ("GET", "connections"):
+            return (.json(200, reader.connections()), "connection-status")
+        case ("GET", "channels"):
+            let query = (request.query["q"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty, query.count <= 200 else {
+                throw ConnectorError.badRequest("q must contain 1 to 200 characters")
+            }
+            let channels = try await reader.discoverChannels(query)
+            return (.json(200, ["channels": channels, "limit": 100]), "channels=\(channels.count)")
+        case ("POST", "refresh"):
+            return (.json(200, await reader.refreshApp()), "refresh-requested")
         case ("GET", "status"): return status(scope: scope, policy: policy)
         case ("GET", "scope"): return (.json(200, ConnectorBodies.scope(scope)), "sources=\(scope.count)")
         case ("PATCH", "scope"):
@@ -250,11 +265,45 @@ final class ConnectorRouter {
         }
     }
 
-    private static let nouns: Set<String> = ["status", "scope", "feed", "feeds", "node", "graph",
+    private static let nouns: Set<String> = ["capabilities", "connections", "channels", "refresh", "history", "status", "scope", "feed", "feeds", "node", "graph",
                                              "thread", "search", "audit", "media", "post", "comment", "card"]
     /// Everything except `/feed/{username}`, `/node/{username}`, `/thread/…` and `/media/…`.
-    private static let leafNouns: Set<String> = ["status", "scope", "feeds", "graph", "search",
+    private static let leafNouns: Set<String> = ["capabilities", "connections", "channels", "refresh", "status", "scope", "feeds", "graph", "search",
                                                 "audit", "post", "comment", "card"]
+
+    private func capabilities(policy: ConnectorPolicy) -> [String: Any] {
+        let routes: [(String, String, String, [String])] = [
+            ("GET", "/capabilities", "inspect", []),
+            ("GET", "/status", "inspect", []),
+            ("GET", "/connections", "inspect", []),
+            ("GET", "/channels", "discover-public-channels", ["q"]),
+            ("GET", "/scope", "inspect", []),
+            ("PATCH", "/scope", "manage-public-sources", ["add", "remove"]),
+            ("POST", "/refresh", "refresh", []),
+            ("GET", "/feeds", "scoped-read", []),
+            ("GET", "/feed", "scoped-read", ["limit", "before"]),
+            ("GET", "/feed/{username}", "scoped-read", ["limit", "before"]),
+            ("GET", "/history/{username}", "scoped-read", ["limit", "cursor"]),
+            ("GET", "/node/{username}", "scoped-read", []),
+            ("GET", "/graph", "scoped-read", ["depth"]),
+            ("GET", "/thread/{username}/{id}", "scoped-read", []),
+            ("GET", "/search", "scoped-read", ["q", "limit"]),
+            ("GET", "/media/{postId}/{index}", "scoped-read", []),
+            ("GET", "/audit", "inspect", ["limit"]),
+            ("POST", "/post", "post", ["feed", "text"]),
+            ("POST", "/comment", "comment", ["target", "text"]),
+            ("PATCH", "/card", "card", ["name", "bio", "link"]),
+        ]
+        return ["version": 1, "transport": "loopback-http", "uiRequiredForRequests": false,
+                "requiresRunningApp": true,
+                "actions": routes.map { method, path, permission, fields -> [String: Any] in
+                    ["method": method, "path": path, "permission": permission,
+                     "parameterLocation": method == "GET" ? "query" : "body", "fields": fields]
+                },
+                "writes": ["post": policy.writes.post, "comment": policy.writes.comment, "card": policy.writes.card],
+                "unsupported": ["private-chats", "account-sign-in", "account-sign-out", "change-write-grants"],
+                "limits": ["historyPage": Self.maxLimit, "channelDiscovery": 100, "mediaBytes": reader.maxMediaBytes]]
+    }
 
     // MARK: Reads
 
