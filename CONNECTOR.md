@@ -224,11 +224,22 @@ Clients should allow that first-byte delay, poll status from another connection,
 stream into a private file, and validate the received count against Content-Length.
 The whole connection has a 15-minute deadline. Disconnecting cancels the bridge
 request/delivery; disabling the bridge, rotating its token or signing out drops
-all active sockets. A shared TDLib cache download can continue after a client
-disconnects so app playback is not cancelled. Retrying reuses that private cache.
-No HTTP Range/resume or cryptographic digest is provided yet. On a truncated
-transfer clients must discard their partial output or retry. Cache files remain
-inside the existing app/TDLib storage, with no additional shared export copy.
+all active sockets. When the final connector reader finishes, fails or disconnects,
+the app cancels the fetch and deletes that file from TDLib's local cache. Concurrent
+connector readers share a lease, so one finishing cannot delete another's file.
+A later request downloads it again from Telegram; this can also make app playback
+fetch the media again. No HTTP Range/resume or cryptographic digest is provided
+yet. On a truncated transfer clients must discard their partial output or retry.
+
+Mac TDLib media uses the app-private temporary directory `tgsocial-telegram-media`
+(mode 700), cleared on the next process launch to recover from crashes. Connector
+transfers also evict their file immediately after use. On migration, named TDLib
+media cache folders under Application Support are removed; the session database
+and binlog are preserved. Telegram is the persistent media store. The
+session database, connector settings and token stay persistent so restarting does
+not require setup again. Temporary files consume disk while a job is active;
+they are not a permanent local media library. Clients must use temporary source
+and working files too, retaining only final outputs the user requested.
 
 Downloads are audited as `prepared-bytes` when the validated file is ready;
 this does not assert that the client received every byte. Scope and safety are

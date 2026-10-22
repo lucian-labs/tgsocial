@@ -54,6 +54,8 @@ final class ConnectorService: ConnectorReader {
     @ObservationIgnored private let handshakeStore: ConnectorHandshakeStore
     @ObservationIgnored private var server: ConnectorServer?
     @ObservationIgnored private var router: ConnectorRouter!
+    @ObservationIgnored private var mediaLeases: [Int: Int] = [:]
+    @ObservationIgnored private var mediaCleanup: [Int: Task<Void, Never>] = [:]
 
     private(set) var settings: ConnectorSettings
     private(set) var status: Status = .off
@@ -475,11 +477,30 @@ final class ConnectorService: ConnectorReader {
                 "maxBytes": maxMediaBytes]
     }
 
+    /// Cleanup starts only after the final concurrent reader closes its descriptor.
+    private func releaseMedia(_ fileId: Int) {
+        let count = mediaLeases[fileId] ?? 0
+        guard count > 0 else { return }
+        if count > 1 { mediaLeases[fileId] = count - 1; return }
+        mediaLeases.removeValue(forKey: fileId)
+        mediaCleanup[fileId] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = try? await self.model.td.api.cancelDownloadFile(fileId: fileId, onlyIfPending: false)
+            _ = try? await self.model.td.api.deleteFile(fileId: fileId)
+            self.mediaCleanup.removeValue(forKey: fileId)
+        }
+    }
+
     func mediaResponse(post: Post, index: Int, maxBytes: Int64) async throws -> ConnectorResponse {
         guard index >= 0, index < post.media.count else { throw ConnectorError.notFound("media index \(index)") }
         let (fileId, declared, contentType) = Self.file(for: post.media[index])
         guard let fileId else { throw ConnectorError.notFound("media has no file") }
         if declared > maxBytes { throw ConnectorError.tooLarge(bytes: declared, maxBytes: maxBytes) }
+        if let cleanup = mediaCleanup[fileId] { await cleanup.value }
+        try Task.checkCancellation()
+        mediaLeases[fileId, default: 0] += 1
+        var handedToResponse = false
+        defer { if !handedToResponse { releaseMedia(fileId) } }
         var file = try await model.td.api.getFile(fileId: fileId)
         let expected = max(declared, Int64(file.size))
         if expected > maxBytes { throw ConnectorError.tooLarge(bytes: expected, maxBytes: maxBytes) }
@@ -494,7 +515,7 @@ final class ConnectorService: ConnectorReader {
             if Int64(file.local.downloadedSize) > maxBytes {
                 throw ConnectorError.tooLarge(bytes: Int64(file.local.downloadedSize), maxBytes: maxBytes)
             }
-            guard Date() < deadline else { throw ConnectorError.telegram(code: 504, message: "Media download timed out. Retry to use the cached progress.") }
+            guard Date() < deadline else { throw ConnectorError.telegram(code: 504, message: "Media download timed out. Retry.") }
             guard file.local.isDownloadingActive else { throw ConnectorError.telegram(code: 502, message: "Media download stopped. Retry.") }
             try await Task.sleep(for: .milliseconds(500))
             file = try await model.td.api.getFile(fileId: fileId)
@@ -502,7 +523,11 @@ final class ConnectorService: ConnectorReader {
         try Task.checkCancellation()
         do {
             let opened = try ConnectorFileBody(url: URL(fileURLWithPath: file.local.path), maxBytes: maxBytes,
-                                              expectedBytes: max(expected, Int64(file.size)))
+                                              expectedBytes: max(expected, Int64(file.size)),
+                                              onClose: { [weak self] in
+                                                  Task { @MainActor in self?.releaseMedia(fileId) }
+                                              })
+            handedToResponse = true
             return .file(opened, contentType: contentType)
         } catch let error as ConnectorError { throw error }
         catch { throw ConnectorError.telegram(code: 500, message: "The cached file could not be opened. Retry the download.") }

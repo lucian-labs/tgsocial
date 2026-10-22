@@ -992,6 +992,11 @@ Quit (including Command-Q) ends the process and stops the bridge. This system
 menu uses native macOS chrome; the app screens retain House Pour. The Connector
 screen includes: `Closing the window keeps the bridge running. Quit tgsocial to stop it.`
 
+Mac media downloads are temporary. Telegram is the persistent media store;
+connector downloads are evicted after their last reader closes. Crash leftovers
+in the private temp media directory are cleared on next launch. Account/session
+state and connector settings remain persistent (CONNECTOR §5).
+
 ```
 CONNECTOR                                     (section mark)
 Control tgsocial from a local agent.             (muted)

@@ -848,6 +848,20 @@ final class ConnectorBridgeTests: XCTestCase {
         XCTAssertEqual(response.status, 403)
     }
 
+    func testTemporaryFileCleanupWaitsForLastResponseOwner() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([42]).write(to: url)
+        var body: ConnectorFileBody? = try ConnectorFileBody(url: url, maxBytes: 8, onClose: {
+            try? FileManager.default.removeItem(at: url)
+        })
+        var owners = [try XCTUnwrap(body)]
+        body = nil
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try owners[0].read(upToCount: 1), Data([42]))
+        owners.removeAll()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testFileSizeChecksRejectOversizedOrIncompleteCache() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }

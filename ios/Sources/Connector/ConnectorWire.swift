@@ -124,7 +124,10 @@ struct ConnectorRequest: Sendable, Equatable {
 final class ConnectorFileBody: @unchecked Sendable {
     let size: Int64
     private let handle: FileHandle
-    init(url: URL, maxBytes: Int64, expectedBytes: Int64 = 0) throws {
+    private let onClose: (@Sendable () -> Void)?
+    init(url: URL, maxBytes: Int64, expectedBytes: Int64 = 0,
+         onClose: (@Sendable () -> Void)? = nil) throws {
+        self.onClose = onClose
         handle = try FileHandle(forReadingFrom: url)
         size = Int64(try handle.seekToEnd())
         try handle.seek(toOffset: 0)
@@ -134,7 +137,7 @@ final class ConnectorFileBody: @unchecked Sendable {
         }
     }
     func read(upToCount count: Int) throws -> Data { try handle.read(upToCount: count) ?? Data() }
-    deinit { try? handle.close() }
+    deinit { try? handle.close(); onClose?() }
 }
 
 struct ConnectorResponse: Sendable {

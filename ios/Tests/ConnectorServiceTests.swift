@@ -26,6 +26,32 @@ final class ConnectorServiceTests: XCTestCase {
                           ConnectorHandshakeStore.realHome.appendingPathComponent(".tgsocial"))
     }
 
+    func testMediaDirectoryIsTemporaryAndTestsAreIsolated() throws {
+        let root = try XCTUnwrap(LocalStore.testDirectory)
+        XCTAssertTrue(TDClient.mediaDirectory.path.hasPrefix(root.path + "/"))
+        XCTAssertNotEqual(TDClient.mediaDirectory.path, TDClient.databaseDirectory)
+    }
+
+    func testTempMigrationRemovesMediaAndPreservesSessionDatabase() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = root.appendingPathComponent("tdlib")
+        let video = legacy.appendingPathComponent("videos")
+        let temporary = root.appendingPathComponent("temporary")
+        try FileManager.default.createDirectory(at: video, withIntermediateDirectories: true)
+        try Data([1]).write(to: video.appendingPathComponent("cached.mp4"))
+        let database = legacy.appendingPathComponent("db.sqlite")
+        try Data([2]).write(to: database)
+        _ = try TDClient.prepareTemporaryMedia(at: temporary, legacy: legacy)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: video.path))
+        XCTAssertEqual(try Data(contentsOf: database), Data([2]))
+        try Data([3]).write(to: temporary.appendingPathComponent("crash-leftover"))
+        _ = try TDClient.prepareTemporaryMedia(at: temporary, legacy: legacy)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: temporary.path), [])
+        let mode = try FileManager.default.attributesOfItem(atPath: temporary.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.intValue, 0o700)
+    }
+
     private func scopedSource(_ username: String) throws -> ScopedSource {
         var inputs = ScopeInputs()
         inputs.custom = [username]

@@ -298,7 +298,7 @@ final class ConnectorRouter {
         ]
         return ["version": 1, "transport": "loopback-http", "uiRequiredForRequests": false,
                 "requiresRunningApp": true,
-                "mediaTransfer": ["fileBacked": true, "chunkBytes": ConnectorServer.fileChunkBytes, "timeoutSeconds": Int(ConnectorServer.transferTimeout), "rangeSupported": false],
+                "mediaTransfer": ["fileBacked": true, "temporaryStorage": true, "cleanup": "after-last-reader", "chunkBytes": ConnectorServer.fileChunkBytes, "timeoutSeconds": Int(ConnectorServer.transferTimeout), "rangeSupported": false],
                 "actions": routes.map { method, path, permission, fields -> [String: Any] in
                     ["method": method, "path": path, "permission": permission,
                      "parameterLocation": method == "GET" ? "query" : "body", "fields": fields]

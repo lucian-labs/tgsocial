@@ -122,10 +122,41 @@ final class TDClient {
             .appendingPathComponent("tdlib", isDirectory: true).path
     }
 
+    #if targetEnvironment(macCatalyst)
+    /// Telegram owns the durable media. Keep Mac downloads in an app-private temp cache.
+    static let mediaDirectory = (LocalStore.testDirectory ?? FileManager.default.temporaryDirectory)
+        .appendingPathComponent("tgsocial-telegram-media", isDirectory: true)
+    private static let preparedMediaDirectory: Result<URL, Swift.Error> = Result {
+        let legacy = LocalStore.testDirectory?.appendingPathComponent("tdlib", isDirectory: true)
+            ?? URL(fileURLWithPath: databaseDirectory, isDirectory: true)
+        return try prepareTemporaryMedia(at: mediaDirectory, legacy: legacy)
+    }
+
+    static func prepareTemporaryMedia(at url: URL, legacy: URL) throws -> URL {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+        // Old files_directory entries become orphaned when TDLib changes its directory.
+        // Remove only its named media folders, never the session database or binlog.
+        for name in ["music", "temp", "profile_photos", "videos", "photos", "thumbnails",
+                     "animations", "documents", "stickers", "voice", "video_notes"] {
+            let cache = legacy.appendingPathComponent(name, isDirectory: true)
+            if fm.fileExists(atPath: cache.path) { try fm.removeItem(at: cache) }
+        }
+        try fm.createDirectory(at: url, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        return url
+    }
+    #endif
+
     @discardableResult
     func setParameters(secrets: TGSecrets, appVersion: String) async throws -> Ok {
         let dir = Self.databaseDirectory
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        #if targetEnvironment(macCatalyst)
+        let mediaDir = try Self.preparedMediaDirectory.get().path
+        #else
+        let mediaDir = dir
+        #endif
         return try await api.setTdlibParameters(
             apiHash: secrets.apiHash,
             apiId: secrets.apiId,
@@ -133,7 +164,7 @@ final class TDClient {
             databaseDirectory: dir,
             databaseEncryptionKey: nil,
             deviceModel: await MainActor.run { UIDevice.current.model },
-            filesDirectory: dir,
+            filesDirectory: mediaDir,
             systemLanguageCode: Locale.current.language.languageCode?.identifier ?? "en",
             systemVersion: await MainActor.run { UIDevice.current.systemVersion },
             useChatInfoDatabase: true,
