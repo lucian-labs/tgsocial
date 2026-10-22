@@ -58,6 +58,15 @@ final class StubConnectorReader: ConnectorReader {
         window.filter { Username.key($0.sourceUsername) == source.key }
     }
 
+    func history(_ source: ScopedSource, limit: Int, cursor: String?) async throws -> ConnectorHistoryPage {
+        let before = try ConnectorHistoryCursor.decode(cursor, source: source.username)
+        let posts = Array(window.filter { $0.sourceUsername == source.username && (before == 0 || $0.messageId < before) }
+            .sorted { $0.messageId > $1.messageId }.prefix(limit))
+        return ConnectorHistoryPage(posts: posts,
+            nextCursor: posts.last.map { ConnectorHistoryCursor.encode(source: source.username, before: $0.messageId) },
+            exhausted: posts.isEmpty)
+    }
+
     func cachedFeed(_ source: ScopedSource) -> FeedInfo? { ConnectorFixture.feed(source.username) }
     func nodeInfo(_ source: ScopedSource) async throws -> NodeInfo {
         ConnectorFixture.node(source.username, card: Card(name: "Ana Iliovic", feeds: ["waveloop_devlog"]))
@@ -362,6 +371,55 @@ final class ConnectorBridgeTests: XCTestCase {
         XCTAssertEqual(posts.map { $0["feed"] as? String }, ["waveloop_devlog"])
         XCTAssertFalse(response.body.contains("private_person"))
         XCTAssertFalse(response.body.contains("secret"))
+    }
+
+    func testHistoryTraversesBeyondThirtyMessagesWithEqualDates() async throws {
+        await MainActor.run {
+            reader.window = (1...65).map { n in
+                ConnectorFixture.post(feed: "waveloop_devlog", title: "Feed", node: "tgs_ana",
+                                      messageId: Int64(n) << 20)
+            }
+        }
+        var cursor: String?
+        var ids = Set<String>()
+        var exhausted = false
+        for _ in 0..<70 {
+            let suffix = cursor.map { "&cursor=" + $0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!.replacingOccurrences(of: "+", with: "%2B") } ?? ""
+            let response = try await get("/history/waveloop_devlog?limit=1" + suffix)
+            XCTAssertEqual(response.status, 200)
+            for post in try XCTUnwrap(response.json?["posts"] as? [[String: Any]]) {
+                XCTAssertTrue(ids.insert(try XCTUnwrap(post["id"] as? String)).inserted)
+            }
+            if response.json?["exhausted"] as? Bool == true {
+                exhausted = true
+                XCTAssertTrue(response.json?["nextCursor"] is NSNull)
+                break
+            }
+            let next = try XCTUnwrap(response.json?["nextCursor"] as? String)
+            XCTAssertNotEqual(next, cursor)
+            cursor = next
+        }
+        XCTAssertTrue(exhausted)
+        XCTAssertEqual(ids.count, 65)
+    }
+
+    func testHistoryRejectsOutOfScopeAndInvalidCursors() async throws {
+        let outside = try await get("/history/not_allowed")
+        XCTAssertEqual(outside.status, 403)
+        let invalid = try await get("/history/waveloop_devlog?cursor=garbage")
+        XCTAssertEqual(invalid.status, 400)
+        let wrong = ConnectorHistoryCursor.encode(source: "another_feed", before: 20 << 20)
+        let response = try await get("/history/waveloop_devlog?cursor=" + wrong)
+        XCTAssertEqual(response.status, 400)
+    }
+
+    func testFilteredHistoryPageStillHasContinuation() async throws {
+        await MainActor.run { reader.safety = SafetyLists(blocked: ["tgs_ana"]) }
+        let response = try await get("/history/waveloop_devlog?limit=1")
+        XCTAssertEqual(response.status, 200)
+        XCTAssertEqual((response.json?["posts"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual(response.json?["exhausted"] as? Bool, false)
+        XCTAssertNotNil(response.json?["nextCursor"] as? String)
     }
 
     func testNarrowingThePresetNarrowsWhatComesBackImmediately() async throws {

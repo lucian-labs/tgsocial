@@ -182,6 +182,9 @@ struct ConnectorScreen: View {
                 model.path.append(.connectorSources)
             }
             .padding(.top, HPTokens.Space.rowPad)
+            HPButton("Find a channel", style: .ghost, size: .small) {
+                model.path.append(.connectorCustom)
+            }
         }
     }
 
@@ -345,11 +348,40 @@ struct ConnectorSourcesScreen: View {
 struct ConnectorCustomScreen: View {
     @Environment(AppModel.self) private var model
     @State private var entry = ""
+    @State private var query = ""
+    @State private var choices: [ConnectorService.ChannelChoice] = []
+    @State private var searching = false
+    @State private var searched = false
+    @State private var searchError: String?
 
     var body: some View {
         let custom = model.connector.settings.custom
         Screen(back: true) {
             HPSectionMark("Custom sources", count: custom.count)
+            if model.connector.settings.preset != .custom {
+                HPMuted("Select Custom in Scope to enable this list.")
+            }
+            HPCard {
+                HPTextField("Find a channel", text: $query, placeholder: "Channel name") { find() }
+                HPButton(searching ? "Searching" : "Search", style: .neutral, size: .small,
+                         enabled: !searching && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { find() }
+                if let searchError { HPMuted(searchError) }
+                if searched && choices.isEmpty && searchError == nil { HPMuted("No matching channels. Try the @username below.") }
+                ForEach(choices) { choice in
+                    HPBody(choice.title)
+                    if let username = choice.username {
+                        HPMono("@" + username)
+                        HPButton(custom.contains(where: { Username.key($0) == Username.key(username) }) ? "Added" : "Add",
+                                 style: .neutral, size: .small,
+                                 enabled: !custom.contains(where: { Username.key($0) == Username.key(username) })) {
+                            entry = username
+                            add()
+                        }
+                    } else {
+                        HPMuted("Private channel. Not available to local agents.")
+                    }
+                }
+            }
             HPCard {
                 HPTextField("Add a channel or node", text: $entry, placeholder: "@channel", kind: .url) { add() }
                 HPButton("Add", style: .neutral, size: .small, enabled: Username.normalise(entry) != nil) { add() }
@@ -379,6 +411,17 @@ struct ConnectorCustomScreen: View {
         next.append(username)
         model.connector.setCustom(next)
         entry = ""
+    }
+
+    private func find() {
+        guard !searching else { return }
+        searching = true
+        searchError = nil
+        Task { @MainActor in
+            defer { searching = false; searched = true }
+            do { choices = try await model.connector.findChannels(query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            catch { choices = []; searchError = TDFailure(error).message }
+        }
     }
 }
 

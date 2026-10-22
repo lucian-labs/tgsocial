@@ -69,6 +69,7 @@ protocol ConnectorReader: AnyObject {
     func mergedPosts() async throws -> [Post]
     /// One channel's history, newest first. The source is already proved in scope.
     func channelPosts(_ source: ScopedSource, limit: Int, before: Date?) async throws -> [Post]
+    func history(_ source: ScopedSource, limit: Int, cursor: String?) async throws -> ConnectorHistoryPage
     func cachedFeed(_ source: ScopedSource) -> FeedInfo?
     func nodeInfo(_ source: ScopedSource) async throws -> NodeInfo
     func cachedCard(_ username: String) -> Card?
@@ -194,6 +195,20 @@ final class ConnectorRouter {
         case ("GET", "audit"): return auditBody(request)
         case ("GET", "graph"): return graph(request, scope: scope, safety: safety)
         case ("GET", "search"): return try await search(request, scope: scope, safety: safety)
+        case ("GET", "history"):
+            guard segments.count == 2 else { throw ConnectorError.notFound(request.path) }
+            let source = try scope.admit(segments[1])
+            let limit = request.intQuery("limit", default: Self.defaultLimit, max: Self.maxLimit)
+            _ = try ConnectorHistoryCursor.decode(request.query["cursor"], source: source.username)
+            let page = try await reader.history(source, limit: limit, cursor: request.query["cursor"])
+            let visible = filter(ScopeResolution.exposable(page.posts), scope: scope, safety: safety,
+                                 inMainFeed: false, before: nil, limit: limit)
+            let body: [String: Any] = [
+                "posts": visible.map { ConnectorBodies.post($0, comments: reader.commentCount(for: $0)) },
+                "nextCursor": ConnectorJSON.optional(page.nextCursor),
+                "exhausted": page.exhausted,
+            ]
+            return (.json(200, body), "posts=\(visible.count) exhausted=\(page.exhausted)")
 
         case ("GET", "feed"):
             if segments.count == 1 { return try await mergedFeed(request, scope: scope, safety: safety) }

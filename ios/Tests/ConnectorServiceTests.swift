@@ -19,6 +19,13 @@ import XCTest
 /// not a channel is out of scope" are exactly the claims that must not rot.
 final class ConnectorServiceTests: XCTestCase {
 
+    func testModelTestsCannotTouchTheRealConnectorHandshake() throws {
+        let testDirectory = try XCTUnwrap(LocalStore.testDirectory)
+        XCTAssertTrue(ConnectorHandshakeStore.defaultDirectory.path.hasPrefix(testDirectory.path + "/"))
+        XCTAssertNotEqual(ConnectorHandshakeStore.defaultDirectory,
+                          ConnectorHandshakeStore.realHome.appendingPathComponent(".tgsocial"))
+    }
+
     private func scopedSource(_ username: String) throws -> ScopedSource {
         var inputs = ScopeInputs()
         inputs.custom = [username]

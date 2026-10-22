@@ -4,12 +4,19 @@
 import Foundation
 
 final class LocalStore {
+    /// Model tests exercise sign-out and clear(). Never point those at a real app's state.
+    static let testDirectory: URL? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["XCTestConfigurationFilePath"] != nil || environment["XCTestSessionIdentifier"] != nil
+                || NSClassFromString("XCTestCase") != nil else { return nil }
+        return FileManager.default.temporaryDirectory.appendingPathComponent("tgsocial-tests-" + UUID().uuidString, isDirectory: true)
+    }()
     private let directory: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let base = Self.testDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = base.appendingPathComponent("tgsocial", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         encoder.dateEncodingStrategy = .iso8601

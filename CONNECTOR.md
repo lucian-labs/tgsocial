@@ -130,6 +130,29 @@ Media is described, never returned as bytes — see §5.
 
 `GET /feed/{username}?limit=30&before=<iso>` — one channel's posts.
 
+`GET /history/{username}?limit=30&cursor=<opaque>` — complete-history traversal
+for one in-scope public channel. Returns `{ "posts": [...], "nextCursor":
+"...", "exhausted": false }`. Omit the cursor initially; URL-encode and pass
+each returned cursor unchanged. Cursors are exclusive message IDs, bound to
+the source, so posts sharing a timestamp remain distinct. Malformed or
+wrong-source cursors return 400. Limits are 1–100 raw Telegram messages per
+request; short or empty filtered pages can still have a next cursor. Continue
+until `exhausted: true` with `nextCursor: null`, which requires an empty
+Telegram history response. Non-progress returns an error, never exhaustion.
+Album parts remain individual posts on this route. Normal scope and safety
+filters still apply; exhaustion describes accessible history, not deleted or
+otherwise unavailable messages, and a scan is not a snapshot of later edits.
+
+The date-based `/feed` routes are previews, not a complete-history contract:
+the merged route uses the current app window, dates cannot distinguish equal
+timestamps, and a bounded channel-preview scan can return 400 directing the
+caller to `/history`. Full scans must use `/history` per source.
+
+The owner can find channel titles locally under Connector → Custom →
+`Find a channel`, then select `Add` for a public channel. This searches up to
+100 matching known chats and shows only channels. Private channels are labelled
+unavailable; no discovery endpoint or permission change is exposed to agents.
+
 `GET /node/{username}` — a node's card: name, bio, link, feeds, follows,
 `public`, and whether I follow them.
 

@@ -111,6 +111,9 @@ struct ConnectorHandshakeStore {
     /// home when it does not — the bridge still works either way, and `handshakePath` on the
     /// Connector screen says which one it landed in rather than leaving anyone guessing.
     static var defaultDirectory: URL {
+        if let testDirectory = LocalStore.testDirectory {
+            return testDirectory.appendingPathComponent(directoryName, isDirectory: true)
+        }
         for home in [realHome, URL(fileURLWithPath: NSHomeDirectory())] {
             let candidate = home.appendingPathComponent(directoryName, isDirectory: true)
             if isWritable(candidate) { return candidate }

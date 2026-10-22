@@ -307,13 +307,61 @@ final class ConnectorService: ConnectorReader {
         while out.count < limit, rounds < Self.lookupRounds {
             rounds += 1
             let page = try await model.perform { try await self.model.feed.channelPosts(info, fromMessageId: from) }
-            out += page.posts
-            if page.exhausted || page.posts.isEmpty || page.oldestId == from { break }
+            out += page.posts.filter { before == nil || $0.date < Int(before!.timeIntervalSince1970) }
+            if page.exhausted { return out }
+            guard page.oldestId > 0, from == 0 || page.oldestId < from else {
+                throw ConnectorError.badRequest("History did not advance. Use /history with its cursor.")
+            }
             from = page.oldestId
             // Paging further only helps when the caller asked for older posts than this page holds.
             if let before, let oldest = out.last, oldest.date < Int(before.timeIntervalSince1970), out.count >= limit { break }
         }
+        if out.count < limit, rounds == Self.lookupRounds {
+            throw ConnectorError.badRequest("Preview scan limit reached. Use /history with its cursor.")
+        }
         return out
+    }
+
+    /// One bounded Telegram read. Short/filtered pages are not evidence of exhaustion.
+    func history(_ source: ScopedSource, limit: Int, cursor: String?) async throws -> ConnectorHistoryPage {
+        let before = try ConnectorHistoryCursor.decode(cursor, source: source.username)
+        let info = try await channel(source)
+        let result = try await model.perform {
+            try await self.model.td.api.getChatHistory(chatId: info.chatId,
+                fromMessageId: before == 0 ? 0 : before - 1,
+                limit: limit, offset: 0, onlyLocal: false)
+        }
+        let messages = result.messages ?? []
+        if messages.isEmpty { return ConnectorHistoryPage(posts: [], nextCursor: nil, exhausted: true) }
+        guard let oldest = messages.map(\.id).min(), oldest > 1,
+              before == 0 || messages.allSatisfy({ $0.id < before }) else {
+            throw ConnectorError.badRequest("Telegram history did not advance. Retry the same cursor.")
+        }
+        // Keep each Telegram message separate, including album parts across a page boundary.
+        let posts = messages.sorted { $0.id > $1.id }.compactMap { Mapping.post($0, source: info) }
+            .map { model.feed.stamped($0) }
+        return ConnectorHistoryPage(posts: posts,
+            nextCursor: ConnectorHistoryCursor.encode(source: source.username, before: oldest), exhausted: false)
+    }
+
+    struct ChannelChoice: Identifiable {
+        let id: Int64
+        let title: String
+        let username: String?
+    }
+
+    /// Owner-only discovery for the local screen. Never exposed by a bridge endpoint.
+    func findChannels(_ query: String) async throws -> [ChannelChoice] {
+        guard !model.isDemo else { return [] }
+        let ids = try await model.td.api.searchChats(limit: 100, query: query, typeFilter: .searchChatTypeFilterChannel).chatIds
+        var choices: [ChannelChoice] = []
+        for id in ids {
+            let chat = try await model.td.api.getChat(chatId: id)
+            guard Mapping.isChannel(chat.type), let groupId = Mapping.supergroupId(of: chat) else { continue }
+            let group = try await model.td.api.getSupergroup(supergroupId: groupId)
+            choices.append(ChannelChoice(id: id, title: chat.title, username: group.usernames?.activeUsernames.first))
+        }
+        return choices
     }
 
     func cachedFeed(_ source: ScopedSource) -> FeedInfo? { model.nodes.cachedFeed(source.username) }

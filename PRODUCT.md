@@ -1038,6 +1038,15 @@ Behaviour:
   answer to "what can it see" is always one tap away.
 - `Custom` scope pushes an editable list of usernames with the same
   availability check as feeds elsewhere.
+  The local screen also offers `Find a channel`, placeholder `Channel name`,
+  and `Search` / `Searching`. Results show title and public username with
+  `Add` / `Added`. A private result says `Private channel. Not available to
+  local agents.` Empty results say `No matching channels. Try the @username
+  below.` Errors stay visible with the Search action available to retry.
+  Searching never adds a source; the existing `Add a channel or node` field
+  remains for exact usernames. Channel discovery stays local to this screen.
+  `Find a channel` under Scope opens this screen without changing the preset.
+  When Custom is not selected, show `Select Custom in Scope to enable this list.`
 - Each write toggle is independent; enabling one shows a one-line confirm
   (`Let an assistant post to your feeds?`) because it is a grant, not a
   preference.
